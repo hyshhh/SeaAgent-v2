@@ -67,6 +67,7 @@ class ShipPipeline:
         self._detect_every_n: int = max(1, pipe_cfg.get("detect_every_n_frames") or 1)
         self._demo_enabled: bool = bool(pipe_cfg.get("demo", False))
         self._save_screenshots: bool = bool(pipe_cfg.get("save_screenshots", True))
+        self._save_output_video: bool = bool(pipe_cfg.get("save_output_video", False))
         self._enable_refresh: bool = bool(pipe_cfg.get("enable_refresh", False))
         self._skip_refresh_matched: bool = bool(pipe_cfg.get("skip_refresh_matched", False))
         self._gap_num: int = pipe_cfg.get("gap_num") or 150
@@ -586,6 +587,19 @@ class ShipPipeline:
             frame_callback: 每帧处理完成后的回调函数。
             stream_dir: MJPEG 帧输出目录（将标注帧写入 latest.jpg 供流读取）。
         """
+        # 如果配置了保存视频且未指定输出路径，自动生成输出路径
+        if self._save_output_video and not output_path:
+            demo_cfg = self._config.get("demo_video", {})
+            output_dir = demo_cfg.get("output_dir", "./demo_output")
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            if isinstance(source, str) and Path(source).is_file():
+                stem = Path(source).stem
+                output_path = str(Path(output_dir) / f"{stem}_{timestamp}.mp4")
+            else:
+                output_path = str(Path(output_dir) / f"output_{timestamp}.mp4")
+            logger.info("自动保存推理视频: %s", output_path)
+
         input_src = InputSource(source)
         video_writer = None
         last_detections: list[Detection] = []
@@ -625,6 +639,10 @@ class ShipPipeline:
             logger.info("MJPEG 帧输出: %s", stream_path / "latest.jpg")
 
         no_output = self._config.get("pipeline", {}).get("no_output", False)
+
+        # 如果配置了保存视频，优先使用 save_output_video 设置
+        if self._save_output_video:
+            no_output = False
 
         try:
             if output_path and not no_output:
