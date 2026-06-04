@@ -638,7 +638,10 @@ async def start_pipeline(req: PipelineStartRequest):
         video_source,
     ]
     # 根据 save_output_video 参数决定是否保存视频
-    if not req.save_output_video:
+    if req.save_output_video:
+        cmd.append("--save-output-video")
+    else:
+        cmd.append("--no-save-output-video")
         cmd.append("--no-output")  # 不保存输出视频，仅实时推流
     cmd.append("--no-screenshots")  # 不保存截图，减少 I/O 开销
     if req.concurrent_mode:

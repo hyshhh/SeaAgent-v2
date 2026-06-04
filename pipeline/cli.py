@@ -51,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--virtual-fps", type=float, default=15.0, help="帧目录模式的虚拟帧率 (默认 15)")
     parser.add_argument("--stream-dir", default=None, help="将每帧标注结果以 latest.jpg 写入此目录（供 MJPEG 流读取）")
     parser.add_argument("--no-output", action="store_true", help="不保存输出视频文件（仅实时推流）")
+    parser.add_argument("--save-output-video", action="store_true", default=None, help="保存推理结果视频")
+    parser.add_argument("--no-save-output-video", action="store_true", default=None, help="不保存推理结果视频")
     parser.add_argument("--raw-stdout", action="store_true", help="将原始帧写入 stdout（供 H.264 编码，与 --stream-dir 互斥）")
     parser.add_argument("--output-size", default=None, help="输出帧尺寸（WxH，如 640x480），仅用于 raw-stdout 模式缩放")
     parser.add_argument("--pipe-scale", type=float, default=None, help="pipe 输出缩放系数（0.1-1.0，默认不缩放）")
@@ -102,6 +104,10 @@ def _merge_args_to_config(args, config: dict) -> dict:
         config["pipeline"]["gap_num"] = max(1, args.gap_num)
     if args.no_output:
         config["pipeline"]["no_output"] = True
+    if args.save_output_video is not None:
+        config["pipeline"]["save_output_video"] = args.save_output_video
+    elif args.no_save_output_video is not None:
+        config["pipeline"]["save_output_video"] = not args.no_save_output_video
     if args.top_k is not None:
         config.setdefault("retrieval", {})
         config["retrieval"]["top_k"] = max(1, args.top_k)
