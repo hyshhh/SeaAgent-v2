@@ -587,6 +587,7 @@ async def transcode_video(filename: str):
 async def start_pipeline(req: PipelineStartRequest):
     """启动视频处理 Pipeline（支持文件和摄像头/RTSP 输入）"""
     _ensure_dirs()
+    logger.info("收到 Pipeline 请求: top_k=%d, save_output_video=%s", req.top_k, req.save_output_video)
 
     # 并发控制：检查是否已达上限
     sem = _get_semaphore()
