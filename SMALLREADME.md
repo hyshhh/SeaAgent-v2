@@ -7,9 +7,11 @@
 pip install -e .
 
 # 启动 Web 管理界面
-uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
-# 浏览器打开 http://localhost:8000
+uvicorn web.app:app --ws-ping-interval 0 --host 0.0.0.0 --port 9000 --reload
+# 浏览器打开 http://localhost:9000
 ```
+
+> **说明**：`--ws-ping-interval 0` 禁用 websockets 内置心跳，防止推流时 WebSocket 连接崩溃。
 
 ---
 
@@ -81,6 +83,11 @@ python -m pipeline.cli 0 --demo --display
 python -m pipeline.cli rtsp://192.168.1.100/stream --demo --display
 ```
 
+> **功能说明**：
+> - **数据库管理**：增删改查船只舷号
+> - **视频 Demo**：上传视频 → YOLO 检测 + VLM 识别 → H.264 实时推流
+> - **摄像头 Demo**：浏览器摄像头 / 服务器摄像头 / RTSP → 实时识别推流
+
 ---
 
 ## CLI 查询
@@ -118,6 +125,11 @@ ship-hull --verbose "我看到一艘灰色军舰"
 | `--conf` | 检测置信度 | 0.25 |
 | `--detect-every N` | 每 N 帧检测 | 1 |
 | `-v` | 详细日志 | 关 |
+| `--ws-ping-interval 0` | 禁用 websockets 内置心跳，防止推流 TCP 缓冲满时连接崩溃 | - |
+| `target_fps` | 目标帧率，低于源帧率时自动跳帧减少计算量 | - |
+| `capture_fps` | 摄像头模式：浏览器推送到后端的帧率 | - |
+| `process_every` | VLM 推理间隔（每 N 帧推理一次） | - |
+| `detect_every` | YOLO 检测间隔（每 N 帧检测一次） | - |
 
 ---
 
@@ -130,6 +142,7 @@ pipeline:
   concurrent_mode: true   # true=并发 false=级联
   enable_refresh: false   # 定时重新识别
   gap_num: 150            # 刷新间隔帧数
+  save_output_video: true # 是否保存推理结果视频（true=保存到 demo_video.output_dir）
 
 # 数据后端
 database:
@@ -138,7 +151,7 @@ database:
 # Web 服务
 web:
   host: "0.0.0.0"
-  port: 8000
+  port: 9000
 ```
 
 ---
