@@ -126,6 +126,7 @@ class PipelineStartRequest(BaseModel):
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
+    save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
@@ -148,6 +149,7 @@ class BrowserCameraStartRequest(BaseModel):
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
+    save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
@@ -631,9 +633,11 @@ async def start_pipeline(req: PipelineStartRequest):
     cmd = [
         sys.executable, "-m", "pipeline",
         video_source,
-        "--no-output",  # 不保存输出视频，仅实时推流
-        "--no-screenshots",  # 摄像头模式不保存截图，减少 I/O 开销
     ]
+    # 根据 save_output_video 参数决定是否保存视频
+    if not req.save_output_video:
+        cmd.append("--no-output")  # 不保存输出视频，仅实时推流
+    cmd.append("--no-screenshots")  # 不保存截图，减少 I/O 开销
     if req.concurrent_mode:
         cmd.extend(["-c", "--max-concurrent", str(req.max_concurrent or pipeline_cfg.get("max_concurrent", 4))])
 
@@ -1697,7 +1701,8 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             "target_fps": req.target_fps,
             "max_concurrent": req.max_concurrent or pipeline_cfg.get("max_concurrent", 4),
             "demo": True,
-            "no_output": True,
+            "no_output": not req.save_output_video,
+            "save_output_video": req.save_output_video,
             "save_screenshots": False,
             "raw_stdout": True,
             "output_size": [640, 480],
