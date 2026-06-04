@@ -66,6 +66,7 @@ pipeline:
   max_queued_frames: 30
   process_every_n_frames: 15
   output_dir: "./output"
+  save_output_video: true      # 是否保存推理结果视频（true=保存到 demo_video.output_dir）
   save_screenshots: true
   prompt_mode: "detailed"
   enable_refresh: false
