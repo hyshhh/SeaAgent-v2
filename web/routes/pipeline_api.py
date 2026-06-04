@@ -127,6 +127,7 @@ class PipelineStartRequest(BaseModel):
     capture_fps: int = 15  # 摄像头推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
+    top_k: int = 3  # 语义检索候选数量
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
@@ -150,6 +151,7 @@ class BrowserCameraStartRequest(BaseModel):
     capture_fps: int = 15  # 浏览器推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
+    top_k: int = 3  # 语义检索候选数量
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
@@ -660,6 +662,8 @@ async def start_pipeline(req: PipelineStartRequest):
         cmd.extend(["--yolo-model", req.yolo_model])
     if req.prompt_mode:
         cmd.extend(["--prompt-mode", req.prompt_mode])
+    if req.top_k != 3:  # 非默认值时传递
+        cmd.extend(["--top-k", str(req.top_k)])
     if req.enable_refresh:
         cmd.append("--enable-refresh")
         cmd.extend(["--gap-num", str(req.gap_num)])
@@ -1708,6 +1712,10 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             "output_size": [640, 480],
             "stop_file": str(stream_dir / "__STOP__"),
         })
+        # 更新检索参数
+        if "retrieval" not in config:
+            config["retrieval"] = {}
+        config["retrieval"]["top_k"] = req.top_k
         if 0.1 <= req.pipe_scale < 1.0:
             pipe_cfg["pipe_output_size"] = [pipe_out_w, pipe_out_h]
         if req.max_frames > 0:

@@ -540,6 +540,7 @@ curl "http://localhost:9000/api/ships/search?q=白色"
 | `pipeline.max_concurrent` | `4` | 最大并发数 |
 | `pipeline.process_every_n_frames` | `15` | 每隔 N 帧处理一次 |
 | `pipeline.save_output_video` | `true` | 是否保存推理结果视频到 output_dir |
+| `retrieval.top_k` | `3` | 语义检索返回的候选数量 |
 
 ---
 

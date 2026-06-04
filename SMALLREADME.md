@@ -130,6 +130,7 @@ ship-hull --verbose "我看到一艘灰色军舰"
 | `capture_fps` | 摄像头模式：浏览器推送到后端的帧率 | - |
 | `process_every` | VLM 推理间隔（每 N 帧推理一次） | - |
 | `detect_every` | YOLO 检测间隔（每 N 帧检测一次） | - |
+| `top_k` | 语义检索候选数量 | 3 |
 
 ---
 

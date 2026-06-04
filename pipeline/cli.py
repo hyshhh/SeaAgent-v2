@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-size", default=None, help="输出帧尺寸（WxH，如 640x480），仅用于 raw-stdout 模式缩放")
     parser.add_argument("--pipe-scale", type=float, default=None, help="pipe 输出缩放系数（0.1-1.0，默认不缩放）")
     parser.add_argument("--stop-file", default=None, help="停止信号文件路径（文件存在时优雅退出）")
+    parser.add_argument("--top-k", type=int, default=None, help="语义检索候选数量（默认沿用 config.yaml）")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
 
     return parser
@@ -101,6 +102,9 @@ def _merge_args_to_config(args, config: dict) -> dict:
         config["pipeline"]["gap_num"] = max(1, args.gap_num)
     if args.no_output:
         config["pipeline"]["no_output"] = True
+    if args.top_k is not None:
+        config.setdefault("retrieval", {})
+        config["retrieval"]["top_k"] = max(1, args.top_k)
     if args.raw_stdout:
         config["pipeline"]["raw_stdout"] = True
     if args.output_size:
