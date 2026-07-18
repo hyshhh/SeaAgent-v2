@@ -2,7 +2,7 @@
 from __future__ import annotations
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from config import load_config
 from memory import MemoryRepository
 from services import AgentLLMService, QwenMultimodalEmbedder
@@ -15,7 +15,7 @@ from .reflector import Reflector
 class AgentController:
     TOOL_NAMES = {"getTrack", "getFrames", "getClip", "getRegistry", "matchHull", "listRegistry", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks"}
 
-    def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, tools: ToolService | None = None, llm: AgentLLMService | None = None, embedder: QwenMultimodalEmbedder | None = None, vectors: VectorCatalog | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, tools: ToolService | None = None, llm: AgentLLMService | None = None, embedder: QwenMultimodalEmbedder | None = None, vectors: VectorCatalog | None = None, event_handler: Callable[[dict[str, Any]], None] | None = None):
         self.config = config or load_config()
         self.repository = repository or MemoryRepository(self.config)
         self.llm = llm or AgentLLMService(self.config)
@@ -33,11 +33,23 @@ class AgentController:
         self.tool_chain: list[str] = []
         self.display_record: dict[str, Any] | None = None
         self.display_groups: list[dict[str, Any]] = []
+        self.event_handler = event_handler
+
+    def _emit(self, event_type: str, title: str, message: str, **payload: Any) -> None:
+        if not self.event_handler:
+            return
+        try:
+            self.event_handler({"type": event_type, "title": title, "message": message, **payload})
+        except Exception:
+            pass
 
     def answer(self, question: str) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = question.strip()
+        self._emit("status", "创建问答会话", "正在解析问题类型与查询范围")
         self.meta = self.planner.classify(self.question)
+        scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
+        self._emit("classification", "完成任务识别", "已确定问题类型与检索范围", questionType=self.meta.get("questionType"), queryScope=scope)
         self.rounds, self.tool_chain = [], []
         self.display_record, self.display_groups = None, []
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
@@ -233,11 +245,18 @@ class AgentController:
     def _round(self, goal: str, calls: list[dict[str, Any]], default_state: str, reason: str, evidence_gap: str | None = None) -> dict[str, Any]:
         if len(self.rounds) >= self.max_rounds:
             raise RuntimeError("达到最大推理轮次")
+        round_number = len(self.rounds) + 1
+        self._emit("stage", f"第 {round_number} 轮·规划", "规划智能体正在生成受控工具计划", round=round_number, role="planner")
         plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap)
-        observed = self.observer.execute(plan)
-        reflection = self.reflector.review(default_state, reason, observed["summary"], evidence_gap)
-        round_id = f"round-{uuid.uuid4().hex[:12]}"
         public_plan = self._public_plan(plan, calls)
+        self._emit("plan", f"第 {round_number} 轮·规划完成", goal, round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"))
+        self._emit("stage", f"第 {round_number} 轮·观察", "观察智能体正在执行工具并读取轨迹记忆", round=round_number, role="observer")
+        observed = self.observer.execute(plan)
+        self._emit("observation", f"第 {round_number} 轮·观察完成", "工具执行结果已写入当前证据工作区", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"))
+        self._emit("stage", f"第 {round_number} 轮·反思", "反思智能体正在检查证据充分性与冲突", round=round_number, role="reflector")
+        reflection = self.reflector.review(default_state, reason, observed["summary"], evidence_gap)
+        self._emit("reflection", f"第 {round_number} 轮·反思完成", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"))
+        round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
         self._store_observations(round_id, observed)
         record = {"roundId": round_id, "plan": public_plan, "observation": observed["summary"], "reflection": reflection, "scope": observed["scope"]}
@@ -278,6 +297,7 @@ class AgentController:
         if self.display_record is not None or not calls:
             return
         try:
+            self._emit("evidence", "整理视觉证据", "正在读取关键帧、目标船片段与先验库参考图")
             plan = self.planner.build(goal, calls, self.meta.get("timeRange"))
             observed = self.observer.execute(plan)
             display_id = f"display-{uuid.uuid4().hex[:12]}"
@@ -306,6 +326,7 @@ class AgentController:
         result = {"sessionId": self.session_id, "question": self.question, "questionType": self.meta.get("questionType"), "conclusion": conclusion, "answerText": f"{conclusion}。{reason}", "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None, "toolChain": self.tool_chain, "tracks": tracks, "evidence": self._collect_evidence(), "displayGroups": self.display_groups, "display": self._public_display(), "uncertainty": state, "primaryTrackIds": primary, "remainingTrackIds": [item["trackId"] for item in tracks[self.display_limit:]], "rounds": [{key: value for key, value in item.items() if key != "scope"} for item in self.rounds]}
         if extra:
             result.update(extra)
+        self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(tracks))
         return result
 
     def _collect_evidence(self) -> dict[str, list[str]]:

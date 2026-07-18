@@ -19,6 +19,28 @@ function questionTypeLabel(type) {
   return ({hull: '舷号查询', description: '描述目标查询', out_of_registry: '未在库船查询', in_registry: '在库船查询', count: '数量统计'})[type] || valueText(type);
 }
 
+async function loadAgentMemorySummary() {
+  const trackCount = document.getElementById('agentTrackCount');
+  const registryStatus = document.getElementById('agentRegistryStatus');
+  const modelName = document.getElementById('agentModelName');
+  try {
+    const [tracks, registry, config] = await Promise.all([
+      apiFetch('/api/memory/tracks'),
+      apiFetch('/api/ships'),
+      apiFetch('/api/config'),
+    ]);
+    if (trackCount) trackCount.textContent = `${tracks.total || 0} 条轨迹`;
+    if (registryStatus) registryStatus.textContent = `${registry.total || 0} 个库项`;
+    if (modelName) modelName.textContent = config.models?.recognition || '模型已连接';
+    const limit = document.getElementById('agentRoundLimit');
+    if (limit) limit.textContent = `最多 ${config.pipeline?.maxRounds || 3} 轮`;
+  } catch (error) {
+    if (trackCount) trackCount.textContent = '读取失败';
+    if (registryStatus) registryStatus.textContent = '读取失败';
+    if (modelName) modelName.textContent = '服务未连接';
+  }
+}
+
 function renderTracks(tracks) {
   if (!tracks?.length) return '';
   const rows = tracks.slice(0, 3).map((track) => {
@@ -106,6 +128,113 @@ function renderEvidence(evidence, displayGroups) {
   container.innerHTML = selected.length ? selected.map(evidenceCard).join('') : '<div class="empty-msg">本次回答没有可展示的视觉证据</div>';
 }
 
+function modelSummaryText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  const preferred = ['summary', 'reason', 'goal', 'decision', 'action', 'nextStep'];
+  for (const key of preferred) {
+    if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
+  }
+  const serialized = JSON.stringify(value);
+  return serialized.length > 360 ? `${serialized.slice(0, 360)}…` : serialized;
+}
+
+function thoughtDetails(event) {
+  if (event.type === 'classification') {
+    const scope = event.queryScope ? `${event.queryScope[0]}秒—${event.queryScope[1]}秒` : '全视频';
+    return `<span class="thought-tag">${escapeHtml(questionTypeLabel(event.questionType))}</span><span class="thought-tag">${escapeHtml(scope)}</span>`;
+  }
+  if (event.type === 'plan') {
+    return (event.calls || []).map((call) => `<span class="thought-tag">${escapeHtml(call.tool || '工具')}</span>`).join('');
+  }
+  if (event.type === 'observation') {
+    return (event.calls || []).map((call) => `<span class="thought-tag ${call.ok === false ? 'failed' : ''}">${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : call.ok === false ? '失败' : '完成'}</span>`).join('');
+  }
+  if (event.type === 'reflection') {
+    return `<span class="thought-tag state">${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span class="thought-tag">缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
+  }
+  if (event.type === 'synthesis') {
+    return `<span class="thought-tag state">${escapeHtml(stateLabel(event.state))}</span><span class="thought-tag">候选轨迹 ${Number(event.trackCount || 0)}</span>`;
+  }
+  return '';
+}
+
+function setThinkingState(text, state = '') {
+  const label = document.getElementById('agentThinkingState');
+  const dot = document.getElementById('agentThinkingDot');
+  if (label) label.textContent = text;
+  if (dot) dot.className = state;
+}
+
+function resetThoughtStream() {
+  const stream = document.getElementById('agentThoughtStream');
+  if (stream) stream.innerHTML = '';
+  setThinkingState('正在推理', 'active');
+}
+
+function appendThoughtEvent(event) {
+  if (event.type === 'complete') {
+    setThinkingState('推理完成', 'completed');
+    return;
+  }
+  if (event.type === 'error') setThinkingState('推理失败', 'failed');
+  const stream = document.getElementById('agentThoughtStream');
+  if (!stream) return;
+  const card = document.createElement('article');
+  const role = event.role || event.type;
+  card.className = `thought-card ${role}`;
+  const summary = modelSummaryText(event.modelSummary);
+  const details = thoughtDetails(event);
+  card.innerHTML = `
+    <div class="thought-card-head"><span>${escapeHtml(event.title || '推理事件')}</span><time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time></div>
+    <p>${escapeHtml(event.message || '')}</p>
+    ${details ? `<div class="thought-tags">${details}</div>` : ''}
+    ${summary ? `<div class="thought-model-summary"><strong>模型摘要</strong><span>${escapeHtml(summary)}</span></div>` : ''}`;
+  stream.appendChild(card);
+  while (stream.children.length > 80) stream.firstElementChild.remove();
+  stream.scrollTop = stream.scrollHeight;
+}
+
+async function streamAgentQuery(question) {
+  const response = await fetch('/api/agent/query/stream', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({question}),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `请求失败：${response.status}`);
+  }
+  if (!response.body) throw new Error('当前浏览器不支持流式响应');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+  while (true) {
+    const {value, done} = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      appendThoughtEvent(event);
+      if (event.type === 'complete') result = event.result;
+      if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) {
+    const event = JSON.parse(buffer);
+    appendThoughtEvent(event);
+    if (event.type === 'complete') result = event.result;
+    if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+  }
+  if (!result) throw new Error('未收到最终回答');
+  return result;
+}
+
 async function askAgent() {
   const question = document.getElementById('agentQuestion').value.trim();
   const button = document.getElementById('btnAskAgent');
@@ -113,20 +242,20 @@ async function askAgent() {
   try {
     button.disabled = true;
     button.textContent = '推理中…';
+    resetThoughtStream();
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
-    document.getElementById('agentAnswer').textContent = '正在执行规划、观察与反思…';
-    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">正在生成工具调用链…</div>';
-    document.getElementById('evidenceGallery').innerHTML = '<div class="empty-msg">正在收集证据…</div>';
-    const result = await apiFetch('/api/agent/query', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question})
-    });
+    document.getElementById('agentAnswer').textContent = '正在基于轨迹记忆生成回答…';
+    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">正在生成闭环协作记录…</div>';
+    document.getElementById('evidenceGallery').innerHTML = '<div class="empty-msg">正在收集视觉证据…</div>';
+    const result = await streamAgentQuery(question);
     renderAgentAnswer(result);
     renderAgentRounds(result.rounds);
     renderEvidence(result.evidence, result.displayGroups);
   } catch (error) {
+    setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
     document.getElementById('agentAnswer').textContent = `执行失败：${error.message}`;
-    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">工具调用链未完成</div>';
+    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">闭环协作记录未完成</div>';
     document.getElementById('evidenceGallery').innerHTML = '<div class="empty-msg">没有可展示证据</div>';
     showToast(error.message, 'error');
   } finally {
@@ -135,5 +264,16 @@ async function askAgent() {
   }
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('agentQuestion');
+  input?.addEventListener('keydown', (event) => {
+    if (event.ctrlKey && event.key === 'Enter') {
+      event.preventDefault();
+      askAgent();
+    }
+  });
+});
+
 window.useQuestion = useQuestion;
 window.askAgent = askAgent;
+window.loadAgentMemorySummary = loadAgentMemorySummary;

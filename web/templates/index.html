@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=4">
+<link rel="stylesheet" href="/static/css/style.css?v=5">
 </head>
 <body>
 <header class="app-header">
@@ -13,13 +13,14 @@
   <div class="system-badge"><span></span>系统就绪</div>
 </header>
 <nav class="tab-nav">
-  <button class="tab-btn active" data-tab="video-demo" onclick="switchTab('video-demo')">海域监控与问答</button>
+  <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">海域监控</button>
+  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">智能体问答</button>
   <button class="tab-btn" data-tab="database" onclick="switchTab('database')">先验库管理</button>
   <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">实时摄像头</button>
 </nav>
 <main class="page-shell">
-<section class="tab-content active" id="tab-video-demo">
-  <div class="monitor-grid">
+<section class="tab-content active" id="tab-monitoring">
+  <div class="monitor-workspace">
     <div class="monitor-column">
       <section class="panel monitor-panel" id="pipelineControl">
         <div class="panel-head">
@@ -76,31 +77,64 @@
         </section>
       </div>
     </div>
-    <aside class="agent-column">
-      <section class="panel agent-panel">
-        <div class="panel-head"><div><span class="eyebrow">闭环智能体问答</span><h2>三智能体推理</h2></div><span class="round-limit">最多三轮</span></div>
-        <div class="question-examples">
+  </div>
+</section>
+<section class="tab-content" id="tab-agent-qa">
+  <div class="agent-workspace">
+    <section class="panel agent-overview-panel">
+      <div class="panel-head">
+        <div><span class="eyebrow">轨迹记忆问答中枢</span><h2>面向三层记忆的闭环智能体</h2><p>从轨迹记忆与先验库中规划证据，通过观察和反思生成可核验回答。</p></div>
+        <button class="btn ghost btn-sm" onclick="loadAgentMemorySummary()">刷新记忆状态</button>
+      </div>
+      <div class="agent-memory-flow">
+        <article><span>01</span><div><small>轨迹记忆</small><strong id="agentTrackCount">等待读取</strong><p>轨迹、舷号、正式关键帧与时间范围</p></div></article>
+        <i>→</i>
+        <article><span>02</span><div><small>先验记忆</small><strong id="agentRegistryStatus">已连接</strong><p>库项描述、多视角参考图与向量索引</p></div></article>
+        <i>→</i>
+        <article><span>03</span><div><small>闭环推理</small><strong id="agentModelName">等待读取</strong><p>规划智能体、观察智能体与反思智能体</p></div></article>
+      </div>
+    </section>
+
+    <div class="agent-query-grid">
+      <section class="panel agent-query-panel">
+        <div class="panel-head"><div><span class="eyebrow">自然语言查询</span><h2>向当前监控记忆提问</h2></div><span class="round-limit" id="agentRoundLimit">最多三轮</span></div>
+        <div class="question-examples agent-example-grid">
           <button onclick="useQuestion('舷号 0857 有没有在视频中出现？')">舷号查询</button>
           <button onclick="useQuestion('视频中有没有出现一个黄色的无人艇？')">描述查询</button>
           <button onclick="useQuestion('找一下5分钟到10分钟有哪些未在库船出现在视野中？')">未在库船</button>
           <button onclick="useQuestion('查找一下5分钟到10分钟有哪些在库船出现？')">在库船</button>
           <button onclick="useQuestion('从5分钟到10分钟视频中一共出现多少艘船？')">数量统计</button>
         </div>
-        <div class="question-box">
-          <textarea id="agentQuestion" rows="3" placeholder="输入关于当前监控视频的问题…"></textarea>
-          <button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button>
+        <div class="question-box agent-question-box">
+          <textarea id="agentQuestion" rows="4" placeholder="例如：视频中有没有出现一个黄色的无人艇？"></textarea>
+          <div class="question-actions"><span>按控制键与回车键快速提交</span><button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button></div>
         </div>
-        <div id="agentAnswer" class="agent-answer empty-state">等待问题</div>
+        <div class="answer-section-title"><span>最终回答</span><em>结论、候选轨迹与工具链</em></div>
+        <div id="agentAnswer" class="agent-answer empty-state">输入问题后，智能体将基于当前轨迹记忆生成回答。</div>
       </section>
+
+      <section class="panel agent-thinking-panel">
+        <div class="panel-head">
+          <div><span class="eyebrow">实时推理轨迹</span><h2>规划—观察—反思</h2></div>
+          <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
+        </div>
+        <div class="thought-notice">此处实时展示模型生成的可审计阶段摘要、工具调用和证据判断，不展示隐藏的内部思维文本。</div>
+        <div id="agentThoughtStream" class="thought-stream" aria-live="polite">
+          <div class="thought-empty"><span>⌁</span><strong>推理轨迹将在这里逐步展开</strong><p>问题解析 → 工具规划 → 轨迹观察 → 证据反思 → 回答生成</p></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="agent-detail-grid">
       <section class="panel reasoning-panel">
-        <div class="panel-head"><div><span class="eyebrow">调用链</span><h3>规划—观察—反思</h3></div></div>
-        <div id="agentRounds" class="round-list"><div class="empty-msg">执行问答后显示每轮工具调用</div></div>
+        <div class="panel-head"><div><span class="eyebrow">闭环记录</span><h3>每轮智能体协作结果</h3></div><span class="round-limit">最多三轮</span></div>
+        <div id="agentRounds" class="round-list"><div class="empty-msg">完成问答后显示各轮规划、观察与反思结果</div></div>
       </section>
       <section class="panel evidence-panel">
-        <div class="panel-head"><div><span class="eyebrow">证据工作区</span><h3>关键帧、目标船片段与库参考图</h3></div><span class="round-limit">自动展示最多三条</span></div>
+        <div class="panel-head"><div><span class="eyebrow">证据工作区</span><h3>关键帧、目标船片段与库参考图</h3></div><span class="round-limit">最多三条轨迹</span></div>
         <div id="evidenceGallery" class="evidence-grid"><div class="empty-msg">暂无可视证据</div></div>
       </section>
-    </aside>
+    </div>
   </div>
 </section>
 <section class="tab-content" id="tab-database">
@@ -148,7 +182,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=4"></script>
-<script src="/static/js/pipeline.js?v=6"></script>
-<script src="/static/js/agent.js?v=4"></script>
+<script src="/static/js/pipeline.js?v=7"></script>
+<script src="/static/js/agent.js?v=5"></script>
 </body>
 </html>

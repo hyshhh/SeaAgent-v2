@@ -8,7 +8,7 @@
 const PIPE_API = '/api/pipeline';
 
 document.addEventListener('DOMContentLoaded', () => {
-  const videoTab = document.getElementById('tab-video-demo');
+  const videoTab = document.getElementById('tab-monitoring');
   if (videoTab?.classList.contains('active')) {
     loadVideoList();
     loadTaskHistory();
@@ -24,9 +24,11 @@ function switchTab(tabName) {
     el.classList.toggle('active', el.id === `tab-${tabName}`);
   });
   // 按需加载数据
-  if (tabName === 'video-demo') {
+  if (tabName === 'monitoring') {
     loadVideoList();
     loadTaskHistory();
+  } else if (tabName === 'agent-qa') {
+    if (typeof loadAgentMemorySummary === 'function') loadAgentMemorySummary();
   } else if (tabName === 'camera-demo') {
     onCameraSourceChange();
   } else if (tabName === 'database') {

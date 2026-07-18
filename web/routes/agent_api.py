@@ -1,17 +1,64 @@
 """智能体、记忆和证据接口。"""
 from __future__ import annotations
+import asyncio
+import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from agent import AgentController
 from web.models import AgentQuery
 router = APIRouter(tags=["agent-memory"])
 
+def _controller(request: Request, event_handler=None) -> AgentController:
+    return AgentController(
+        request.app.state.config,
+        request.app.state.repository,
+        request.app.state.tool_service,
+        request.app.state.llm,
+        request.app.state.embedder,
+        request.app.state.vectors,
+        event_handler=event_handler,
+    )
+
+
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
-    controller = AgentController(request.app.state.config, request.app.state.repository, request.app.state.tool_service, request.app.state.llm, request.app.state.embedder, request.app.state.vectors)
-    return await run_in_threadpool(controller.answer, body.question)
+    return await run_in_threadpool(_controller(request).answer, body.question)
+
+
+@router.post("/api/agent/query/stream")
+async def stream_agent_query(body: AgentQuery, request: Request):
+    """逐行返回可审计的规划、观察、反思与最终回答事件。"""
+    async def events():
+        loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        def emit(event: dict) -> None:
+            loop.call_soon_threadsafe(event_queue.put_nowait, event)
+
+        async def execute() -> None:
+            try:
+                result = await run_in_threadpool(_controller(request, emit).answer, body.question)
+                await event_queue.put({"type": "complete", "title": "闭环推理完成", "message": "最终回答与视觉证据已生成", "result": result})
+            except Exception as error:
+                await event_queue.put({"type": "error", "title": "闭环推理失败", "message": str(error)})
+
+        task = asyncio.create_task(execute())
+        try:
+            while True:
+                event = await event_queue.get()
+                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                if event.get("type") in {"complete", "error"}:
+                    break
+        finally:
+            await task
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.get("/api/memory/tracks")
 async def list_tracks(request: Request, start: float | None = None, end: float | None = None):
