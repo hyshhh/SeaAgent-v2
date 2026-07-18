@@ -903,7 +903,6 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
                 _append_pipeline_log(task_id, text)
             if is_summary:
                 try:
-                    import json
                     summary = json.loads(text.replace("__PIPELINE_SUMMARY__:", ""))
                     async with _state_lock:
                         _task_status[task_id]["summary"] = summary
