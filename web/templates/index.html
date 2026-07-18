@@ -55,7 +55,7 @@
             <label>交并比阈值<input id="optIou" type="number" value="0.45" min="0" max="1" step="0.05"></label>
             <label>检测帧间隔<input id="optDetectEvery" type="number" value="1" min="1"></label>
             <label>目标帧率<input id="optTargetFps" type="number" value="0" min="0"></label>
-            <label>推流缩放<input id="optPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+            <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="optPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
             <label>最大处理帧<input id="optMaxFrames" type="number" value="0" min="0"></label>
             <label>推理设备<input id="optDevice" type="text" placeholder="留空使用配置"></label>
             <label>检测模型<input id="optYoloModel" type="text" placeholder="留空使用配置"></label>
@@ -123,7 +123,7 @@
         <label>检测帧间隔<input id="camDetectEvery" type="number" value="1" min="1"></label>
         <label>目标帧率<input id="camTargetFps" type="number" value="0" min="0"></label>
         <label>采集帧率<input id="camCaptureFps" type="number" value="15" min="1"></label>
-        <label>推流缩放<input id="camPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+        <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="camPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
         <label>最大处理帧<input id="camMaxFrames" type="number" value="0" min="0"></label>
         <label>推理设备<input id="camDevice" type="text" placeholder="留空使用配置"></label>
         <label>检测模型<input id="camYoloModel" type="text" placeholder="留空使用配置"></label>

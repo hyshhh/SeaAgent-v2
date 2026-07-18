@@ -164,7 +164,7 @@ class PipelineStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
-    pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
+    pipe_scale: float = 0.5  # 推流编码分辨率比例 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -180,7 +180,7 @@ class BrowserCameraStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
-    pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
+    pipe_scale: float = 0.5  # 推流编码分辨率比例 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -685,7 +685,7 @@ async def start_pipeline(req: PipelineStartRequest):
     if req.yolo_model:
         cmd.extend(["--yolo-model", req.yolo_model])
 
-    # pipe 输出缩放
+    # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
     if 0.1 <= req.pipe_scale < 1.0:
         cmd.extend(["--pipe-scale", str(req.pipe_scale)])
         pipe_w = max(16, int(video_w * req.pipe_scale))
@@ -1082,7 +1082,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
 
     # ffmpeg 命令：stdin raw BGR → H.264 fMP4
     ffmpeg_cmd = _find_binary("ffmpeg") or "ffmpeg"
-    gop = max(1, fps)  # GOP = 帧率，确保每秒至少一个关键帧（低帧率时不需等太久）
+    gop = max(1, round(fps * 0.25))  # 每 0.25 秒生成关键帧，缩短直播分片等待时间
     ffmpeg_args = [
         ffmpeg_cmd, "-hide_banner", "-loglevel", "error",
         "-fflags", "+nobuffer",   # 减少输入缓冲
@@ -1094,7 +1094,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
         "-preset", "ultrafast", "-tune", "zerolatency",
         "-profile:v", "baseline", "-level", "3.1",
         "-bf", "0",        # 无 B 帧（降低延迟）
-        "-g", str(gop),    # GOP = fps（每秒一个关键帧，低帧率时减少首次关键帧等待）
+        "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
         "-threads", "2",   # 限制编码线程，减少延迟
         "-pix_fmt", "yuv420p",
         "-movflags", "+frag_keyframe+empty_moov+default_base_moof+faststart",
@@ -1113,7 +1113,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
             "viewer_tasks": {},     # ws → asyncio.Task（每观众独立发送任务）
             "init_segment": None,
             "latest_segments": [],
-            "max_segments": 30,
+            "max_segments": 4,
             "reader_task": None,
             "frames_fed": 0,      # 已喂给 ffmpeg 的帧数（供背压检测）
         }
@@ -1362,7 +1362,7 @@ async def ws_h264_stream(websocket: WebSocket, task_id: str):
             return
         stream["viewers"].add(websocket)
         # 创建此观众的独立队列和发送任务
-        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+        q: asyncio.Queue = asyncio.Queue(maxsize=4)
         stream["viewer_queues"][websocket] = q
         sender_task = asyncio.create_task(_viewer_sender(websocket, q, task_id))
         stream["viewer_tasks"][websocket] = sender_task
@@ -1377,8 +1377,8 @@ async def ws_h264_stream(websocket: WebSocket, task_id: str):
             except asyncio.QueueFull:
                 pass
 
-        # 发送最近的媒体段（避免新客户端黑屏）
-        for seg in stream.get("latest_segments", []):
+        # 只发送最新两个媒体段，避免新客户端从旧画面开始追赶
+        for seg in stream.get("latest_segments", [])[-2:]:
             msg = b"\x02" + len(seg).to_bytes(4, "big") + seg
             try:
                 q.put_nowait(msg)
@@ -1689,7 +1689,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
         fake_proc = _FakeProcess(pipe_r)
         cam_fps = int(req.target_fps) if req.target_fps > 0 else 15
-        # pipe 输出缩放
+        # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
         if 0.1 <= req.pipe_scale < 1.0:
             pipe_out_w = max(16, int(640 * req.pipe_scale))
             pipe_out_h = max(16, int(480 * req.pipe_scale))

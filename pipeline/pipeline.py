@@ -24,8 +24,8 @@ class ShipPipeline:
         self._detect_every_n = max(1, int(settings.get("detect_every_n_frames", 1)))
         self._demo_enabled = bool(settings.get("demo", True))
         self._save_output_video = bool(settings.get("save_output_video", True))
-        output_size = settings.get("pipe_output_size") or settings.get("output_size")
-        self._output_size = tuple(output_size) if output_size else None
+        pipe_output_size = settings.get("pipe_output_size") or settings.get("output_size")
+        self._pipe_output_size = tuple(pipe_output_size) if pipe_output_size else None
         self._stop_file = Path(settings["stop_file"]) if settings.get("stop_file") else None
         self._raw_stdout = bool(settings.get("raw_stdout", False))
         self._no_output = bool(settings.get("no_output", False))
@@ -91,8 +91,8 @@ class ShipPipeline:
                     temp.replace(stream_path / "latest.jpg")
                 if self._raw_stdout:
                     output_frame = display_frame
-                    if self._output_size and (output_frame.shape[1], output_frame.shape[0]) != self._output_size:
-                        output_frame = cv2.resize(output_frame, self._output_size, interpolation=cv2.INTER_LINEAR)
+                    if self._pipe_output_size and (output_frame.shape[1], output_frame.shape[0]) != self._pipe_output_size:
+                        output_frame = cv2.resize(output_frame, self._pipe_output_size, interpolation=cv2.INTER_AREA)
                     sys.stdout.buffer.write(np.ascontiguousarray(output_frame).tobytes())
                     sys.stdout.buffer.flush()
                 if frame_callback:

@@ -288,12 +288,12 @@ async function startVideoPipeline() {
     // 实时预览：H.264 WebSocket 推流 + MSE 播放
     const resultPlaceholder = document.getElementById('resultPlaceholder');
     if (resultPlaceholder) {
+      resultPlaceholder.className = 'stream-preview';
       resultPlaceholder.innerHTML = `
         <video id="streamVideo" class="demo-video" autoplay muted playsinline></video>
-        <div id="streamFps" style="text-align:center;font-size:12px;color:#888;margin-top:4px">连接中...</div>
+        <div id="streamFps" class="stream-status">正在连接推流...</div>
       `;
-      resultPlaceholder.style.background = 'transparent';
-      resultPlaceholder.style.border = 'none';
+      resultPlaceholder.style.cssText = '';
     }
 
     connectStreamWs(currentTaskId);
@@ -331,8 +331,28 @@ function connectStreamWs(taskId) {
     streamWs = ws;
     _h264Ws = ws;
 
-    let frameCount = 0;
-    let fpsTimer = performance.now();
+    let segmentCount = 0;
+    let segmentTimer = performance.now();
+    let segmentRate = null;
+
+    function _updateStreamStatus() {
+      const statusEl = document.getElementById('streamFps');
+      if (!statusEl) return;
+      const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : '读取中';
+      const rate = segmentRate === null ? '' : ` · 更新 ${segmentRate} 次/秒`;
+      statusEl.textContent = `推流分辨率 ${resolution}${rate}`;
+    }
+
+    function _syncToLiveEdge() {
+      if (!videoEl.buffered.length) return;
+      const liveEdge = videoEl.buffered.end(videoEl.buffered.length - 1);
+      if (liveEdge - videoEl.currentTime > 1.0) {
+        videoEl.currentTime = Math.max(0, liveEdge - 0.15);
+      }
+    }
+
+    videoEl.addEventListener('loadedmetadata', _updateStreamStatus);
+    videoEl.addEventListener('resize', _updateStreamStatus);
 
     /** 尝试播放（autoplay 可能被浏览器策略阻止） */
     function _ensurePlay() {
@@ -350,6 +370,8 @@ function connectStreamWs(taskId) {
     function _processQueue() {
       const sb = _h264SourceBuffer;
       if (!sb || sb.updating) return;
+
+      _syncToLiveEdge();
 
       // 清理已播放的旧缓冲区（保留播放位置前 3 秒）
       try {
@@ -422,15 +444,15 @@ function connectStreamWs(taskId) {
           if (!sb) return;
 
           if (sb.updating) {
-            // 队列满了保留最新的一半，防止全部丢光导致黑屏
-            if (_h264Queue.length >= 12) {
-              _h264Queue = _h264Queue.slice(-6);
+            // 直播预览只保留最新分片，避免处理速度波动造成延迟累积
+            if (_h264Queue.length >= 3) {
+              _h264Queue = _h264Queue.slice(-1);
             }
             _h264Queue.push(payload);
           } else {
             try {
               sb.appendBuffer(payload);
-              if (frameCount === 0) _ensurePlay();  // 首帧到达后尝试播放
+              if (segmentCount === 0) _ensurePlay();  // 首个媒体段到达后尝试播放
             } catch (e) {
               if (e.name === 'QuotaExceededError') {
                 // 缓冲区满，尝试清理后把当前帧和队列一起重试
@@ -445,15 +467,14 @@ function connectStreamWs(taskId) {
             }
           }
 
-          // FPS 统计
-          frameCount++;
+          // 统计媒体分片到达速率，不再将其误标为视频帧率
+          segmentCount++;
           const now = performance.now();
-          if (now - fpsTimer > 1000) {
-            const segFps = (frameCount * 1000 / (now - fpsTimer)).toFixed(1);
-            const fpsEl = document.getElementById('streamFps');
-            if (fpsEl) fpsEl.textContent = `${segFps} seg/s`;
-            frameCount = 0;
-            fpsTimer = now;
+          if (now - segmentTimer > 1000) {
+            segmentRate = (segmentCount * 1000 / (now - segmentTimer)).toFixed(1);
+            _updateStreamStatus();
+            segmentCount = 0;
+            segmentTimer = now;
           }
         }
       } else {
@@ -1401,7 +1422,7 @@ function connectCameraH264(taskId) {
   // 显示 video，隐藏 placeholder
   videoEl.style.display = '';
   if (placeholder) placeholder.style.display = 'none';
-  if (fpsEl) { fpsEl.style.display = ''; fpsEl.textContent = '连接中...'; }
+  if (fpsEl) { fpsEl.style.display = ''; fpsEl.textContent = '正在连接推流...'; }
 
   const ms = new MediaSource();
   videoEl.src = URL.createObjectURL(ms);
@@ -1411,12 +1432,27 @@ function connectCameraH264(taskId) {
   _camH264Queue = [];
 
   let _connectAttempt = 0;
+  let cameraSegmentRate = null;
+
+  function _updateCameraStreamStatus() {
+    if (!fpsEl) return;
+    const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : '读取中';
+    const rate = cameraSegmentRate === null ? '' : ` · 更新 ${cameraSegmentRate} 次/秒`;
+    fpsEl.textContent = `推流 ${resolution}${rate}`;
+  }
+
+  videoEl.addEventListener('loadedmetadata', _updateCameraStreamStatus);
+  videoEl.addEventListener('resize', _updateCameraStreamStatus);
 
   function _processCamQueue() {
     const sb = _camH264SourceBuffer;
     if (!sb || sb.updating) return;
     try {
       const vEl = document.getElementById('cameraStream');
+      if (vEl && sb.buffered.length > 0) {
+        const liveEdge = sb.buffered.end(sb.buffered.length - 1);
+        if (liveEdge - vEl.currentTime > 1.0) vEl.currentTime = Math.max(0, liveEdge - 0.15);
+      }
       if (vEl && sb.buffered.length > 0 && sb.buffered.start(0) < vEl.currentTime - 8) {
         sb.remove(sb.buffered.start(0), vEl.currentTime - 3);
         return;
@@ -1444,8 +1480,8 @@ function connectCameraH264(taskId) {
     ws.binaryType = 'arraybuffer';
     _camH264Ws = ws;
 
-    let frameCount = 0;
-    let fpsTimer = performance.now();
+    let segmentCount = 0;
+    let segmentTimer = performance.now();
 
     ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer) {
@@ -1478,7 +1514,7 @@ function connectCameraH264(taskId) {
           const sb = _camH264SourceBuffer;
           if (!sb) return;
           if (sb.updating) {
-            if (_camH264Queue.length >= 12) _camH264Queue = _camH264Queue.slice(-6);
+            if (_camH264Queue.length >= 3) _camH264Queue = _camH264Queue.slice(-1);
             _camH264Queue.push(payload);
           } else {
             try { sb.appendBuffer(payload); } catch (e) {
@@ -1491,13 +1527,13 @@ function connectCameraH264(taskId) {
               }
             }
           }
-          frameCount++;
+          segmentCount++;
           const now = performance.now();
-          if (now - fpsTimer > 1000) {
-            const fps = (frameCount * 1000 / (now - fpsTimer)).toFixed(1);
-            if (fpsEl) fpsEl.textContent = `${fps} seg/s`;
-            frameCount = 0;
-            fpsTimer = now;
+          if (now - segmentTimer > 1000) {
+            cameraSegmentRate = (segmentCount * 1000 / (now - segmentTimer)).toFixed(1);
+            _updateCameraStreamStatus();
+            segmentCount = 0;
+            segmentTimer = now;
           }
         }
       } else {
