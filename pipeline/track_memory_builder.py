@@ -4,13 +4,14 @@ import json
 import logging
 import os
 import shutil
+import sys
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 import cv2
 import numpy as np
 from config import load_config
@@ -21,6 +22,7 @@ from services import AgentLLMService, QwenMultimodalEmbedder
 from vector_store import VectorCatalog, stable_vector_id
 
 logger = logging.getLogger(__name__)
+_POOL_EVENT_PREFIX = "__POOL_EVENT__:"
 
 @dataclass
 class CandidateFrame:
@@ -49,7 +51,7 @@ class ActiveTrack:
     bbox_history: list[dict[str, Any]] = field(default_factory=list)
 
 class TrackMemoryBuilder:
-    def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None, pool_event_callback: Callable[[dict[str, Any]], None] | None = None):
         self.config = config or load_config()
         self.settings = self.config["pipeline"]
         self.repository = repository or MemoryRepository(self.config)
@@ -63,6 +65,17 @@ class TrackMemoryBuilder:
         self._source_fps = 25.0
         self._frame_size = [0, 0]
         self.trace: list[dict[str, Any]] = []
+        self._pool_event_callback = pool_event_callback
+
+    def _emit_pool_event(self, pool: str, action: str, **data: Any) -> None:
+        event = {"pool": pool, "action": action, **data}
+        try:
+            if self._pool_event_callback:
+                self._pool_event_callback(event)
+                return
+            print(f"{_POOL_EVENT_PREFIX}{json.dumps(event, ensure_ascii=False)}", file=sys.stderr, flush=True)
+        except Exception as error:
+            logger.warning("池状态事件发送失败：%s", error)
 
     def reset_persistent_memory(self) -> None:
         self.repository.clear_track_memory()
@@ -114,6 +127,7 @@ class TrackMemoryBuilder:
         candidate.future = self._executor.submit(self.llm.recognize, crop)
         state.candidate_frames[candidate_id] = candidate
         self.trace.append({"event": "candidate_submitted", "trackId": state.track_id, "timestamp": timestamp, "qualityScore": quality})
+        self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description="等待单帧识别", status="识别中")
 
     def _reserve_candidate_slot(self, state: ActiveTrack, quality_score: float) -> bool:
         limit = int(self.settings.get("candidate_pool_size", 12))
@@ -133,6 +147,7 @@ class TrackMemoryBuilder:
             if candidate.future and candidate.future.cancel():
                 state.candidate_frames.pop(candidate.candidate_id, None)
                 self.trace.append({"event": "candidate_replaced", "trackId": state.track_id, "candidateId": candidate.candidate_id, "qualityScore": candidate.quality_score})
+                self._emit_pool_event("candidate", "upsert", recordId=candidate.candidate_id, trackId=state.track_id, hullNumber=None, description="被更高质量候选替换", status="已替换")
                 return True
         return False
 
@@ -153,12 +168,14 @@ class TrackMemoryBuilder:
                     future.cancel() if future else None
                     state.candidate_frames.pop(candidate_id, None)
                     self.trace.append({"event": "recognition_timeout", "trackId": state.track_id, "candidateId": candidate_id})
+                    self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description="单帧识别超时", status="识别超时")
                 continue
             try:
                 self._promote_candidate(state, candidate, future.result())
             except Exception as error:
                 logger.warning("单帧识别失败 track=%s: %s", state.track_id, error)
                 self.trace.append({"event": "recognition_failed", "trackId": state.track_id, "error": str(error)})
+                self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description=str(error), status="识别失败")
             finally:
                 state.candidate_frames.pop(candidate_id, None)
 
@@ -174,22 +191,29 @@ class TrackMemoryBuilder:
             else candidate.quality_score
         )
         record = {"keyframeId": f"keyframe-{uuid.uuid4().hex[:12]}", "trackId": state.track_id, "timestamp": candidate.timestamp, "bbox": list(candidate.bbox), "qualityScore": candidate.quality_score, "retentionScore": round(retention, 6), "hasReadableHullNumber": "yes" if readable else "no", "vlmHullNumber": result.get("vlm_hull_number") if readable else None, "readabilityConfidence": confidence, "description": result.get("description", "")}
+        candidate_event = {"recordId": candidate.candidate_id, "trackId": state.track_id, "hullNumber": record["vlmHullNumber"], "description": record["description"]}
+        self._emit_pool_event("candidate", "upsert", **candidate_event, status="识别完成")
         limit = int(self.settings.get("keyframe_pool_size", 6))
         replaced = self._select_replacement(state, record, limit)
         if len(state.keyframe_pool) >= limit and replaced is None:
             self.trace.append({"event": "keyframe_rejected", "trackId": state.track_id, "candidateId": candidate.candidate_id, "reason": "retention_or_time_diversity"})
+            self._emit_pool_event("candidate", "upsert", **candidate_event, status="未进入正式池")
             return
         committed = self._commit_keyframe(record, candidate.crop, replaced)
         if committed is None:
+            self._emit_pool_event("candidate", "upsert", **candidate_event, status="向量生成失败")
             return
         if replaced:
             state.keyframe_pool.remove(replaced)
+            self._emit_pool_event("keyframe", "remove", recordId=replaced["keyframeId"])
         state.keyframe_pool.append(committed)
         state.keyframe_pool.sort(key=lambda frame: (-frame["retentionScore"], frame["timestamp"]))
         state.pool_revision += 1
         if len(state.keyframe_pool) == limit:
             self._aggregate_if_changed(state)
         self.trace.append({"event": "keyframe_committed", "trackId": state.track_id, "keyframeId": committed["keyframeId"], "isEmbedded": committed["isEmbedded"]})
+        self._emit_pool_event("candidate", "upsert", **candidate_event, status="已进入正式池")
+        self._emit_pool_event("keyframe", "upsert", recordId=committed["keyframeId"], trackId=committed["trackId"], hullNumber=committed["vlmHullNumber"], description=committed["description"], status="正式帧")
 
     def _select_replacement(self, state: ActiveTrack, record: dict[str, Any], limit: int) -> dict[str, Any] | None:
         if len(state.keyframe_pool) < limit:

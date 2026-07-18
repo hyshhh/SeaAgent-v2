@@ -41,9 +41,7 @@ function switchTab(tabName) {
 let selectedVideo = null;
 let currentTaskId = null;
 let statusPollTimer = null;
-let logPollTimer = null;
-let _logIndex = 0;           // 已拉取的日志索引
-let _logStart = 0;           // 后端 FIFO 清理的全局偏移
+let poolPollTimer = null;
 let streamWs = null;        // WebSocket 推流连接
 let _h264Ws = null;          // H.264 WebSocket
 let _h264MediaSource = null; // MediaSource
@@ -74,31 +72,6 @@ if (videoUploadZone) {
     e.preventDefault(); e.stopPropagation();
     this.classList.remove('dragover');
     if (e.dataTransfer.files.length > 0) handleVideoUpload(e.dataTransfer.files[0]);
-  });
-}
-
-// ── 最大日志条数动态调整 ──
-const maxLogInput = document.getElementById('optMaxLogLines');
-if (maxLogInput) {
-  // 从后端加载当前值
-  (async () => {
-    try {
-      const resp = await fetch(`${PIPE_API}/settings/logs`);
-      const data = await resp.json();
-      maxLogInput.value = data.max_log_lines;
-    } catch (e) {}
-  })();
-  maxLogInput.addEventListener('change', async function () {
-    const val = parseInt(this.value);
-    if (isNaN(val) || val < 1) { this.value = 1; return; }
-    if (val > 500) { this.value = 500; return; }
-    try {
-      await fetch(`${PIPE_API}/settings/logs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_log_lines: val })
-      });
-    } catch (e) {}
   });
 }
 
@@ -545,12 +518,7 @@ async function stopVideoPipeline() {
   // 立即停止轮询，防止后续 pollTaskStatus 干扰新任务
   stopStatusPolling();
   currentTaskId = null;
-  _logIndex = 0;
-  _logStart = 0;
-
-  // 清空识别日志
-  const logContent = document.getElementById('pipelineLogContent');
-  if (logContent) logContent.innerHTML = '';
+  clearPoolTables();
 
   // 断开 WebSocket 推流
   disconnectStreamWs();
@@ -580,14 +548,11 @@ async function stopVideoPipeline() {
 function startStatusPolling() {
   stopStatusPolling();
   statusPollTimer = setInterval(pollTaskStatus, 2000);
-  // 启动日志轮询
-  _logIndex = 0;
-  _logStart = 0;
   const logBox = document.getElementById('pipelineLogBox');
   if (logBox) logBox.style.display = '';
-  const logContent = document.getElementById('pipelineLogContent');
-  if (logContent) logContent.innerHTML = '';
-  logPollTimer = setInterval(pollPipelineLogs, 1500);
+  clearPoolTables();
+  pollPoolStatus();
+  poolPollTimer = setInterval(pollPoolStatus, 1200);
 }
 
 function stopStatusPolling() {
@@ -595,9 +560,9 @@ function stopStatusPolling() {
     clearInterval(statusPollTimer);
     statusPollTimer = null;
   }
-  if (logPollTimer) {
-    clearInterval(logPollTimer);
-    logPollTimer = null;
+  if (poolPollTimer) {
+    clearInterval(poolPollTimer);
+    poolPollTimer = null;
   }
 }
 
@@ -620,6 +585,7 @@ async function pollTaskStatus() {
 
     if (data.status === 'completed') {
       if (currentTaskId === taskId) {
+        await pollPoolStatus(taskId);
         stopStatusPolling();
         resetPipelineButtons();
         disconnectStreamWs();
@@ -635,6 +601,7 @@ async function pollTaskStatus() {
       }
     } else if (data.status === 'failed') {
       if (currentTaskId === taskId) {
+        await pollPoolStatus(taskId);
         stopStatusPolling();
         resetPipelineButtons();
         disconnectStreamWs();
@@ -654,44 +621,38 @@ async function pollTaskStatus() {
   }
 }
 
-async function pollPipelineLogs() {
-  const taskId = currentTaskId;
+async function pollPoolStatus(targetTaskId = null) {
+  const taskId = targetTaskId || currentTaskId;
   if (!taskId) return;
   try {
-    const resp = await fetch(`${PIPE_API}/logs/${taskId}?since=${_logIndex}`);
+    const resp = await fetch(`${PIPE_API}/pool-status/${taskId}`);
     if (!resp.ok) return;
     const data = await resp.json();
-    if (data.logs && data.logs.length > 0) {
-      const box = document.getElementById('pipelineLogContent');
-      if (!box) return;
-      const levelColors = { info: '#4caf50', warning: '#ff9800', error: '#f44336' };
-      // FIFO 清理：只移除被淘汰的最旧条目，不清空全部 DOM
-      if (data.log_start !== undefined && data.log_start !== _logStart) {
-        const removed = data.log_start - _logStart;
-        for (let i = 0; i < removed; i++) {
-          if (box.firstElementChild) box.removeChild(box.firstElementChild);
-        }
-        _logStart = data.log_start;
-      }
-      for (const entry of data.logs) {
-        const level = entry.level || 'info';
-        const color = levelColors[level] || '#4caf50';
-        const div = document.createElement('div');
-        div.className = 'log-entry';
-        const timeSpan = document.createElement('span');
-        timeSpan.className = 'log-time';
-        timeSpan.textContent = entry.time;
-        const messageSpan = document.createElement('span');
-        messageSpan.className = 'log-message';
-        messageSpan.style.color = color;
-        messageSpan.textContent = entry.line;
-        div.append(timeSpan, messageSpan);
-        box.appendChild(div);
-      }
-      _logIndex = data.total;
-      box.scrollTop = box.scrollHeight;
-    }
+    renderPoolRows('candidatePoolRows', data.candidate || [], '等待候选帧');
+    renderPoolRows('keyframePoolRows', data.keyframe || [], '等待正式关键帧');
   } catch (e) {}
+}
+
+function renderPoolRows(elementId, rows, emptyText) {
+  const box = document.getElementById(elementId);
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = `<div class="pool-empty">${escHtml(emptyText)}</div>`;
+    return;
+  }
+  box.innerHTML = rows.slice(0, 40).map(row => {
+    const hull = row.hullNumber || '无可读舷号';
+    return `<div class="pool-table-row">
+      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>${escHtml(row.status || '-')} · ${escHtml(row.time || '-')}</span></div>
+      <div class="pool-hull">${escHtml(hull)}</div>
+      <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
+    </div>`;
+  }).join('');
+}
+
+function clearPoolTables() {
+  renderPoolRows('candidatePoolRows', [], '等待候选帧');
+  renderPoolRows('keyframePoolRows', [], '等待正式关键帧');
 }
 
 function updatePipelineStatus(status, text) {

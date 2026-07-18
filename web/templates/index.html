@@ -34,8 +34,18 @@
           <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
         </div>
         <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
-          <div class="log-head"><span>运行日志</span><label>保留<input id="optMaxLogLines" type="number" value="100" min="1" max="500">条</label></div>
-          <div id="pipelineLogContent" class="log-content"></div>
+          <div class="pool-status-grid">
+            <section class="pool-status-panel">
+              <div class="log-head"><span>临时池状态</span><em>最多 40 行</em></div>
+              <div class="pool-table-head"><span>轨迹编号</span><span>舷号</span><span>描述</span></div>
+              <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">等待候选帧</div></div>
+            </section>
+            <section class="pool-status-panel">
+              <div class="log-head"><span>正式池状态</span><em>最多 40 行</em></div>
+              <div class="pool-table-head"><span>轨迹编号</span><span>舷号</span><span>描述</span></div>
+              <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">等待正式关键帧</div></div>
+            </section>
+          </div>
         </div>
       </section>
       <div class="control-grid">

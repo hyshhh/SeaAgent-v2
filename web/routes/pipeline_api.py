@@ -59,6 +59,10 @@ _h264_streams: dict[str, dict[str, Any]] = {}  # task_id → {ffmpeg, viewers, i
 _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
+_POOL_EVENT_PREFIX = "__POOL_EVENT__:"
+_MAX_POOL_ROWS = 40
+_pool_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
+_pool_rows_lock = threading.Lock()
 _VIDEO_LIST_CACHE_TTL = 15.0
 _video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
 _video_list_lock = asyncio.Lock()
@@ -102,6 +106,34 @@ def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> N
     if overflow > 0:
         del logs[:overflow]
         _log_start[task_id] = _log_start.get(task_id, 0) + overflow
+
+
+def _init_pool_rows(task_id: str) -> None:
+    with _pool_rows_lock:
+        _pool_rows[task_id] = {"candidate": [], "keyframe": []}
+
+
+def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
+    pool = str(event.get("pool") or "")
+    if pool not in {"candidate", "keyframe"}:
+        return
+    record_id = str(event.get("recordId") or "")
+    if not record_id:
+        return
+    with _pool_rows_lock:
+        rows = _pool_rows.setdefault(task_id, {"candidate": [], "keyframe": []})[pool]
+        rows[:] = [row for row in rows if row["recordId"] != record_id]
+        if event.get("action") == "remove":
+            return
+        rows.insert(0, {
+            "recordId": record_id,
+            "time": time.strftime("%H:%M:%S"),
+            "trackId": str(event.get("trackId") or "-"),
+            "hullNumber": event.get("hullNumber"),
+            "description": str(event.get("description") or "-"),
+            "status": str(event.get("status") or "-"),
+        })
+        del rows[_MAX_POOL_ROWS:]
 
 
 def _get_demo_config() -> dict:
@@ -755,6 +787,7 @@ async def start_pipeline(req: PipelineStartRequest):
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0
+    _init_pool_rows(task_id)
     _append_pipeline_log(task_id, "流水线任务已创建")
 
     try:
@@ -813,6 +846,12 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
                 break
             text = _normalize_pipeline_output(line.decode("utf-8", errors="replace"))
             if not text:
+                continue
+            if text.startswith(_POOL_EVENT_PREFIX):
+                try:
+                    _record_pool_event(task_id, json.loads(text[len(_POOL_EVENT_PREFIX):]))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    logger.warning("池状态事件解析失败 [%s]: %s", task_id, text)
                 continue
 
             download_progress = _compact_download_progress(text)
@@ -907,6 +946,18 @@ async def get_pipeline_logs(task_id: str, since: int = 0):
     if start > 0:
         result["log_start"] = start
     return result
+
+
+@router.get("/pool-status/{task_id}")
+async def get_pool_status(task_id: str):
+    """返回临时池最近状态和正式池当前有效关键帧。"""
+    with _pool_rows_lock:
+        pools = _pool_rows.get(task_id, {"candidate": [], "keyframe": []})
+        return {
+            "candidate": [dict(row) for row in pools["candidate"]],
+            "keyframe": [dict(row) for row in pools["keyframe"]],
+            "maxRows": _MAX_POOL_ROWS,
+        }
 
 
 @router.get("/settings/logs")
@@ -1042,6 +1093,8 @@ def _cleanup_old_tasks():
             if task_id not in retained:
                 _pipeline_logs.pop(task_id, None)
                 _log_start.pop(task_id, None)
+                with _pool_rows_lock:
+                    _pool_rows.pop(task_id, None)
         logger.info("自动清理旧任务记录，保留 %d 条", len(_task_status))
 
 
@@ -1633,6 +1686,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0
+    _init_pool_rows(task_id)
     _append_pipeline_log(task_id, "流水线任务已创建")
 
     try:
@@ -1741,7 +1795,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
                     logger.info("WebRTC 视频 track 已就绪，启动 pipeline")
 
                 vc = VirtualCamera(frame_queue=frame_queue, fps=15.0)
-                pipeline = ShipPipeline(config=config)
+                pipeline = ShipPipeline(config=config, pool_event_callback=lambda event: _record_pool_event(task_id, event))
                 stats = pipeline.process(source=vc, display=False, max_frames=req.max_frames)
 
                 # 输出摘要到 stderr（不经过 fd 1）
@@ -2604,5 +2658,13 @@ async def clear_finished_tasks():
     global _task_status
     before = len(_task_status)
     _task_status = {k: v for k, v in _task_status.items() if v["status"] == "running"}
+    retained = set(_task_status)
+    with _pool_rows_lock:
+        expired = [task_id for task_id in _pool_rows if task_id not in retained]
+        for task_id in expired:
+            _pool_rows.pop(task_id, None)
+    for task_id in expired:
+        _pipeline_logs.pop(task_id, None)
+        _log_start.pop(task_id, None)
     cleared = before - len(_task_status)
     return {"success": True, "message": f"已清除 {cleared} 条历史记录"}

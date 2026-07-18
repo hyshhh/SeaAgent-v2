@@ -17,7 +17,7 @@ from pipeline.video_input import InputSource
 logger = logging.getLogger(__name__)
 
 class ShipPipeline:
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, pool_event_callback: Callable[[dict[str, Any]], None] | None = None):
         self._config = config or load_config()
         settings = self._config["pipeline"]
         self._target_fps = float(settings.get("target_fps", 0))
@@ -30,7 +30,7 @@ class ShipPipeline:
         self._raw_stdout = bool(settings.get("raw_stdout", False))
         self._no_output = bool(settings.get("no_output", False))
         self._detector = ShipDetector(model_path=settings.get("yolo_model", "yolov8n.pt"), device=settings.get("device", ""), conf_threshold=float(settings.get("conf_threshold", 0.25)), iou_threshold=float(settings.get("iou_threshold", 0.45)), tracker_type=settings.get("tracker", "bytetrack"), tracker_params=settings.get("tracker_params"), classes=settings.get("detect_classes", [8]))
-        self._memory = TrackMemoryBuilder(self._config)
+        self._memory = TrackMemoryBuilder(self._config, pool_event_callback=pool_event_callback)
         self._renderer = DemoRenderer(show_fps=True, show_track_id=True)
         self._fps = FPSMeter(window_seconds=10.0)
         self._latency = LatencyMeter(window_seconds=10.0)
