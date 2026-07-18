@@ -98,10 +98,24 @@ function evidenceItem(type, id) {
 }
 
 function evidenceCard(item) {
+  if (item.type === 'unavailable') {
+    return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>目标船片段暂不可用</strong><small>${escapeHtml(item.reason)}</small></div><span>目标船片段</span></article>`;
+  }
   const media = item.type === 'video'
     ? `<video controls preload="metadata" src="${item.url}"></video>`
     : `<img loading="lazy" src="${item.url}" alt="${escapeHtml(item.label)}">`;
   return `<article class="evidence-card">${media}<span title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span></article>`;
+}
+
+function clipErrorText(error) {
+  return ({
+    track_not_found: '未找到对应轨迹',
+    trajectory_not_found: '轨迹框序列不存在',
+    source_evidence_unavailable: '原视频或轨迹框不可用',
+    segment_codec_unavailable: '视频编码器不可用',
+    empty_target_segment: '指定范围内没有可用目标帧',
+    clip_unavailable: '片段尚未生成',
+  })[error] || valueText(error);
 }
 
 function renderEvidence(evidence, displayGroups) {
@@ -109,6 +123,7 @@ function renderEvidence(evidence, displayGroups) {
   const groups = (displayGroups || []).slice(0, 3).map((group) => {
     const items = [];
     if (group.shipSegmentIds?.[0]) items.push(evidenceItem('video', group.shipSegmentIds[0]));
+    else if (group.clipError) items.push({type: 'unavailable', reason: clipErrorText(group.clipError)});
     if (group.keyframeIds?.[0]) items.push(evidenceItem('keyframe', group.keyframeIds[0]));
     if (group.registryReferenceIds?.[0]) items.push(evidenceItem('registry', group.registryReferenceIds[0]));
     return {trackId: group.trackId, items};

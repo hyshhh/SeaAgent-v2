@@ -1,6 +1,9 @@
 """SeaAgent 原子工具服务。"""
 from __future__ import annotations
+import hashlib
 import json
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any, Iterable
@@ -63,12 +66,15 @@ class ToolService:
         box_map = {int(item["frameIndex"]): item["bbox"] for item in boxes}
         widths = [max(1, int(box[2]) - int(box[0])) for box in box_map.values()]
         heights = [max(1, int(box[3]) - int(box[1])) for box in box_map.values()]
-        canvas_size = (max(widths), max(heights))
+        canvas_size = (self._even_size(max(widths)), self._even_size(max(heights)))
         output_dir = Path(self.config["paths"]["clip_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        segment_id = f"segment-{uuid.uuid4().hex[:12]}"
+        cache_key = f"{trackId}|{scope[0]:.3f}|{scope[1]:.3f}|{trajectory_path.stat().st_mtime_ns}"
+        segment_id = f"segment-{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:12]}"
         output_path = output_dir / f"{segment_id}.mp4"
-        fps = float(trajectory.get("sourceFps") or 25)
+        if output_path.is_file() and output_path.stat().st_size > 0:
+            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": "cached", "startTime": scope[0], "endTime": scope[1]}
+        fps = max(1.0, float(trajectory.get("sourceFps") or 25))
         writer, codec = self._open_video_writer(output_path, fps, canvas_size)
         capture = cv2.VideoCapture(str(source_path))
         if writer is None or not capture.isOpened():
@@ -80,7 +86,7 @@ class ToolService:
         written = 0
         try:
             first, last = min(box_map), max(box_map)
-            capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, first - 1))
+            capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, first))
             for frame_index in range(first, last + 1):
                 ok, frame = capture.read()
                 if not ok:
@@ -103,6 +109,7 @@ class ToolService:
         if written == 0:
             output_path.unlink(missing_ok=True)
             return {"ok": False, "error": "empty_target_segment", "trackId": str(trackId)}
+        codec = self._ensure_browser_clip(output_path, codec)
         return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": codec, "startTime": scope[0], "endTime": scope[1]}
 
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
@@ -289,6 +296,33 @@ class ToolService:
             writer.release()
             path.unlink(missing_ok=True)
         return None, None
+
+    @staticmethod
+    def _even_size(value: int) -> int:
+        value = max(2, int(value))
+        return value if value % 2 == 0 else value + 1
+
+    @staticmethod
+    def _ensure_browser_clip(path: Path, codec: str | None) -> str | None:
+        if codec in {"avc1", "H264"}:
+            return codec
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return codec
+        converted = path.with_name(f"{path.stem}.browser.mp4")
+        try:
+            result = subprocess.run([
+                ffmpeg, "-y", "-loglevel", "error", "-i", str(path), "-an",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(converted),
+            ], capture_output=True, timeout=120, check=False)
+            if result.returncode == 0 and converted.is_file() and converted.stat().st_size > 0:
+                converted.replace(path)
+                return "h264"
+        except (OSError, subprocess.SubprocessError):
+            pass
+        converted.unlink(missing_ok=True)
+        return codec
 
     def _sample_segments(self, segment_ids: list[str], limit: int) -> list[np.ndarray]:
         samples = []

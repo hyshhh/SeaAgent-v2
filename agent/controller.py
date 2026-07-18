@@ -265,7 +265,7 @@ class AgentController:
         self.rounds.append(record)
         return record
 
-    def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = False, include_registry: bool = False) -> None:
+    def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
         primary = tracks[:self.display_limit]
         if not primary or self.display_record is not None:
             return
@@ -288,12 +288,17 @@ class AgentController:
             if reference_ids:
                 arguments["registryReferenceIds"] = reference_ids
             calls.append({"id": show_call, "tool": "showEvidence", "arguments": arguments})
-            layouts.append({"trackId": track_id, "showCallId": show_call})
+            layouts.append({"trackId": track_id, "showCallId": show_call, "clipCallId": clip_call if include_clips and not segment_ids else None, "includeClip": include_clips})
         self._display("展示主轨迹证据", calls)
         scope = self.display_record.get("scope", {}) if self.display_record else {}
         for layout in layouts:
             shown = scope.get(layout["showCallId"], {})
-            self.display_groups.append({"trackId": layout["trackId"], "keyframeIds": shown.get("shownKeyframeIds", []), "shipSegmentIds": shown.get("shownShipSegmentIds", []), "registryReferenceIds": shown.get("shownRegistryReferenceIds", [])})
+            clip_result = scope.get(layout["clipCallId"], {}) if layout.get("clipCallId") else {}
+            segment_ids = shown.get("shownShipSegmentIds", [])
+            clip_error = None
+            if layout.get("includeClip") and not segment_ids:
+                clip_error = clip_result.get("error") or "clip_unavailable"
+            self.display_groups.append({"trackId": layout["trackId"], "keyframeIds": shown.get("shownKeyframeIds", []), "shipSegmentIds": segment_ids, "registryReferenceIds": shown.get("shownRegistryReferenceIds", []), "clipError": clip_error})
 
     def _display(self, goal: str, calls: list[dict[str, Any]]) -> None:
         if self.display_record is not None or not calls:
@@ -323,7 +328,7 @@ class AgentController:
 
     def _finish(self, conclusion: str, tracks: list[dict[str, Any]], reason: str, state: str, extra: dict[str, Any] | None = None, display: dict[str, Any] | None = None) -> dict[str, Any]:
         if display and display.get("tracks"):
-            self._display_tracks(display["tracks"], bool(display.get("includeClips")), bool(display.get("includeRegistry")))
+            self._display_tracks(display["tracks"], display.get("includeClips", True) is not False, bool(display.get("includeRegistry")))
         primary = [item["trackId"] for item in tracks[:self.display_limit]]
         result = {"sessionId": self.session_id, "question": self.question, "questionType": self.meta.get("questionType"), "conclusion": conclusion, "answerText": f"{conclusion}。{reason}", "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None, "toolChain": self.tool_chain, "tracks": tracks, "evidence": self._collect_evidence(), "displayGroups": self.display_groups, "display": self._public_display(), "uncertainty": state, "primaryTrackIds": primary, "remainingTrackIds": [item["trackId"] for item in tracks[self.display_limit:]], "rounds": [{key: value for key, value in item.items() if key != "scope"} for item in self.rounds]}
         if extra:
