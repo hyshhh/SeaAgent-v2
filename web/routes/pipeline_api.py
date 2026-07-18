@@ -59,6 +59,9 @@ _h264_streams: dict[str, dict[str, Any]] = {}  # task_id → {ffmpeg, viewers, i
 _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
+_VIDEO_LIST_CACHE_TTL = 15.0
+_video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
+_video_list_lock = asyncio.Lock()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTE_PROGRESS_RE = re.compile(r"\d+(?:\.\d+)?[KMG]?/\d+(?:\.\d+)?[KMG]?")
 _PERCENT_RE = re.compile(r"(?<!\d)(\d{1,3})%")
@@ -386,21 +389,46 @@ def _get_video_path(video_filename: str) -> Path | None:
 
 # ── 视频管理 ──
 
-@router.get("/videos", response_model=VideoListResponse)
-async def list_videos():
-    """获取 demo 视频列表"""
-    _ensure_dirs()
-    demo_dir = _get_demo_dir()
-    allowed = _get_allowed_extensions()
+def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]:
+    """在线程中扫描挂载目录，每个文件只读取一次状态。"""
     videos = []
-    for f in sorted(demo_dir.iterdir()):
-        if f.is_file() and f.suffix.lower() in allowed:
-            stat = f.stat()
+    with os.scandir(demo_dir) as entries:
+        for entry in entries:
+            if Path(entry.name).suffix.lower() not in allowed:
+                continue
+            try:
+                if not entry.is_file():
+                    continue
+                stat = entry.stat()
+            except OSError as error:
+                logger.warning("读取视频文件状态失败 %s: %s", entry.name, error)
+                continue
             videos.append({
-                "filename": f.name,
+                "filename": entry.name,
                 "size_mb": round(stat.st_size / (1024 * 1024), 2),
                 "modified": stat.st_mtime,
             })
+    return sorted(videos, key=lambda item: item["filename"].lower())
+
+
+def _invalidate_video_list_cache() -> None:
+    _video_list_cache["expires_at"] = 0.0
+
+@router.get("/videos", response_model=VideoListResponse)
+async def list_videos():
+    """获取 demo 视频列表"""
+    await asyncio.to_thread(_ensure_dirs)
+    demo_dir = _get_demo_dir()
+    directory = str(demo_dir)
+    now = time.monotonic()
+    if _video_list_cache["directory"] == directory and now < _video_list_cache["expires_at"]:
+        return VideoListResponse(videos=list(_video_list_cache["videos"]))
+    async with _video_list_lock:
+        now = time.monotonic()
+        if _video_list_cache["directory"] == directory and now < _video_list_cache["expires_at"]:
+            return VideoListResponse(videos=list(_video_list_cache["videos"]))
+        videos = await asyncio.to_thread(_scan_video_files, demo_dir, set(_get_allowed_extensions()))
+        _video_list_cache.update(directory=directory, expires_at=now + _VIDEO_LIST_CACHE_TTL, videos=videos)
     return VideoListResponse(videos=videos)
 
 
@@ -480,6 +508,7 @@ async def upload_video(file: UploadFile = File(...)):
         raise
 
     logger.info("视频已上传: %s (%.2f MB)", save_path.name, total_bytes / (1024 * 1024))
+    _invalidate_video_list_cache()
 
     return {
         "success": True,
@@ -503,6 +532,7 @@ async def delete_video(filename: str):
     if transcoded.exists():
         transcoded.unlink()
         logger.info("已清理转码缓存: %s", transcoded)
+    _invalidate_video_list_cache()
     return {"success": True, "message": f"已删除: {filename}"}
 
 

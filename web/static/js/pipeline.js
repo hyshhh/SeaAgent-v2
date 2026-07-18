@@ -161,8 +161,11 @@ async function handleVideoUpload(file) {
 async function loadVideoList() {
   const container = document.getElementById('videoList');
   if (!container) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const resp = await fetch(`${PIPE_API}/videos`);
+    const resp = await fetch(`${PIPE_API}/videos`, { signal: controller.signal });
+    if (!resp.ok) throw new Error(`请求失败 (${resp.status})`);
     const data = await resp.json();
     if (!data.videos.length) {
       container.innerHTML = '<div class="empty-msg">暂无视频，请上传</div>';
@@ -182,7 +185,10 @@ async function loadVideoList() {
       </div>
     `).join('');
   } catch (e) {
-    container.innerHTML = `<div class="empty-msg">加载失败: ${e.message}</div>`;
+    const message = e.name === 'AbortError' ? '目录响应超时' : e.message;
+    container.innerHTML = `<div class="empty-msg">加载失败：${escHtml(message)}<br><button class="btn btn-sm" onclick="loadVideoList()">重新加载</button></div>`;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
