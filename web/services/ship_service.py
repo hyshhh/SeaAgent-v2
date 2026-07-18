@@ -1,167 +1,250 @@
-"""业务逻辑服务层 — 封装数据库操作和 VLM 识别"""
-
+"""先验库图片、CSV 与向量索引的一致性管理。"""
 from __future__ import annotations
-
-import base64
 import json
-import logging
-import re
+import shutil
+import tempfile
+import uuid
 from pathlib import Path
-from typing import Any
-
-from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
-
+from typing import Any, Callable
+import cv2
+import numpy as np
 from config import load_config
-from database import ShipDatabase
-
-logger = logging.getLogger(__name__)
-
-RECOGNITION_PROMPT = """你是船只弦号识别专家。你的核心任务是读取船体侧面的文字编号。
-
-重要指令：
-- 不要评价图片质量（无论清晰还是模糊都不要提）
-- 不要说"看不清""质量低"等废话
-- 即使图片模糊，也必须尝试读取船体上的任何可见文字、数字、编号
-- 重点关注：船体侧面白色/黑色的编号区域、船尾文字、船名
-
-请返回以下 JSON（不要任何其他文字）：
-{{
-  "hull_number": "读到的弦号编号（如 0014、海巡123、A01 等，完全没有可见文字则返回空字符串）",
-  "description": "客观描述船只：船型+船体颜色+上层建筑颜色+特殊标志（不提图片质量）"
-}}"""
-
+from memory import MemoryRepository, normalize_hull_number
+from services import AgentLLMService, QwenMultimodalEmbedder
+from vector_store import VectorCatalog, stable_vector_id
 
 class ShipService:
-    """船只数据管理服务"""
+    def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
+        self.config = config or load_config()
+        self.repository = repository or MemoryRepository(self.config)
+        self.embedder = embedder or QwenMultimodalEmbedder(self.config)
+        self.llm = llm or AgentLLMService(self.config)
+        self.vectors = vectors or VectorCatalog(self.config)
+        self.image_dir = Path(self.config["paths"]["registry_image_dir"])
+        self.image_dir.mkdir(parents=True, exist_ok=True)
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        self._config = config or load_config()
-        self._db: ShipDatabase | None = None
-        self._vlm_client: ChatOpenAI | None = None
+    def list_registry(self) -> list[dict[str, Any]]:
+        return self.repository.list_registry()
 
-    @property
-    def db(self) -> ShipDatabase:
-        if self._db is None:
-            self._db = ShipDatabase(config=self._config)
-        return self._db
+    def get_registry(self, hull_number: str) -> list[dict[str, Any]]:
+        return self.repository.registry_by_hull(hull_number)
 
-    @property
-    def vlm(self) -> ChatOpenAI:
-        if self._vlm_client is None:
-            llm_cfg = self._config.get("llm", {})
-            self._vlm_client = ChatOpenAI(
-                model=llm_cfg.get("model", "Qwen/Qwen3-VL-4B-AWQ"),
-                api_key=llm_cfg.get("api_key", "abc123"),
-                base_url=llm_cfg.get("base_url", "http://localhost:7890/v1"),
-                temperature=0.0,
-                max_tokens=1024,
-            )
-        return self._vlm_client
+    def create_registry(self, hull_number: str, description: str = "", aliases: list[str] | None = None, images: list[tuple[str, bytes]] | None = None) -> dict[str, Any]:
+        hull = normalize_hull_number(hull_number)
+        if not hull:
+            raise ValueError("舷号不能为空")
+        if self.repository.registry_by_hull(hull):
+            raise FileExistsError(f"舷号已存在：{hull}")
+        files = images or []
+        if len(files) > 6:
+            raise ValueError("每个库项最多保存六张参考图")
+        inferred = self._recognize(files[0][1]) if files and not description.strip() else {}
+        final_description = description.strip() or inferred.get("description", "")
+        result: dict[str, Any] = {}
+        def mutate():
+            registry_id = self.repository.upsert_registry({"hull_number": hull, "aliases": aliases or [], "description": final_description})
+            self._save_references(registry_id, files)
+            result.update(registryId=registry_id)
+        self._transaction(mutate)
+        return self.repository.registry_by_hull(hull)[0]
 
-    # ── CRUD ──
+    def update_registry(self, hull_number: str, description: str | None = None, aliases: list[str] | None = None, images: list[tuple[str, bytes]] | None = None) -> dict[str, Any]:
+        items = self.repository.registry_by_hull(hull_number)
+        if not items:
+            raise KeyError(f"未找到舷号：{hull_number}")
+        item = items[0]
+        files = images or []
+        if len(item.get("references", [])) + len(files) > 6:
+            raise ValueError("每个库项最多保存六张参考图")
+        def mutate():
+            self.repository.upsert_registry({"registry_id": item["registryId"], "hull_number": item["hullNumber"], "aliases": item["aliases"] if aliases is None else aliases, "description": item["description"] if description is None else description, "structured_attributes": item["structuredAttributes"]})
+            self._save_references(item["registryId"], files)
+        self._transaction(mutate)
+        return self.repository.registry_by_hull(item["hullNumber"])[0]
 
-    def list_ships(self) -> list[dict]:
-        data = self.db.source.load_all()
-        return [{"hull_number": hn, "description": desc} for hn, desc in sorted(data.items())]
+    def delete_registry(self, hull_number: str) -> bool:
+        items = self.repository.registry_by_hull(hull_number)
+        if not items:
+            return False
+        def mutate():
+            for item in items:
+                _, references = self.repository.delete_registry(item["registryId"])
+                for reference in references:
+                    Path(reference["imagePath"]).unlink(missing_ok=True)
+        self._transaction(mutate)
+        return True
 
-    def get_ship(self, hull_number: str) -> dict | None:
-        desc = self.db.lookup(hull_number)
-        if desc is None:
-            return None
-        return {"hull_number": hull_number, "description": desc}
+    def delete_reference(self, hull_number: str, reference_id: str) -> bool:
+        items = self.repository.registry_by_hull(hull_number)
+        allowed = {reference["referenceId"] for item in items for reference in item.get("references", [])}
+        if reference_id not in allowed:
+            return False
+        def mutate():
+            reference = self.repository.delete_registry_reference(reference_id)
+            if reference:
+                Path(reference["imagePath"]).unlink(missing_ok=True)
+        self._transaction(mutate)
+        return True
+
+    def rebuild_registry_index(self) -> dict[str, Any]:
+        reference_rows = self.repository.registry_images.rows()
+        index_path = Path(self.config["paths"]["registry_index"])
+        manifest_path = index_path.with_suffix(index_path.suffix + ".json")
+        with tempfile.TemporaryDirectory() as temp:
+            backup = Path(temp)
+            for source, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
+                if source.exists():
+                    shutil.copy2(source, backup / name)
+            try:
+                return self._rebuild_registry_index()
+            except Exception:
+                self.repository.registry_images.replace_all(reference_rows)
+                for target, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
+                    saved = backup / name
+                    if saved.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(saved, target)
+                    else:
+                        target.unlink(missing_ok=True)
+                self.vectors.registry.reset_cache()
+                raise
+
+    def _rebuild_registry_index(self) -> dict[str, Any]:
+        references = self.repository.registry_references()
+        if not references:
+            self.vectors.registry.rebuild([])
+            return {"references": 0, "vectors": 0}
+        paths = [Path(item["imagePath"]) for item in references]
+        missing = [str(path) for path in paths if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"先验库参考图缺失：{missing}")
+        vectors = self.embedder.encode_images(paths)
+        if len(vectors) != len(references):
+            raise RuntimeError("先验库参考图与向量数量不一致")
+        entries = [(stable_vector_id(reference["referenceId"]), vector) for reference, vector in zip(references, vectors)]
+        self.vectors.registry.rebuild(entries)
+        for reference, (vector_id, _) in zip(references, entries):
+            self.repository.upsert_registry_reference({"reference_id": reference["referenceId"], "registry_id": reference["registryId"], "image_path": reference["imagePath"], "registry_vector_id": vector_id, "is_embedded": True})
+        return {"references": len(references), "vectors": len(entries)}
+
+    def recognize_ship(self, image_bytes: bytes, filename: str = "upload.jpg") -> dict[str, Any]:
+        result = self._recognize(image_bytes)
+        hull = result.get("hull_number", "")
+        existing = self.repository.registry_by_hull(hull) if hull else []
+        return {**result, "already_exists": bool(existing), "existing_description": existing[0]["description"] if existing else None}
+
+    def recognize_and_add(self, image_bytes: bytes, filename: str) -> dict[str, Any]:
+        result = self.recognize_ship(image_bytes, filename)
+        if not result.get("hull_number"):
+            return {"error": "未能识别出舷号，请手动输入", "result": result}
+        if result["already_exists"]:
+            item = self.update_registry(result["hull_number"], result["description"], images=[(filename, image_bytes)])
+            action = "updated"
+        else:
+            item = self.create_registry(result["hull_number"], result["description"], images=[(filename, image_bytes)])
+            action = "added"
+        return {**result, "action": action, "registry": item}
+
+    def list_ships(self) -> list[dict[str, Any]]:
+        return [{"registry_id": item["registryId"], "hull_number": item["hullNumber"], "description": item["description"], "aliases": item["aliases"], "references": item.get("references", []), "searchable": any(reference["isEmbedded"] for reference in item.get("references", []))} for item in self.list_registry()]
+
+    def get_ship(self, hull_number: str) -> dict[str, Any] | None:
+        items = self.get_registry(hull_number)
+        return self.list_ships_by_items(items)[0] if items else None
 
     def create_ship(self, hull_number: str, description: str) -> bool:
-        return self.db.add_ship(hull_number, description)
+        try:
+            self.create_registry(hull_number, description)
+            return True
+        except FileExistsError:
+            return False
 
     def update_ship(self, hull_number: str, description: str) -> bool:
-        return self.db.update_ship(hull_number, description)
+        try:
+            self.update_registry(hull_number, description)
+            return True
+        except KeyError:
+            return False
 
     def delete_ship(self, hull_number: str) -> bool:
-        return self.db.delete_ship(hull_number)
+        return self.delete_registry(hull_number)
 
-    def bulk_create(self, ships: dict[str, str]) -> dict:
-        added = self.db.source.bulk_add(ships)
-        if added > 0:
-            self.db.reload()
-        return {"added": added, "skipped": len(ships) - added}
-
-    def search(self, keyword: str) -> list[dict]:
-        source = self.db.source
-        if hasattr(source, "search_by_description"):
-            return source.search_by_description(keyword)
-        data = source.load_all()
-        return [
-            {"hull_number": hn, "description": desc}
-            for hn, desc in data.items()
-            if keyword.lower() in desc.lower()
-        ]
-
-    def stats(self) -> dict:
-        source = self.db.source
-        backend_type = "sqlite" if hasattr(source, "db_path") else "csv"
-        return {"total_ships": source.count(), "backend": backend_type}
-
-    # ── VLM 识别 ──
-
-    def recognize_ship(self, image_bytes: bytes, filename: str) -> dict:
-        """从图片识别船只，返回 {hull_number, description}"""
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        ext = Path(filename).suffix.lower()
-        mime_map = {
-            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".png": "image/png", ".bmp": "image/bmp",
-            ".webp": "image/webp", ".gif": "image/gif",
-        }
-        mime = mime_map.get(ext, "image/jpeg")
-
-        msg = HumanMessage(content=[
-            {"type": "text", "text": RECOGNITION_PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-        ])
-
-        resp = self.vlm.invoke([msg])
-        content = resp.content.strip()
-
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r'\{.*\}', content, re.DOTALL)
-            if match:
-                try:
-                    result = json.loads(match.group())
-                except json.JSONDecodeError:
-                    result = {"hull_number": "", "description": content}
+    def bulk_create(self, ships: dict[str, str]) -> dict[str, int]:
+        added = skipped = 0
+        for hull, description in ships.items():
+            if self.create_ship(hull, description):
+                added += 1
             else:
-                result = {"hull_number": "", "description": content}
+                skipped += 1
+        return {"added": added, "skipped": skipped}
 
-        hull_number = str(result.get("hull_number", "")).strip()
-        description = str(result.get("description", "")).strip()
+    def search(self, query: str) -> list[dict[str, Any]]:
+        keyword = query.strip().lower()
+        return [item for item in self.list_ships() if keyword in item["hull_number"].lower() or keyword in item["description"].lower()]
 
-        # 检查是否已存在
-        existing_desc = None
-        if hull_number:
-            existing_desc = self.db.lookup(hull_number)
+    def stats(self) -> dict[str, Any]:
+        items = self.list_ships()
+        return {"total_ships": len(items), "total_reference_images": sum(len(item["references"]) for item in items), "backend": "CSV+FAISS"}
 
-        return {
-            "hull_number": hull_number,
-            "description": description,
-            "already_exists": existing_desc is not None,
-            "existing_description": existing_desc,
-        }
+    @staticmethod
+    def list_ships_by_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{"registry_id": item["registryId"], "hull_number": item["hullNumber"], "description": item["description"], "aliases": item["aliases"], "references": item.get("references", []), "searchable": any(reference["isEmbedded"] for reference in item.get("references", []))} for item in items]
 
-    def recognize_and_add(self, image_bytes: bytes, filename: str) -> dict:
-        """识别后自动入库"""
-        result = self.recognize_ship(image_bytes, filename)
-        hull_number = result["hull_number"]
-        if not hull_number:
-            return {"error": "未能识别出弦号，请手动输入", "result": result}
-        action = self.db.upsert_ship(hull_number, result["description"])
-        result["action"] = action
-        return result
+    def _save_references(self, registry_id: str, images: list[tuple[str, bytes]]) -> None:
+        target_dir = self.image_dir / registry_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for filename, raw in images:
+            image = self._decode(raw)
+            reference_id = f"reference-{uuid.uuid4().hex[:12]}"
+            suffix = Path(filename).suffix.lower() if Path(filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"} else ".jpg"
+            path = target_dir / f"{reference_id}{suffix}"
+            if not cv2.imwrite(str(path), image):
+                raise OSError(f"参考图保存失败：{path}")
+            self.repository.upsert_registry_reference({"reference_id": reference_id, "registry_id": registry_id, "image_path": str(path), "registry_vector_id": None, "is_embedded": False})
+
+    def _transaction(self, mutate: Callable[[], None]) -> None:
+        registry_rows = self.repository.registry.rows()
+        reference_rows = self.repository.registry_images.rows()
+        index_path = Path(self.config["paths"]["registry_index"])
+        manifest_path = index_path.with_suffix(index_path.suffix + ".json")
+        with tempfile.TemporaryDirectory() as temp:
+            backup = Path(temp)
+            image_backup = backup / "images"
+            if self.image_dir.exists():
+                shutil.copytree(self.image_dir, image_backup)
+            for source, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
+                if source.exists():
+                    shutil.copy2(source, backup / name)
+            try:
+                mutate()
+                self._rebuild_registry_index()
+            except Exception:
+                self.repository.registry.replace_all(registry_rows)
+                self.repository.registry_images.replace_all(reference_rows)
+                if self.image_dir.exists():
+                    shutil.rmtree(self.image_dir)
+                if image_backup.exists():
+                    shutil.copytree(image_backup, self.image_dir)
+                else:
+                    self.image_dir.mkdir(parents=True, exist_ok=True)
+                for target, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
+                    saved = backup / name
+                    if saved.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(saved, target)
+                    else:
+                        target.unlink(missing_ok=True)
+                self.vectors.registry.reset_cache()
+                raise
+
+    def _recognize(self, image_bytes: bytes) -> dict[str, str]:
+        image = self._decode(image_bytes)
+        result = self.llm.recognize(image)
+        return {"hull_number": result.get("vlm_hull_number") or "", "description": result.get("description") or ""}
+
+    @staticmethod
+    def _decode(raw: bytes) -> np.ndarray:
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("无法解析上传图片")
+        return image

@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 # ── 并发控制 ──
 # 限制同时运行的 pipeline 数量，防止多人访问时 GPU/CPU 被打爆
-_MAX_PARALLEL_PIPELINES = 2
+_MAX_PARALLEL_PIPELINES = 1
 _pipeline_semaphore: asyncio.Semaphore | None = None
 _state_lock = asyncio.Lock()
 
@@ -38,7 +38,7 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _pipeline_semaphore is None:
         try:
             config = load_config()
-            _MAX_PARALLEL_PIPELINES = config.get("pipeline", {}).get("max_parallel_pipelines", 2)
+            _MAX_PARALLEL_PIPELINES = config.get("pipeline", {}).get("max_parallel_pipelines", 1)
         except Exception:
             pass
         _pipeline_semaphore = asyncio.Semaphore(_MAX_PARALLEL_PIPELINES)
@@ -58,6 +58,22 @@ _h264_streams: dict[str, dict[str, Any]] = {}  # task_id → {ffmpeg, viewers, i
 _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
+
+
+def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> None:
+    """追加任务日志并按 FIFO 上限淘汰最旧记录。"""
+    text = line.strip()
+    if not text:
+        return
+    if level is None:
+        lowered = text.lower()
+        level = "error" if "error" in lowered or "失败" in text or "异常" in text else "warning" if "warning" in lowered or "warn" in lowered or "警告" in text else "info"
+    logs = _pipeline_logs.setdefault(task_id, [])
+    logs.append({"time": time.strftime("%H:%M:%S"), "line": text, "level": level})
+    overflow = len(logs) - _MAX_LOG_LINES
+    if overflow > 0:
+        del logs[:overflow]
+        _log_start[task_id] = _log_start.get(task_id, 0) + overflow
 
 
 def _get_demo_config() -> dict:
@@ -116,51 +132,35 @@ def _get_stream_dir(task_id: str) -> Path:
 
 class PipelineStartRequest(BaseModel):
     video_filename: str
-    concurrent_mode: bool = True
     display: bool = False
     # ── 核心检测参数 ──
     conf_threshold: float = 0.25
     iou_threshold: float = 0.45
-    process_every: int = 15
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
-    top_k: int = 3  # 语义检索候选数量
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
     yolo_model: str = ""
-    prompt_mode: str = "detailed"
-    enable_refresh: bool = True
-    skip_refresh_matched: bool = False
-    gap_num: int = 150
-    max_concurrent: int = 4
 
 
 class BrowserCameraStartRequest(BaseModel):
-    concurrent_mode: bool = True
     stream_mode: str = "mjpeg"  # "mjpeg" 或 "h264"
     # ── 核心检测参数 ──
     conf_threshold: float = 0.25
     iou_threshold: float = 0.45
-    process_every: int = 15
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
     pipe_scale: float = 0.5  # pipe 输出缩放系数 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
-    top_k: int = 3  # 语义检索候选数量
     # ── 高级参数 ──
     max_frames: int = 0
     device: str = ""
     yolo_model: str = ""
-    prompt_mode: str = "detailed"
-    enable_refresh: bool = True
-    skip_refresh_matched: bool = False
-    gap_num: int = 150
-    max_concurrent: int = 4
 
 
 class PipelineStartResponse(BaseModel):
@@ -587,7 +587,7 @@ async def transcode_video(filename: str):
 async def start_pipeline(req: PipelineStartRequest):
     """启动视频处理 Pipeline（支持文件和摄像头/RTSP 输入）"""
     _ensure_dirs()
-    logger.info("收到 Pipeline 请求: top_k=%d, save_output_video=%s", req.top_k, req.save_output_video)
+    logger.info("收到流水线请求：save_output_video=%s", req.save_output_video)
 
     # 并发控制：检查是否已达上限
     sem = _get_semaphore()
@@ -643,14 +643,9 @@ async def start_pipeline(req: PipelineStartRequest):
     else:
         cmd.append("--no-save-output-video")
         cmd.append("--no-output")  # 不保存输出视频，仅实时推流
-    cmd.append("--no-screenshots")  # 不保存截图，减少 I/O 开销
-    if req.concurrent_mode:
-        cmd.extend(["-c", "--max-concurrent", str(req.max_concurrent or pipeline_cfg.get("max_concurrent", 4))])
-
     # ── 核心检测参数 ──
     cmd.extend(["--conf", str(req.conf_threshold)])
     cmd.extend(["--iou", str(req.iou_threshold)])
-    cmd.extend(["--process-every", str(req.process_every)])
     cmd.extend(["--detect-every", str(req.detect_every)])
 
     # ── 帧率控制 ──
@@ -664,17 +659,6 @@ async def start_pipeline(req: PipelineStartRequest):
         cmd.extend(["--device", req.device])
     if req.yolo_model:
         cmd.extend(["--yolo-model", req.yolo_model])
-    if req.prompt_mode:
-        cmd.extend(["--prompt-mode", req.prompt_mode])
-    if req.top_k != 3:  # 非默认值时传递
-        cmd.extend(["--top-k", str(req.top_k)])
-    if req.enable_refresh:
-        cmd.append("--enable-refresh")
-        cmd.extend(["--gap-num", str(req.gap_num)])
-    if req.skip_refresh_matched:
-        cmd.append("--skip-refresh-matched")
-    else:
-        cmd.append("--no-skip-refresh-matched")
 
     # pipe 输出缩放
     if 0.1 <= req.pipe_scale < 1.0:
@@ -716,6 +700,7 @@ async def start_pipeline(req: PipelineStartRequest):
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0
+    _append_pipeline_log(task_id, "流水线任务已创建")
 
     try:
         # 获取信号量（限制并发 pipeline 数量）
@@ -778,37 +763,10 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
             if "进度" in text or "progress" in text.lower() or "%" in text or "处理帧" in text:
                 async with _state_lock:
                     _task_status[task_id]["progress"] = text
-
-            # 捕获识别日志（解析 Track ID + Step1/Step3，格式化为 [Track X] 弦号+匹配结果）
-            if "Step1" in text and "Step3" in text:
-                logs = _pipeline_logs.get(task_id)
-                if logs is not None:
-                    import time, re
-                    m_track = re.search(r'\[Track\s+(\d+)\]', text)
-                    track_id_str = m_track.group(1) if m_track else "?"
-                    m_id = re.search(r'Step1\(VLM\):\s*弦号=(\S+)', text)
-                    hull = m_id.group(1) if m_id else "?"
-                    m_match = re.search(r'匹配=(\w+)', text)
-                    m_cand = re.search(r"语义候选=(\[.*?\])", text)
-                    match_type = m_match.group(1) if m_match else "none"
-                    candidates = m_cand.group(1) if m_cand else "[]"
-                    if match_type == "exact":
-                        line = f"[Track {track_id_str}] 弦号：{hull}，精确匹配"
-                        level = "exact"
-                    elif match_type == "semantic":
-                        line = f"[Track {track_id_str}] 弦号：{hull}，相似：{candidates}"
-                        level = "semantic"
-                    else:
-                        line = f"[Track {track_id_str}] 弦号：{hull}，未命中"
-                        level = "miss"
-                    logs.append({"time": time.strftime("%H:%M:%S"), "line": line, "level": level, "track": track_id_str})
-                    # FIFO 清理
-                    if len(logs) > _MAX_LOG_LINES:
-                        overflow = len(logs) - _MAX_LOG_LINES
-                        del logs[:overflow]
-                        _log_start[task_id] = _log_start.get(task_id, 0) + overflow
-
-            if text.startswith("__PIPELINE_SUMMARY__:"):
+            is_summary = text.startswith("__PIPELINE_SUMMARY__:")
+            if not is_summary:
+                _append_pipeline_log(task_id, text)
+            if is_summary:
                 try:
                     import json
                     summary = json.loads(text.replace("__PIPELINE_SUMMARY__:", ""))
@@ -825,15 +783,18 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
             if process.returncode == 0:
                 _task_status[task_id]["status"] = "completed"
                 _task_status[task_id]["progress"] = "处理完成"
+                _append_pipeline_log(task_id, "流水线处理完成", "info")
                 logger.info("Pipeline 完成: %s", task_id)
             else:
                 _task_status[task_id]["status"] = "failed"
                 _task_status[task_id]["error"] = "Pipeline 进程异常退出"
+                _append_pipeline_log(task_id, f"流水线异常退出，返回码 {process.returncode}", "error")
                 logger.error("Pipeline 失败 [%s]: rc=%d", task_id, process.returncode)
     except Exception as e:
         async with _state_lock:
             _task_status[task_id]["status"] = "failed"
             _task_status[task_id]["error"] = str(e)
+        _append_pipeline_log(task_id, f"流水线异常：{e}", "error")
         logger.error("Pipeline 异常 [%s]: %s", task_id, e)
     finally:
         sem.release()
@@ -843,8 +804,6 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
             _running_processes.pop(task_id, None)
             _stop_signals.discard(task_id)
             is_browser_cam = _task_status.get(task_id, {}).get("is_browser_camera", False)
-        _pipeline_logs.pop(task_id, None)
-        _log_start.pop(task_id, None)
         if not is_browser_cam:
             _cleanup_stream_dir(task_id)
         _cleanup_old_tasks()
@@ -1014,6 +973,11 @@ def _cleanup_old_tasks():
             reverse=True,
         )[:50]
         _task_status = {**running, **dict(finished)}
+        retained = set(_task_status)
+        for task_id in list(_pipeline_logs):
+            if task_id not in retained:
+                _pipeline_logs.pop(task_id, None)
+                _log_start.pop(task_id, None)
         logger.info("自动清理旧任务记录，保留 %d 条", len(_task_status))
 
 
@@ -1639,6 +1603,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0
+    _append_pipeline_log(task_id, "流水线任务已创建")
 
     try:
         await sem.acquire()
@@ -1701,13 +1666,10 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
         # ── Pipeline 线程 ──
         pipe_cfg = dict(pipeline_cfg)
         pipe_cfg.update({
-            "concurrent_mode": req.concurrent_mode,
             "conf_threshold": req.conf_threshold,
             "iou_threshold": req.iou_threshold,
-            "process_every_n_frames": req.process_every,
             "detect_every_n_frames": req.detect_every,
             "target_fps": req.target_fps,
-            "max_concurrent": req.max_concurrent or pipeline_cfg.get("max_concurrent", 4),
             "demo": True,
             "no_output": not req.save_output_video,
             "save_output_video": req.save_output_video,
@@ -1716,10 +1678,6 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             "output_size": [640, 480],
             "stop_file": str(stream_dir / "__STOP__"),
         })
-        # 更新检索参数
-        if "retrieval" not in config:
-            config["retrieval"] = {}
-        config["retrieval"]["top_k"] = req.top_k
         if 0.1 <= req.pipe_scale < 1.0:
             pipe_cfg["pipe_output_size"] = [pipe_out_w, pipe_out_h]
         if req.max_frames > 0:
@@ -1728,12 +1686,6 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             pipe_cfg["device"] = req.device
         if req.yolo_model:
             pipe_cfg["yolo_model"] = req.yolo_model
-        if req.prompt_mode:
-            pipe_cfg["prompt_mode"] = req.prompt_mode
-        if req.enable_refresh:
-            pipe_cfg["enable_refresh"] = True
-            pipe_cfg["gap_num"] = req.gap_num
-        pipe_cfg["skip_refresh_matched"] = req.skip_refresh_matched
         config["pipeline"] = pipe_cfg
 
         def _run_pipeline():
@@ -1797,8 +1749,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
                 fake_proc.stderr.signal_done()
                 fake_proc._finished.set()
                 sem.release()
-                _pipeline_logs.pop(task_id, None)
-                _log_start.pop(task_id, None)
+                _append_pipeline_log(task_id, "浏览器摄像头流水线已结束", "info")
                 _webrtc_ready_events.pop(task_id, None)
                 _cleanup_stream_dir(task_id)
 

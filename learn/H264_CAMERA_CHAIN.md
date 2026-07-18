@@ -1,129 +1,113 @@
-# 摄像头 Demo H264 全链路
+# H.264 摄像头与视频处理链路
 
-## 链路总览
+本文档说明当前网页输入、后端流水线和 H.264 结果推流之间的真实链路。所有输入最终转换为逐帧 BGR 图像交给同一视频流水线，处理结果统一通过 H.264 WebSocket 返回网页。
 
+## 1. 视频上传与服务器摄像头
+
+```text
+网页调用 /api/pipeline/start
+  → 后端启动 pipeline 子进程
+  → 视频文件、USB 摄像头或网络摄像头逐帧输入
+  → 检测、跟踪、关键帧与轨迹记忆构建
+  → 原始 BGR 结果写入子进程标准输出
+  → _start_h264_reader
+  → FFmpeg 编码为 H.264 分片 MP4
+  → /ws/h264/{task_id}
+  → 浏览器 MediaSource 播放
 ```
+
+- 视频上传后由后端保存，再通过 `/api/pipeline/start` 启动任务。
+- 服务器摄像头可使用设备编号、RTSP 地址或 HTTP 视频流地址。
+- 流水线只向标准输出写入固定尺寸的原始 BGR 图像，日志写入标准错误输出。
+- `_start_h264_reader` 按输出宽高读取完整帧，并将帧送入 FFmpeg。
+- 浏览器通过 `/ws/h264/{task_id}` 接收初始化分片和媒体分片，再由 `MediaSource` 连续播放。
+
+## 2. 浏览器摄像头输入
+
+浏览器摄像头先调用 `/api/pipeline/start-browser-camera` 创建任务，再选择以下任一种输入方式。
+
+### 2.1 逐帧 JPEG 图像流
+
+```text
 浏览器摄像头
-  ↓ getUserMedia(stream)
-setupH264CameraWs()                         [pipeline.js]
-  ↓ 首条文本消息 {"codec":"h264"}
-  ↓ MediaRecorder(stream, avc1.42E01E, 2Mbps) → start(200ms)
-  ↓ ondataavailable → arrayBuffer → ws.send(binary)
-────────────────── WebSocket /ws/camera/{task_id} ──────────────────
-  ↓ first_msg 是 text → 走 H264 分支
-_receive_h264_camera_frames(codec="h264")   [pipeline_api.py:2056]
-  ↓ "h264" in codec → ffmpeg -f mp4 -i pipe:0 -f rawvideo bgr24 pipe:1
-  ↓ 解码帧 → _queue_put_latest(frame_queue)
-────────────────── 内存队列 ──────────────────
-Pipeline 线程                                [pipeline.py]
-  ↓ 从队列取帧 → YOLO推理 → 标注 → raw BGR 写 stdout/pipe
-_start_h264_reader()                         [pipeline_api.py:1040]
-  ↓ pipe → ffmpeg libx264 ultrafast → fMP4
-  ↓ 解析 moof+mdat box → _broadcast_h264()
-────────────────── WebSocket /ws/h264/{task_id} ──────────────────
-  ↓ send_bytes(init_segment / media_segment)
-connectCameraH264()                          [pipeline.js:1197]
-  ↓ MediaSource + SourceBuffer (avc1.42C01F)
-  ↓ MSE appendBuffer → <video> 播放
+  → Canvas 抓帧并编码 JPEG
+  → /ws/camera/{task_id}
+  → 后端解码为 BGR 图像
+  → queue.Queue
+  → VirtualCamera
+  → 视频流水线
 ```
 
-## 三种摄像头编码模式对比
+该方式兼容性最好，但浏览器需要逐帧编码 JPEG。
 
-| | MJPEG | H264 | WebRTC |
-|---|---|---|---|
-| 前端编码 | Canvas toBlob(JPEG) | MediaRecorder(H264) | 原生 WebRTC track |
-| 传输协议 | WebSocket binary | WebSocket binary | RTCPeerConnection |
-| 后端解码 | cv2.imdecode | ffmpeg -f mp4 | aiortc |
-| 结果推流 | H264 fMP4 / MJPEG | H264 fMP4 | H264 fMP4 |
-| 带宽占用 | 高（逐帧JPEG） | 低（连续编码） | 低 |
-| 延迟 | 低 | 中（编码缓冲） | 最低 |
-| 兼容性 | 最好 | 需浏览器支持 | 需HTTPS |
+### 2.2 浏览器编码视频流
 
-## 关键代码位置
-
-### 前端
-
-| 文件 | 行号 | 功能 |
-|------|------|------|
-| `web/static/js/pipeline.js` | 733-737 | 摄像头变量声明 |
-| `web/static/js/pipeline.js` | 827-836 | startBrowserCamera 三分支路由 |
-| `web/static/js/pipeline.js` | 889-965 | setupH264CameraWs() — H264 推流 |
-| `web/static/js/pipeline.js` | 847-886 | setupMjpegCameraWs() — MJPEG 推流 |
-| `web/static/js/pipeline.js` | 968+ | setupWebRTCCamera() — WebRTC 推流 |
-| `web/static/js/pipeline.js` | 1099-1128 | stopFrameCapture() — 统一清理 |
-| `web/static/js/pipeline.js` | 1197-1339 | connectCameraH264() — H264 结果 MSE 播放 |
-
-### 后端
-
-| 文件 | 行号 | 功能 |
-|------|------|------|
-| `web/routes/pipeline_api.py` | 1542 | POST /start-browser-camera — 启动浏览器摄像头 |
-| `web/routes/pipeline_api.py` | 1650 | _start_h264_reader() 无条件启动（结果编码） |
-| `web/routes/pipeline_api.py` | 1769 | WS /ws/camera/{task_id} — 接收摄像头帧 |
-| `web/routes/pipeline_api.py` | 1798-1817 | 首条消息模式判断（text=H264, binary=MJPEG） |
-| `web/routes/pipeline_api.py` | 2056 | _receive_h264_camera_frames() — H264 解码 |
-| `web/routes/pipeline_api.py` | 2077 | ffmpeg 命令构建（h264→-f mp4, 其他→自动探测） |
-| `web/routes/pipeline_api.py` | 1040 | _start_h264_reader() — raw BGR → ffmpeg H264 |
-| `web/routes/pipeline_api.py` | 1259 | _broadcast_h264() — 广播 fMP4 到所有观众 |
-| `web/routes/pipeline_api.py` | 1308 | WS /ws/h264/{task_id} — H264 结果推流 |
-| `web/routes/pipeline_api.py` | 1890 | WebRTC 帧接收（aiortc） |
-
-### Pipeline
-
-| 文件 | 行号 | 功能 |
-|------|------|------|
-| `pipeline/pipeline.py` | 341-384 | _FrameWriter — MJPEG 帧写入磁盘 |
-| `pipeline/pipeline.py` | 388-448 | _RawStdoutWriter — raw BGR 写 stdout（供 H264） |
-| `pipeline/virtual_camera.py` | 全文 | VirtualCamera — 从内存队列读帧 |
-
-## 前端 H264 编码细节
-
-```javascript
-// codec 检测优先级
-'avc1.42E01E'  // H264 Baseline 3.1 — Chrome/Edge 支持
-'vp8'          // VP8 fallback — Firefox 支持
-
-// MediaRecorder 配置
-{
-  mimeType: useMime,
-  videoBitsPerSecond: 2_000_000,  // 2 Mbps
-}
-recorder.start(200);  // 每 200ms 产出一个 chunk
+```text
+浏览器摄像头
+  → MediaRecorder 编码视频块
+  → /ws/camera/{task_id}
+  → 后端 FFmpeg 解码
+  → queue.Queue
+  → VirtualCamera
+  → 视频流水线
 ```
 
-## 后端 ffmpeg 解码参数
+浏览器优先选择可用的 H.264 编码格式；不支持时可回退为其他浏览器编码格式或逐帧 JPEG 图像流。
 
-```bash
-ffmpeg -hide_banner -loglevel info \
-  -fflags +nobuffer+discardcorrupt \
-  -flags +low_delay \
-  -f mp4 \                    # h264 codec 时添加
-  -i pipe:0 \                 # stdin: MediaRecorder chunks
-  -vf scale=640:480 \         # 强制输出分辨率
-  -f rawvideo \               # 输出格式
-  -pix_fmt bgr24 \            # OpenCV 兼容
-  pipe:1                      # stdout: raw BGR 帧
+### 2.3 WebRTC
+
+```text
+浏览器摄像头
+  → WebRTC 视频轨
+  → /api/pipeline/webrtc/offer/{task_id}
+  → 后端接收并转换为 BGR 图像
+  → queue.Queue
+  → VirtualCamera
+  → 视频流水线
 ```
 
-## 后端 H264 编码参数（结果推流）
+该方式适合低延迟摄像头输入。候选网络地址通过对应接口补充，断开时关闭连接并结束输入。
 
-```bash
-ffmpeg -hide_banner -loglevel error \
-  -fflags +nobuffer \
-  -flags +low_delay \
-  -f rawvideo -pix_fmt bgr24 -video_size {w}x{h} \
-  -r {fps} \
-  -i pipe:0 \
-  -c:v libx264 \
-  -preset ultrafast -tune zerolatency \
-  -profile:v baseline -level 3.1 \
-  -bf 0 \                    # 无 B 帧
-  -g {fps} \                 # GOP = fps（每秒一个关键帧）
-  -threads 2 \
-  -pix_fmt yuv420p \
-  -movflags +frag_keyframe+empty_moov+default_base_moof+faststart \
-  -frag_duration 250000 \    # 0.25s 一个 fragment
-  -flush_packets 1 \
-  -f mp4 \
-  pipe:1
+## 3. 统一流水线输入
+
+```text
+视频文件或服务器摄像头 → VideoInput ─┐
+浏览器摄像头帧队列      → VirtualCamera ├→ 同一视频流水线
+帧目录                  → VirtualCamera ┘
 ```
+
+- `VideoInput` 负责视频文件、USB 摄像头和网络流。
+- `VirtualCamera` 负责浏览器摄像头帧队列或帧目录。
+- 后续检测、跟踪、轨迹记忆、正式关键帧和多模态特征生成不区分输入来源。
+
+## 4. 统一结果输出
+
+```text
+流水线标注结果
+  → 原始 BGR 图像
+  → FFmpeg H.264 编码
+  → 每观众独立 asyncio.Queue
+  → H.264 WebSocket
+  → 浏览器 MediaSource
+```
+
+无论输入来自上传视频、服务器摄像头还是浏览器摄像头，网页监控结果都通过同一 H.264 推流链路返回。原有逐帧图像流接口仍保留，用于兼容和调试。
+
+## 5. 背压策略
+
+- 浏览器输入队列满时删除较旧帧，只保留最新输入，避免流水线处理过期画面。
+- H.264 观看队列满时删除旧分片，只保留较新的监控结果。
+- 前端媒体分片积压过多时主动裁剪队列，防止播放延迟不断增加。
+- 慢速观看者只影响自己的队列，不阻塞流水线和其他观看者。
+
+## 6. 功能保留范围
+
+当前实现必须同时保留：
+
+- 视频上传处理。
+- 服务器 USB、RTSP 和 HTTP 摄像头输入。
+- 浏览器逐帧 JPEG 图像流。
+- 浏览器编码视频流。
+- WebRTC 摄像头输入。
+- H.264 分片 MP4 实时输出。
+- 原有逐帧图像流兼容接口。

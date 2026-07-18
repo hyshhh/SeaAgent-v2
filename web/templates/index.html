@@ -2,545 +2,143 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>船只舷号管理系统</title>
-<link rel="stylesheet" href="/static/css/style.css?v=3">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SeaAgent 海域船舶监控智能体</title>
+<link rel="stylesheet" href="/static/css/style.css?v=4">
 </head>
 <body>
-
-<div class="header">
-  <h1>🚢 船只舷号管理系统</h1>
-  <p>管理船只舷号数据库 — 支持 CSV / SQLite 后端</p>
-</div>
-
-<!-- ── Tab 导航 ── -->
-<div class="tab-nav">
-  <button class="tab-btn active" data-tab="database" onclick="switchTab('database')">
-    <span class="tab-icon">🗄️</span> 数据库管理
-  </button>
-  <button class="tab-btn" data-tab="video-demo" onclick="switchTab('video-demo')">
-    <span class="tab-icon">🎬</span> 视频 Demo
-  </button>
-  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">
-    <span class="tab-icon">📷</span> 摄像头 Demo
-  </button>
-</div>
-
-<div class="container">
-
-  <!-- ═══════════════════════════════════════════ -->
-  <!-- Tab 1: 数据库管理 -->
-  <!-- ═══════════════════════════════════════════ -->
-  <div class="tab-content active" id="tab-database">
-    <!-- 统计栏 -->
-    <div class="stats-bar">
-      <div class="stat-card">
-        <div class="num" id="totalCount">-</div>
-        <div class="label">船只总数</div>
-      </div>
-      <div class="stat-card">
-        <div class="num" id="backendType">-</div>
-        <div class="label">数据后端</div>
-      </div>
-    </div>
-
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <input type="text" id="searchInput" placeholder="搜索舷号或描述…" />
-      <button class="btn btn-primary" onclick="openAddModal()">+ 新增船只</button>
-      <button class="btn btn-primary" onclick="openUploadModal()" style="background:#7c3aed">📷 上传图片识别</button>
-      <button class="btn btn-outline" onclick="openBulkModal()">批量导入</button>
-      <button class="btn btn-outline" onclick="loadShips()">刷新</button>
-    </div>
-
-    <!-- 表格 -->
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:120px">舷号</th>
-            <th>描述</th>
-            <th style="width:140px">操作</th>
-          </tr>
-        </thead>
-        <tbody id="shipTable">
-          <tr><td colspan="3" class="empty-msg">加载中…</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════════════════════════════════════ -->
-  <!-- Tab 2: 视频 Demo -->
-  <!-- ═══════════════════════════════════════════ -->
-  <div class="tab-content" id="tab-video-demo">
-    <div class="demo-layout">
-      <div class="demo-main">
-
-        <!-- Pipeline 控制 + 播放（合并为一个卡片） -->
-        <div class="section-card" id="pipelineControl" style="display:none">
-          <div class="section-header">
-            <h3 class="section-title">⚡ 实时预览</h3>
-            <div class="pipeline-actions">
-              <button class="btn btn-primary btn-sm" id="btnStartPipeline" onclick="startVideoPipeline()">▶ 开始处理</button>
-              <button class="btn btn-danger btn-sm" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">⏹ 停止</button>
-            </div>
-          </div>
-
-          <!-- 状态条 -->
-          <div id="pipelineStatus" class="pipeline-status">
-            <span class="status-dot idle"></span>
-            <span id="pipelineStatusText">等待开始</span>
-          </div>
-
-          <!-- 视频播放区 -->
-          <div class="result-area">
-            <div id="resultPlaceholder" class="video-placeholder">
-              <span>🎬</span>
-              <p>选择视频后点击"开始处理"</p>
-            </div>
-          </div>
-
-          <!-- Pipeline 识别日志 -->
-          <div id="pipelineLogBox" class="pipeline-log-box" style="display:none">
-            <div class="pipeline-log-header">
-              <span>识别日志</span>
-              <div style="display:flex;gap:8px;align-items:center">
-                <label style="font-size:12px;color:#888;white-space:nowrap">最大日志 <input type="number" id="optMaxLogLines" value="10" min="1" max="500" style="width:50px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px" /></label>
-                <button class="btn btn-outline btn-sm" onclick="document.getElementById('pipelineLogContent').innerHTML=''">清空</button>
-              </div>
-            </div>
-            <div id="pipelineLogContent" class="pipeline-log-content"></div>
+<header class="app-header">
+  <div class="brand-mark">SA</div>
+  <div><h1>SeaAgent</h1><p>面向海域船舶监控的轨迹记忆闭环多智能体系统</p></div>
+  <div class="system-badge"><span></span>系统就绪</div>
+</header>
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="video-demo" onclick="switchTab('video-demo')">海域监控与问答</button>
+  <button class="tab-btn" data-tab="database" onclick="switchTab('database')">先验库管理</button>
+  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">实时摄像头</button>
+</nav>
+<main class="page-shell">
+<section class="tab-content active" id="tab-video-demo">
+  <div class="monitor-grid">
+    <div class="monitor-column">
+      <section class="panel monitor-panel" id="pipelineControl">
+        <div class="panel-head">
+          <div><span class="eyebrow">海域监控窗口</span><h2>船舶检测与轨迹记忆构建</h2></div>
+          <div class="panel-actions">
+            <button class="btn primary" id="btnStartPipeline" onclick="startVideoPipeline()">开始处理</button>
+            <button class="btn danger" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">停止</button>
           </div>
         </div>
-
-        <!-- 历史任务 -->
-        <div class="section-card">
-          <div class="section-header">
-            <h3 class="section-title">📋 任务历史</h3>
-            <div style="display:flex;gap:6px">
-              <button class="btn btn-outline btn-sm" onclick="loadTaskHistory()">刷新</button>
-              <button class="btn btn-outline btn-sm" onclick="clearTaskHistory()">清空</button>
-            </div>
-          </div>
-          <div id="taskHistory" class="task-list">
-            <div class="empty-msg">暂无任务</div>
-          </div>
+        <div class="status-line" id="pipelineStatus"><span class="status-dot idle"></span><span id="pipelineStatusText">请选择监控视频</span></div>
+        <div class="result-area">
+          <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
         </div>
-      </div>
-
-      <!-- ── 右栏：配置 + 视频列表 ── -->
-      <div class="demo-sidebar">
-
-        <!-- 上传区 -->
-        <div class="section-card">
-          <h3 class="section-title">📤 添加视频</h3>
+        <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
+          <div class="log-head"><span>运行日志</span><label>保留<input id="optMaxLogLines" type="number" value="100" min="1" max="500">条</label></div>
+          <div id="pipelineLogContent" class="log-content"></div>
+        </div>
+      </section>
+      <div class="control-grid">
+        <section class="panel compact-panel">
+          <div class="panel-head"><div><span class="eyebrow">视频源</span><h3>上传与选择</h3></div></div>
           <div class="upload-zone" id="videoUploadZone" onclick="document.getElementById('videoFileInput').click()">
-            <div class="icon">🎬</div>
-            <p>点击或拖拽视频到此处上传</p>
-            <p style="font-size:12px;color:#aaa;margin-top:4px">MP4 / AVI / MKV / MOV / FLV / WebM</p>
-            <div class="filename" id="videoUploadFilename"></div>
-            <input type="file" id="videoFileInput" accept="video/*" style="display:none" />
+            <strong>上传监控视频</strong><span>支持常见视频格式</span><em id="videoUploadFilename"></em>
+            <input id="videoFileInput" type="file" accept="video/*" hidden>
           </div>
-          <div id="videoUploadProgress" class="progress-bar-wrap" style="display:none">
-            <div class="progress-bar" id="videoProgressBar"></div>
-            <span class="progress-text" id="videoProgressText">0%</span>
-          </div>
-        </div>
-
-        <!-- 视频列表 -->
-        <div class="section-card">
-          <div class="section-header">
-            <h3 class="section-title">🎥 视频列表</h3>
-            <button class="btn btn-outline btn-sm" onclick="loadVideoList()">刷新</button>
-          </div>
-          <div id="videoList" class="video-list">
-            <div class="empty-msg">加载中…</div>
-          </div>
-        </div>
-
-        <!-- Pipeline 参数配置 -->
-        <div class="section-card">
-          <h3 class="section-title">⚙️ 参数配置</h3>
-          <div class="pipeline-options">
-            <label class="checkbox-label">
-              <input type="checkbox" id="optConcurrent" checked /> 并发模式
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" id="optSaveVideo" checked /> 保存视频
-            </label>
-          </div>
-
-          <!-- 核心参数 -->
+          <div class="upload-progress" id="videoUploadProgress" style="display:none"><div class="progress-track"><div id="videoProgressBar"></div></div><span id="videoProgressText">0%</span></div>
+          <div class="video-list" id="videoList"><div class="empty-msg">正在加载视频列表…</div></div>
+        </section>
+        <section class="panel compact-panel">
+          <div class="panel-head"><div><span class="eyebrow">流水线参数</span><h3>监控设置</h3></div></div>
           <div class="param-grid">
-            <div class="param-item">
-              <label>置信度 <span class="param-val" id="optConfVal">0.25</span></label>
-              <input type="range" id="optConf" min="0.05" max="0.95" step="0.05" value="0.25"
-                     oninput="document.getElementById('optConfVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>IoU <span class="param-val" id="optIouVal">0.45</span></label>
-              <input type="range" id="optIou" min="0.1" max="0.95" step="0.05" value="0.45"
-                     oninput="document.getElementById('optIouVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>VLM 间隔 (帧)</label>
-              <input type="number" id="optProcessEvery" value="15" min="1" max="1000" />
-            </div>
-            <div class="param-item">
-              <label>检测间隔 (帧)</label>
-              <input type="number" id="optDetectEvery" value="2" min="1" max="100" />
-            </div>
-            <div class="param-item">
-              <label>目标帧率 (0=不限)</label>
-              <input type="number" id="optTargetFps" value="15" min="0" max="120" step="1" />
-            </div>
-            <div class="param-item">
-              <label>pipe 缩放 <span class="param-val" id="optPipeScaleVal">0.5</span></label>
-              <input type="range" id="optPipeScale" min="0.2" max="1.0" step="0.1" value="0.5"
-                     oninput="document.getElementById('optPipeScaleVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>语义检索候选数 (top_k)</label>
-              <input type="number" id="optTopK" value="3" min="1" max="20" />
-            </div>
+            <label>检测置信度<input id="optConf" type="number" value="0.25" min="0" max="1" step="0.05"></label>
+            <label>交并比阈值<input id="optIou" type="number" value="0.45" min="0" max="1" step="0.05"></label>
+            <label>检测帧间隔<input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <label>目标帧率<input id="optTargetFps" type="number" value="0" min="0"></label>
+            <label>推流缩放<input id="optPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+            <label>最大处理帧<input id="optMaxFrames" type="number" value="0" min="0"></label>
+            <label>推理设备<input id="optDevice" type="text" placeholder="留空使用配置"></label>
+            <label>检测模型<input id="optYoloModel" type="text" placeholder="留空使用配置"></label>
+            <label class="check-line"><input id="optSaveVideo" type="checkbox" checked>保存标注视频</label>
           </div>
-
-          <!-- 高级参数 (折叠) -->
-          <details class="advanced-params">
-            <summary>⚙️ 高级参数</summary>
-            <div class="param-grid">
-              <div class="param-item">
-                <label>最大帧数 (0=不限)</label>
-                <input type="number" id="optMaxFrames" value="0" min="0" />
-              </div>
-              <div class="param-item">
-                <label>设备</label>
-                <select id="optDevice">
-                  <option value="">自动</option>
-                  <option value="cpu">CPU</option>
-                  <option value="0">GPU 0</option>
-                </select>
-              </div>
-              <div class="param-item">
-                <label>YOLO 模型</label>
-                <input type="text" id="optYoloModel" value="yolov8n.pt" placeholder="yolov8n.pt" />
-              </div>
-              <div class="param-item">
-                <label>提示模式</label>
-                <select id="optPromptMode">
-                  <option value="detailed">详细</option>
-                  <option value="brief">简洁</option>
-                </select>
-              </div>
-              <div class="param-item">
-                <label>最大并发</label>
-                <input type="number" id="optMaxConcurrent" value="4" min="1" max="16" />
-              </div>
-              <div class="param-item">
-                <label>刷新间隔 (帧)</label>
-                <input type="number" id="optGapNum" value="150" min="1" />
-              </div>
-              <div class="param-item param-checkbox">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="optEnableRefresh" checked /> 定时刷新
-                </label>
-              </div>
-              <div class="param-item param-checkbox">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="optSkipRefreshMatched" /> 精确匹配后跳过刷新
-                </label>
-              </div>
-            </div>
-          </details>
-        </div>
+          <div class="history-head"><h3>任务历史</h3><button class="text-btn" onclick="clearTaskHistory()">清空</button></div>
+          <div class="task-history" id="taskHistory"><div class="empty-msg">暂无任务</div></div>
+        </section>
       </div>
-
     </div>
+    <aside class="agent-column">
+      <section class="panel agent-panel">
+        <div class="panel-head"><div><span class="eyebrow">闭环智能体问答</span><h2>三智能体推理</h2></div><span class="round-limit">最多三轮</span></div>
+        <div class="question-examples">
+          <button onclick="useQuestion('舷号 0857 有没有在视频中出现？')">舷号查询</button>
+          <button onclick="useQuestion('视频中有没有出现一个黄色的无人艇？')">描述查询</button>
+          <button onclick="useQuestion('找一下5分钟到10分钟有哪些未在库船出现在视野中？')">未在库船</button>
+          <button onclick="useQuestion('查找一下5分钟到10分钟有哪些在库船出现？')">在库船</button>
+          <button onclick="useQuestion('从5分钟到10分钟视频中一共出现多少艘船？')">数量统计</button>
+        </div>
+        <div class="question-box">
+          <textarea id="agentQuestion" rows="3" placeholder="输入关于当前监控视频的问题…"></textarea>
+          <button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button>
+        </div>
+        <div id="agentAnswer" class="agent-answer empty-state">等待问题</div>
+      </section>
+      <section class="panel reasoning-panel">
+        <div class="panel-head"><div><span class="eyebrow">调用链</span><h3>规划—观察—反思</h3></div></div>
+        <div id="agentRounds" class="round-list"><div class="empty-msg">执行问答后显示每轮工具调用</div></div>
+      </section>
+      <section class="panel evidence-panel">
+        <div class="panel-head"><div><span class="eyebrow">证据工作区</span><h3>关键帧、目标船片段与库参考图</h3></div><span class="round-limit">自动展示最多三条</span></div>
+        <div id="evidenceGallery" class="evidence-grid"><div class="empty-msg">暂无可视证据</div></div>
+      </section>
+    </aside>
   </div>
-
-  <!-- ═══════════════════════════════════════════ -->
-  <!-- Tab 3: 摄像头 Demo（双栏布局） -->
-  <!-- ═══════════════════════════════════════════ -->
-  <div class="tab-content" id="tab-camera-demo">
-    <div class="demo-layout">
-      <div class="demo-main">
-
-        <!-- Pipeline 控制 + 实时预览 -->
-        <div class="section-card" id="cameraPipelineControl">
-          <div class="section-header">
-            <h3 class="section-title">📷 实时预览</h3>
-            <div class="pipeline-actions">
-              <button class="btn btn-primary btn-sm" id="btnStartCamera" onclick="startCameraPipeline()">▶ 启动摄像头识别</button>
-              <button class="btn btn-danger btn-sm" id="btnStopCamera" onclick="stopCameraPipeline()" style="display:none">⏹ 停止</button>
-            </div>
-          </div>
-
-          <!-- 状态条 -->
-          <div id="cameraStatus" class="pipeline-status">
-            <span class="status-dot idle"></span>
-            <span id="cameraStatusText">未启动</span>
-          </div>
-
-          <!-- 浏览器摄像头预览 -->
-          <div class="form-row" id="browserCameraPreviewRow">
-            <div class="camera-preview-wrap">
-              <video id="browserCameraPreview" autoplay playsinline muted></video>
-              <div id="browserCameraPreviewPlaceholder" class="video-placeholder" style="min-height:200px">
-                <span>📷</span>
-                <p>点击"启动"后授权摄像头</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- 视频流输出 -->
-          <div id="cameraOutput" class="camera-output">
-            <video id="cameraStream" class="demo-video" autoplay muted playsinline style="display:none;max-width:100%;border-radius:8px;background:#000"></video>
-            <div id="cameraStreamFps" style="text-align:center;font-size:12px;color:#888;margin-top:4px;display:none"></div>
-            <div id="cameraStreamPlaceholder" class="video-placeholder">
-              <span>📷</span>
-              <p>启动后显示实时画面</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- 使用说明 -->
-        <div class="section-card">
-          <h3 class="section-title">💡 使用说明</h3>
-          <div class="help-content">
-            <ul>
-              <li><strong>浏览器摄像头（默认）</strong>：直接调用浏览器 <code>getUserMedia</code> API，需 HTTPS 或 localhost 环境。帧通过 WebSocket 推送到后端处理</li>
-              <li><strong>视频编码模式</strong>：
-                <ul>
-                  <li><strong>MJPEG</strong>：逐帧 JPEG 传输，兼容性好，延迟较低</li>
-                  <li><strong>H264</strong>：浏览器 MediaRecorder 硬件编码，带宽占用低，需浏览器支持</li>
-                  <li><strong>WebRTC</strong>：浏览器直连服务器，超低延迟，推荐局域网使用</li>
-                </ul>
-              </li>
-              <li><strong>服务器摄像头</strong>：直接读取服务器连接的 USB 摄像头（设备号 0, 1, …）</li>
-              <li><strong>RTSP 流</strong>：填入地址，如 <code>rtsp://192.168.1.100/stream</code></li>
-              <li><strong>自定义</strong>：支持视频文件路径或任意 OpenCV 支持的输入源</li>
-              <li>处理结果将保存到 <code>demo_output</code> 目录</li>
-            </ul>
-          </div>
-        </div>
+</section>
+<section class="tab-content" id="tab-database">
+  <div class="registry-head">
+    <div><span class="eyebrow">先验知识记忆</span><h2>船舶先验库</h2><p>每个库项最多保存六张多视角参考图，更新后自动重建参考图向量库。</p></div>
+    <div class="stats-bar"><div><strong id="totalCount">-</strong><span>库项</span></div><div><strong id="totalImages">-</strong><span>参考图</span></div><div><strong id="backendType">-</strong><span>存储后端</span></div></div>
+  </div>
+  <section class="panel">
+    <div class="registry-toolbar"><input id="searchInput" type="text" placeholder="搜索舷号或描述"><button class="btn primary" onclick="openAddModal()">新建库项</button><button class="btn secondary" onclick="openUploadModal()">图片识别入库</button><button class="btn ghost" onclick="openBulkModal()">批量导入</button><button class="btn ghost" onclick="loadShips()">刷新</button></div>
+    <div class="table-wrap"><table><thead><tr><th>舷号</th><th>描述</th><th>参考图与可检索状态</th><th>操作</th></tr></thead><tbody id="shipTable"><tr><td colspan="4" class="empty-msg">正在加载…</td></tr></tbody></table></div>
+  </section>
+</section>
+<section class="tab-content" id="tab-camera-demo">
+  <div class="camera-grid">
+    <section class="panel">
+      <div class="panel-head"><div><span class="eyebrow">实时监控源</span><h2>摄像头输入</h2></div><div class="panel-actions"><button class="btn primary" id="btnStartCamera" onclick="startCameraPipeline()">启动监控</button><button class="btn danger" id="btnStopCamera" onclick="stopCameraPipeline()" style="display:none">停止</button></div></div>
+      <div class="status-line"><span class="status-dot idle"></span><span id="cameraStatusText">等待启动</span></div>
+      <div class="camera-preview-row" id="browserCameraPreviewRow" style="display:none"><div class="video-slot"><video id="browserCameraPreview" autoplay muted playsinline style="display:none"></video><div id="browserCameraPreviewPlaceholder" class="video-placeholder">本地摄像头预览</div></div></div>
+      <div class="single-stream video-slot"><video id="cameraStream" autoplay muted playsinline style="display:none"></video><div id="cameraStreamPlaceholder" class="video-placeholder">模型处理结果</div><span id="cameraStreamFps" class="fps-badge"></span></div>
+    </section>
+    <section class="panel compact-panel">
+      <div class="panel-head"><div><span class="eyebrow">摄像头参数</span><h3>输入与推流设置</h3></div></div>
+      <div class="param-grid">
+        <label>输入来源<select id="cameraSource" onchange="onCameraSourceChange()"><option value="browser">浏览器摄像头</option><option value="0">服务器摄像头</option><option value="rtsp">网络视频流</option><option value="custom">自定义地址</option></select></label>
+        <label>输入地址<input id="cameraUrl" type="text" placeholder="输入视频地址" style="display:none"></label>
+        <label id="camStreamModeRow">推流方式<select id="camStreamMode"><option value="webrtc">低延迟连接</option><option value="h264">压缩视频流</option><option value="mjpeg">逐帧图像流</option></select></label>
+        <span id="camStreamModeHint" class="hint" style="display:none">服务器输入统一使用压缩视频流。</span>
+        <label>检测置信度<input id="camConf" type="number" value="0.25" step="0.05"></label>
+        <label>交并比阈值<input id="camIou" type="number" value="0.45" step="0.05"></label>
+        <label>检测帧间隔<input id="camDetectEvery" type="number" value="1" min="1"></label>
+        <label>目标帧率<input id="camTargetFps" type="number" value="0" min="0"></label>
+        <label>采集帧率<input id="camCaptureFps" type="number" value="15" min="1"></label>
+        <label>推流缩放<input id="camPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+        <label>最大处理帧<input id="camMaxFrames" type="number" value="0" min="0"></label>
+        <label>推理设备<input id="camDevice" type="text" placeholder="留空使用配置"></label>
+        <label>检测模型<input id="camYoloModel" type="text" placeholder="留空使用配置"></label>
+        <label class="check-line"><input id="camOptSaveVideo" type="checkbox" checked>保存标注视频</label>
       </div>
-
-      <!-- ── 右栏：配置 ── -->
-      <div class="demo-sidebar">
-
-        <!-- 输入源配置 -->
-        <div class="section-card">
-          <h3 class="section-title">📷 输入源配置</h3>
-          <div class="camera-config">
-            <div class="form-row">
-              <label>输入源</label>
-              <div class="input-group">
-                <select id="cameraSource" onchange="onCameraSourceChange()">
-                  <option value="browser">本地摄像头（浏览器）</option>
-                  <option value="0">服务器摄像头 (0)</option>
-                  <option value="rtsp">RTSP 流</option>
-                  <option value="custom">自定义</option>
-                </select>
-                <input type="text" id="cameraUrl" placeholder="rtsp://192.168.1.100/stream" style="display:none" />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <label>处理选项</label>
-              <div class="pipeline-options">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="camOptConcurrent" checked /> 并发模式
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" id="camOptSaveVideo" checked /> 保存视频
-                </label>
-              </div>
-            </div>
-
-            <div class="form-row" id="camStreamModeRow">
-              <label>视频编码</label>
-              <div class="input-group">
-                <select id="camStreamMode">
-                  <option value="mjpeg">MJPEG（逐帧 JPEG，低延迟）</option>
-                  <option value="h264">H264（MediaRecorder 编码，低带宽）</option>
-                  <option value="webrtc">WebRTC（超低延迟，直连推流）</option>
-                </select>
-              </div>
-              <div class="param-hint" style="font-size:11px;color:#888;margin-top:4px">
-                MJPEG：逐帧 JPEG，兼容性最好 | H264：浏览器硬件编码，带宽低 | WebRTC：直连推流，延迟最低
-              </div>
-            </div>
-            <div class="param-hint" id="camStreamModeHint" style="font-size:11px;color:#888;display:none">
-              服务端摄像头/RTSP 自带 H.264 编码，无需选择编码模式
-            </div>
-          </div>
-        </div>
-
-        <!-- 检测参数 -->
-        <div class="section-card">
-          <h3 class="section-title">⚙️ 检测参数</h3>
-          <div class="param-grid">
-            <div class="param-item">
-              <label>置信度阈值 <span class="param-val" id="camConfVal">0.25</span></label>
-              <input type="range" id="camConf" min="0.05" max="0.95" step="0.05" value="0.25"
-                     oninput="document.getElementById('camConfVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>IoU 阈值 <span class="param-val" id="camIouVal">0.45</span></label>
-              <input type="range" id="camIou" min="0.1" max="0.95" step="0.05" value="0.45"
-                     oninput="document.getElementById('camIouVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>VLM 推理间隔 (帧)</label>
-              <input type="number" id="camProcessEvery" value="15" min="1" max="1000" />
-            </div>
-            <div class="param-item">
-              <label>检测间隔 (帧)</label>
-              <input type="number" id="camDetectEvery" value="2" min="1" max="100" />
-            </div>
-            <div class="param-item">
-              <label>目标帧率 (0=不限)</label>
-              <input type="number" id="camTargetFps" value="15" min="0" max="120" step="1" />
-            </div>
-            <div class="param-item">
-              <label>推帧帧率 (fps)</label>
-              <input type="number" id="camCaptureFps" value="15" min="1" max="60" />
-            </div>
-            <div class="param-item">
-              <label>pipe 缩放 <span class="param-val" id="camPipeScaleVal">0.5</span></label>
-              <input type="range" id="camPipeScale" min="0.2" max="1.0" step="0.1" value="0.5"
-                     oninput="document.getElementById('camPipeScaleVal').textContent=this.value" />
-            </div>
-            <div class="param-item">
-              <label>语义检索候选数 (top_k)</label>
-              <input type="number" id="camTopK" value="3" min="1" max="20" />
-            </div>
-          </div>
-
-          <!-- 高级参数 (折叠) -->
-          <details class="advanced-params">
-            <summary>⚙️ 高级参数</summary>
-            <div class="param-grid">
-              <div class="param-item">
-                <label>最大处理帧数 (0=不限)</label>
-                <input type="number" id="camMaxFrames" value="0" min="0" />
-              </div>
-              <div class="param-item">
-                <label>计算设备</label>
-                <select id="camDevice">
-                  <option value="">自动</option>
-                  <option value="cpu">CPU</option>
-                  <option value="0">GPU 0</option>
-                </select>
-              </div>
-              <div class="param-item">
-                <label>YOLO 模型</label>
-                <input type="text" id="camYoloModel" value="yolov8n.pt" placeholder="yolov8n.pt" />
-              </div>
-              <div class="param-item">
-                <label>VLM 提示模式</label>
-                <select id="camPromptMode">
-                  <option value="detailed">详细</option>
-                  <option value="brief">简洁</option>
-                </select>
-              </div>
-              <div class="param-item">
-                <label>最大并发数</label>
-                <input type="number" id="camMaxConcurrent" value="4" min="1" max="16" />
-              </div>
-              <div class="param-item">
-                <label>刷新间隔 (帧)</label>
-                <input type="number" id="camGapNum" value="150" min="1" />
-              </div>
-              <div class="param-item param-checkbox">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="camEnableRefresh" checked /> 定时刷新识别
-                </label>
-              </div>
-              <div class="param-item param-checkbox">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="camSkipRefreshMatched" /> 精确匹配后跳过刷新
-                </label>
-              </div>
-            </div>
-          </details>
-        </div>
-      </div>
-
-    </div>
+    </section>
   </div>
-
-</div>
-
-<!-- ═══════════════════════════════════════════ -->
-<!-- 数据库弹窗 (原有) -->
-<!-- ═══════════════════════════════════════════ -->
-
-<!-- 新增/编辑弹窗 -->
-<div class="modal-overlay" id="shipModal">
-  <div class="modal">
-    <h3 id="modalTitle">新增船只</h3>
-    <label>舷号</label>
-    <input type="text" id="modalHullNumber" placeholder="如：0014" />
-    <label>描述</label>
-    <textarea id="modalDescription" placeholder="如：白色大型客轮，上层建筑为蓝色涂装"></textarea>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" id="modalSubmitBtn" onclick="submitShip()">确认</button>
-    </div>
-  </div>
-</div>
-
-<!-- 批量导入弹窗 -->
-<div class="modal-overlay" id="bulkModal">
-  <div class="modal">
-    <h3>批量导入</h3>
-    <label>JSON 格式：{"舷号": "描述", ...}</label>
-    <textarea id="bulkInput" rows="8" placeholder='{"A001": "你的船只描述", "A002": "另一艘船"}'></textarea>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeBulkModal()">取消</button>
-      <button class="btn btn-primary" onclick="submitBulk()">导入</button>
-    </div>
-  </div>
-</div>
-
-<!-- 图片上传识别弹窗 -->
-<div class="modal-overlay" id="uploadModal">
-  <div class="modal" style="max-width: 520px;">
-    <h3>📷 上传图片自动识别</h3>
-
-    <div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()">
-      <div class="icon">🖼️</div>
-      <p>点击或拖拽图片到此处</p>
-      <p style="font-size:12px;color:#aaa;margin-top:4px">支持 JPG / PNG / BMP / WebP，最大 20MB</p>
-      <div class="filename" id="uploadFilename"></div>
-      <img id="uploadPreview" class="upload-preview" style="display:none" />
-      <input type="file" id="uploadFileInput" accept="image/*" style="display:none" />
-    </div>
-
-    <div class="recognize-result" id="recognizeResult">
-      <div class="label">识别到弦号（可修改）</div>
-      <input type="text" id="recHullNumber" placeholder="弦号" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;margin-bottom:12px;font-weight:600;color:var(--primary)" />
-      <div class="label">船只描述（可修改）</div>
-      <textarea id="recDescription" rows="3" placeholder="船只描述" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;margin-bottom:12px;resize:vertical;font-family:inherit"></textarea>
-      <div class="exists-warn" id="recExistsWarn" style="display:none">⚠️ 该弦号已存在于数据库中，确认后将覆盖原有描述</div>
-    </div>
-
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeUploadModal()">取消</button>
-      <button class="btn btn-outline" id="btnRecognize" onclick="doRecognize()">🔍 识别</button>
-      <button class="btn btn-primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">
-        ✅ 确认添加
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast -->
+</section>
+</main>
+<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">新建先验库项</h3><button onclick="closeModal()">×</button></div><label>舷号<input id="modalHullNumber" type="text" placeholder="例如 0857"></label><label>描述<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label><label>参考图<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">新建或追加参考图，总数最多六张。</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">保存</button></div></div></div>
+<div class="modal-overlay" id="bulkModal"><div class="modal"><div class="modal-head"><h3>批量导入库项</h3><button onclick="closeBulkModal()">×</button></div><label>请输入舷号与描述的对象<textarea id="bulkInput" rows="9" placeholder='{"0857":"灰色船体，白色上层建筑"}'></textarea></label><div class="modal-actions"><button class="btn ghost" onclick="closeBulkModal()">取消</button><button class="btn primary" onclick="submitBulk()">导入</button></div></div></div>
+<div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
-
-<script src="/static/js/app.js"></script>
-<script src="/static/js/pipeline.js"></script>
+<script src="/static/js/app.js?v=4"></script>
+<script src="/static/js/pipeline.js?v=4"></script>
+<script src="/static/js/agent.js?v=4"></script>
 </body>
 </html>

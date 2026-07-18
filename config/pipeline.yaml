@@ -1,0 +1,42 @@
+pipeline:
+  reset_memory_on_start: true
+  max_parallel_pipelines: 1
+  candidate_every_n_frames: 10
+  candidate_pool_size: 12
+  keyframe_pool_size: 6
+  max_stale_frames: 90
+  recognition_workers: 2
+  recognition_timeout_seconds: 60
+  min_crop_width: 80
+  min_crop_height: 80
+  target_fps: 0
+  save_output_video: true
+  demo: true
+  quality:
+    min_score: 0.20
+    sharpness_reference: 180.0
+    size_min: 0.04
+    size_max: 0.35
+  retention:
+    readable_bonus: 1.0
+    confidence_weight: 0.70
+    quality_weight: 0.30
+    min_time_gap_seconds: 30.0
+    replace_margin: 0.05
+  aggregation:
+    null_weight: 0.333333
+    conflict_margin: 0.15
+    confirmed_support: 1.50
+    confirmed_count: 2
+    null_margin: 0.30
+  retrieval:
+    top_k: 3
+    text_match: 0.62
+    text_exclude: 0.42
+    image_match: 0.72
+    image_exclude: 0.52
+    dedup_high: 0.82
+    dedup_low: 0.72
+  agent:
+    max_rounds: 3
+    display_limit: 3

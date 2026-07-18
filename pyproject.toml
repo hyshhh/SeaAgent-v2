@@ -1,7 +1,7 @@
 [project]
-name = "xhsb"
-version = "2.0.0"
-description = "智能船弦号识别系统 — YOLO + Qwen VLM + FAISS 向量检索"
+name = "seaagent"
+version = "3.0.0"
+description = "面向海域船舶监控的轨迹记忆闭环多智能体系统"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.104.0",
@@ -9,8 +9,6 @@ dependencies = [
     "jinja2>=3.1.0",
     "python-multipart>=0.0.6",
     "pyyaml>=6.0",
-    "langchain-core>=0.3.0",
-    "langchain-community>=0.3.0",
     "faiss-cpu>=1.7.0",
     "httpx>=0.25.0",
     "opencv-python>=4.8.0",
@@ -21,11 +19,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+embedding = [
+    "transformers>=4.51.0",
+    "accelerate>=1.0.0",
+    "pillow>=10.0.0",
+    "qwen-vl-utils>=0.0.11",
+]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21.0"]
 
 [project.scripts]
-ship-hull = "cli:main"
+seaagent = "web.app:main"
+seaagent-pipeline = "pipeline.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "config*", "memory*", "pipeline*", "services*", "tools*", "vector_store*", "web*"]

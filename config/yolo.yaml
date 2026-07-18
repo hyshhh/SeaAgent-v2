@@ -1,0 +1,14 @@
+yolo:
+  model: yolov8n.pt
+  device: ""
+  confidence: 0.25
+  iou: 0.45
+  classes: [8]
+  detect_every_n_frames: 1
+  tracker: bytetrack
+  tracker_params:
+    track_high_thresh: 0.5
+    track_low_thresh: 0.05
+    new_track_thresh: 0.6
+    track_buffer: 90
+    match_thresh: 0.5

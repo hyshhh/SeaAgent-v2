@@ -1,5 +1,5 @@
 /**
- * Pipeline 前端逻辑 — 视频 Demo / 摄像头 Demo
+ * SeaAgent 监控前端逻辑 — 视频与摄像头推流
  *
  * 视频 Demo：后端推理，实时 MJPEG 推流到前端，不保存输出视频
  * 摄像头 Demo：浏览器/服务器摄像头，实时推流识别
@@ -231,45 +231,31 @@ async function deleteVideo(filename) {
 /** 收集视频 Demo 页的 pipeline 参数 */
 function collectVideoParams() {
   return {
-    conf_threshold: parseFloat(document.getElementById('optConf').value),
-    iou_threshold: parseFloat(document.getElementById('optIou').value),
-    process_every: parseInt(document.getElementById('optProcessEvery').value, 10),
-    detect_every: parseInt(document.getElementById('optDetectEvery').value, 10),
+    conf_threshold: parseFloat(document.getElementById('optConf').value) || 0.25,
+    iou_threshold: parseFloat(document.getElementById('optIou').value) || 0.45,
+    detect_every: parseInt(document.getElementById('optDetectEvery').value, 10) || 1,
     target_fps: parseFloat(document.getElementById('optTargetFps').value) || 0,
     pipe_scale: parseFloat(document.getElementById('optPipeScale').value) || 0.5,
     save_output_video: document.getElementById('optSaveVideo').checked,
-    top_k: parseInt(document.getElementById('optTopK').value, 10) || 3,
     max_frames: parseInt(document.getElementById('optMaxFrames').value, 10) || 0,
-    device: document.getElementById('optDevice').value,
+    device: document.getElementById('optDevice').value.trim(),
     yolo_model: document.getElementById('optYoloModel').value.trim(),
-    prompt_mode: document.getElementById('optPromptMode').value,
-    enable_refresh: document.getElementById('optEnableRefresh').checked,
-    skip_refresh_matched: document.getElementById('optSkipRefreshMatched').checked,
-    gap_num: parseInt(document.getElementById('optGapNum').value, 10) || 150,
-    max_concurrent: parseInt(document.getElementById('optMaxConcurrent').value, 10) || 4,
   };
 }
 
 /** 收集摄像头页的 pipeline 参数 */
 function collectCameraParams() {
   return {
-    conf_threshold: parseFloat(document.getElementById('camConf').value),
-    iou_threshold: parseFloat(document.getElementById('camIou').value),
-    process_every: parseInt(document.getElementById('camProcessEvery').value, 10),
-    detect_every: parseInt(document.getElementById('camDetectEvery').value, 10),
+    conf_threshold: parseFloat(document.getElementById('camConf').value) || 0.25,
+    iou_threshold: parseFloat(document.getElementById('camIou').value) || 0.45,
+    detect_every: parseInt(document.getElementById('camDetectEvery').value, 10) || 1,
     target_fps: parseFloat(document.getElementById('camTargetFps').value) || 0,
     capture_fps: parseInt(document.getElementById('camCaptureFps').value, 10) || 15,
     pipe_scale: parseFloat(document.getElementById('camPipeScale')?.value) || 0.5,
     save_output_video: document.getElementById('camOptSaveVideo').checked,
-    top_k: parseInt(document.getElementById('camTopK').value, 10) || 3,
     max_frames: parseInt(document.getElementById('camMaxFrames').value, 10) || 0,
-    device: document.getElementById('camDevice').value,
+    device: document.getElementById('camDevice').value.trim(),
     yolo_model: document.getElementById('camYoloModel').value.trim(),
-    prompt_mode: document.getElementById('camPromptMode').value,
-    enable_refresh: document.getElementById('camEnableRefresh').checked,
-    skip_refresh_matched: document.getElementById('camSkipRefreshMatched').checked,
-    gap_num: parseInt(document.getElementById('camGapNum').value, 10) || 150,
-    max_concurrent: parseInt(document.getElementById('camMaxConcurrent').value, 10) || 4,
     stream_mode: (document.getElementById('camStreamMode') || {}).value || 'mjpeg',
   };
 }
@@ -287,7 +273,6 @@ async function startVideoPipeline() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         video_filename: selectedVideo,
-        concurrent_mode: document.getElementById('optConcurrent').checked,
         ...collectVideoParams(),
       }),
     });
@@ -650,7 +635,7 @@ async function pollPipelineLogs() {
     if (data.logs && data.logs.length > 0) {
       const box = document.getElementById('pipelineLogContent');
       if (!box) return;
-      const levelColors = { exact: '#4caf50', semantic: '#ff9800', miss: '#f44336' };
+      const levelColors = { info: '#4caf50', warning: '#ff9800', error: '#f44336' };
       // FIFO 清理：只移除被淘汰的最旧条目，不清空全部 DOM
       if (data.log_start !== undefined && data.log_start !== _logStart) {
         const removed = data.log_start - _logStart;
@@ -660,8 +645,8 @@ async function pollPipelineLogs() {
         _logStart = data.log_start;
       }
       for (const entry of data.logs) {
-        const level = entry.level || 'miss';
-        const color = levelColors[level] || '#f44336';
+        const level = entry.level || 'info';
+        const color = levelColors[level] || '#4caf50';
         const div = document.createElement('div');
         div.className = 'log-entry';
         div.innerHTML = `<span class="log-time">${entry.time}</span><span style="color:${color}">${entry.line}</span>`;
@@ -848,7 +833,6 @@ async function startBrowserCamera() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        concurrent_mode: document.getElementById('camOptConcurrent').checked,
         stream_mode: streamMode,
         ...params,
       }),
@@ -1266,7 +1250,6 @@ async function startCameraPipeline() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         video_filename: videoFilename,
-        concurrent_mode: document.getElementById('camOptConcurrent').checked,
         ...collectCameraParams(),
       }),
     });
