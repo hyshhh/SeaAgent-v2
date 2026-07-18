@@ -7,8 +7,9 @@ yolo:
   detect_every_n_frames: 1
   tracker: bytetrack
   tracker_params:
-    track_high_thresh: 0.5
+    track_high_thresh: 0.25  # 与检测阈值一致，所有输出框统一进入主关联流程
     track_low_thresh: 0.05
-    new_track_thresh: 0.6
+    new_track_thresh: 0.25   # 未匹配检测框可及时建立新轨迹
     track_buffer: 90
-    match_thresh: 0.5
+    match_thresh: 0.999  # 关联距离阈值；检测框存在轻微重叠即可延续原轨迹
+    fuse_score: false    # 仅按框重叠关联，避免检测置信度削弱轻微重叠匹配
