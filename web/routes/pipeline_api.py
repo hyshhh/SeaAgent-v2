@@ -1112,8 +1112,6 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
             "viewer_queues": {},    # ws → asyncio.Queue（每观众独立队列）
             "viewer_tasks": {},     # ws → asyncio.Task（每观众独立发送任务）
             "init_segment": None,
-            "latest_segments": [],
-            "max_segments": 4,
             "reader_task": None,
             "frames_fed": 0,      # 已喂给 ffmpeg 的帧数（供背压检测）
         }
@@ -1209,11 +1207,6 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
                             # 媒体段数据，和 moof 合并为完整 fragment
                             fragment = (_pending_moof or b"") + box_data
                             _pending_moof = None
-                            async with _state_lock:
-                                stream = _h264_streams[task_id]
-                                stream["latest_segments"].append(fragment)
-                                if len(stream["latest_segments"]) > stream["max_segments"]:
-                                    stream["latest_segments"] = stream["latest_segments"][-stream["max_segments"]:]
                             await _broadcast_h264(task_id, b"\x02" + len(fragment).to_bytes(4, "big") + fragment)
             except (BrokenPipeError, OSError):
                 pass
@@ -1243,12 +1236,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
 
 
 async def _viewer_sender(ws: WebSocket, queue: asyncio.Queue, task_id: str):
-    """每观众独立发送任务：从队列取数据发送，慢观众自动丢帧
-
-    不对 send_bytes 使用 asyncio.wait_for 超时（会 cancel 协程并破坏
-    websockets 连接状态）。TCP 缓冲满时 send_bytes 自然阻塞实现背压。
-    每次发送前先清空队列只取最新帧，避免发送积压旧数据。
-    """
+    """每观众独立发送任务：严格按顺序发送初始化段和媒体分片。"""
     try:
         while True:
             try:
@@ -1269,15 +1257,7 @@ async def _viewer_sender(ws: WebSocket, queue: asyncio.Queue, task_id: str):
                     break
                 continue
 
-            # 清空队列积压，只取最新帧
-            while not queue.empty():
-                try:
-                    data = queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
-            # 直接发送，不使用 wait_for 超时
-            # TCP 缓冲满时自然阻塞（背压），队列满时 _broadcast_h264 自动丢旧帧
+            # 不跳过中间分片，保证 fMP4 解码链连续
             await ws.send_bytes(data)
     except asyncio.CancelledError:
         pass
@@ -1297,26 +1277,25 @@ async def _viewer_sender(ws: WebSocket, queue: asyncio.Queue, task_id: str):
 
 
 async def _broadcast_h264(task_id: str, data: bytes):
-    """向所有观众广播 fMP4 数据（非阻塞，每观众独立队列，慢观众自动丢帧）"""
+    """向所有观众广播 fMP4 数据；慢连接关闭后由前端完整重连。"""
     async with _state_lock:
         stream = _h264_streams.get(task_id)
         if not stream:
             return
-        queues = list(stream["viewer_queues"].values())
+        viewers = list(stream["viewer_queues"].items())
 
-    for q in queues:
+    slow_viewers = []
+    for ws, queue in viewers:
         try:
-            q.put_nowait(data)
+            queue.put_nowait(data)
         except asyncio.QueueFull:
-            # 队列满了，丢掉最旧的帧
-            try:
-                q.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                q.put_nowait(data)
-            except asyncio.QueueFull:
-                pass
+            slow_viewers.append(ws)
+
+    for ws in slow_viewers:
+        try:
+            await ws.close(code=1013, reason="推流积压，请重新连接")
+        except Exception:
+            pass
 
 
 async def _stop_h264_stream(task_id: str):
@@ -1361,30 +1340,17 @@ async def ws_h264_stream(websocket: WebSocket, task_id: str):
             await websocket.close(code=4004, reason="推流未就绪")
             return
         stream["viewers"].add(websocket)
-        # 创建此观众的独立队列和发送任务
-        q: asyncio.Queue = asyncio.Queue(maxsize=4)
+        # 初始化段必须先于后续媒体分片进入观众队列
+        q: asyncio.Queue = asyncio.Queue(maxsize=16)
+        init_seg = stream.get("init_segment")
+        if init_seg:
+            q.put_nowait(b"\x01" + len(init_seg).to_bytes(4, "big") + init_seg)
         stream["viewer_queues"][websocket] = q
         sender_task = asyncio.create_task(_viewer_sender(websocket, q, task_id))
         stream["viewer_tasks"][websocket] = sender_task
 
     try:
-        # 发送初始化段（如果已有）
-        init_seg = stream.get("init_segment")
-        if init_seg:
-            msg = b"\x01" + len(init_seg).to_bytes(4, "big") + init_seg
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                pass
-
-        # 只发送最新两个媒体段，避免新客户端从旧画面开始追赶
-        for seg in stream.get("latest_segments", [])[-2:]:
-            msg = b"\x02" + len(seg).to_bytes(4, "big") + seg
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                pass
-
+        # 不补发任意历史媒体段，等待下一个关键帧起始分片
         # 保持连接，等待任务结束
         while True:
             async with _state_lock:

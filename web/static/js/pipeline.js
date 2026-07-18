@@ -40,6 +40,7 @@ let streamWs = null;        // WebSocket 推流连接
 let _h264Ws = null;          // H.264 WebSocket
 let _h264MediaSource = null; // MediaSource
 let _h264SourceBuffer = null;// SourceBuffer
+let _h264ObjectUrl = null;   // MediaSource 对象地址
 let _h264Queue = [];         // 积压的 segment 队列
 
 // ── 视频上传 ──
@@ -318,13 +319,15 @@ function connectStreamWs(taskId) {
 
   // MediaSource
   const ms = new MediaSource();
-  videoEl.src = URL.createObjectURL(ms);
+  _h264ObjectUrl = URL.createObjectURL(ms);
+  videoEl.src = _h264ObjectUrl;
   videoEl.load();  // 强制加载，确保 sourceopen 触发
   _h264MediaSource = ms;
   _h264SourceBuffer = null;
   _h264Queue = [];
 
   ms.addEventListener('sourceopen', () => {
+    if (_h264MediaSource !== ms) return;
     // 等 WebSocket 收到 init segment 后再添加 SourceBuffer
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -387,16 +390,8 @@ function connectStreamWs(taskId) {
         try {
           sb.appendBuffer(_h264Queue.shift());
         } catch (e) {
-          if (e.name === 'QuotaExceededError') {
-            // 缓冲区仍满，清空队列并尝试强制清理
-            _h264Queue.length = 0;
-            try {
-              const vEl = document.getElementById('streamVideo');
-              if (vEl && sb.buffered.length > 0) {
-                sb.remove(sb.buffered.start(0), vEl.currentTime);
-              }
-            } catch (e2) {}
-          }
+          console.warn('主推流缓冲异常，重新建立解码连接:', e);
+          if (ws.readyState === WebSocket.OPEN) ws.close(1013, '解码缓冲积压');
         }
       }
     }
@@ -410,10 +405,8 @@ function connectStreamWs(taskId) {
         if (msgType === 0x01) {
           // Init segment (moov) — 创建 SourceBuffer（仅首次）
           if (_h264SourceBuffer) {
-            // 已有 SourceBuffer，直接追加 init 数据（用于重连后刷新解码器）
-            if (!_h264SourceBuffer.updating) {
-              try { _h264SourceBuffer.appendBuffer(payload); } catch (e) {}
-            }
+            // 同一连接重复收到初始化段说明编码上下文已变化，完整重连
+            if (ws.readyState === WebSocket.OPEN) ws.close(1012, '编码上下文已更新');
             return;
           }
           try {
@@ -444,9 +437,10 @@ function connectStreamWs(taskId) {
           if (!sb) return;
 
           if (sb.updating) {
-            // 直播预览只保留最新分片，避免处理速度波动造成延迟累积
-            if (_h264Queue.length >= 3) {
-              _h264Queue = _h264Queue.slice(-1);
+            // 中间分片不可跳过；积压过多时完整重连并等待下一个关键帧
+            if (_h264Queue.length >= 24) {
+              ws.close(1013, '解码队列积压');
+              return;
             }
             _h264Queue.push(payload);
           } else {
@@ -454,16 +448,8 @@ function connectStreamWs(taskId) {
               sb.appendBuffer(payload);
               if (segmentCount === 0) _ensurePlay();  // 首个媒体段到达后尝试播放
             } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                // 缓冲区满，尝试清理后把当前帧和队列一起重试
-                try {
-                  const vEl = document.getElementById('streamVideo');
-                  if (vEl && sb.buffered.length > 0) {
-                    sb.remove(sb.buffered.start(0), vEl.currentTime - 2);
-                  }
-                } catch (e2) {}
-                _h264Queue.unshift(payload);
-              }
+              console.warn('主推流分片追加失败，重新建立解码连接:', e);
+              if (ws.readyState === WebSocket.OPEN) ws.close(1013, '分片追加失败');
             }
           }
 
@@ -515,7 +501,10 @@ function disconnectStreamWs() {
     streamWs.close();
     streamWs = null;
   }
-  // 释放 MediaSource
+  // 完整释放旧解码上下文，重连时重新创建 MediaSource
+  if (_h264SourceBuffer) {
+    try { if (_h264SourceBuffer.updating) _h264SourceBuffer.abort(); } catch {}
+  }
   if (_h264MediaSource && _h264MediaSource.readyState === 'open') {
     try { _h264MediaSource.endOfStream(); } catch {}
   }
@@ -526,7 +515,12 @@ function disconnectStreamWs() {
   const videoEl = document.getElementById('streamVideo');
   if (videoEl) {
     videoEl.pause();
-    videoEl.src = '';
+    videoEl.removeAttribute('src');
+    videoEl.load();
+  }
+  if (_h264ObjectUrl) {
+    URL.revokeObjectURL(_h264ObjectUrl);
+    _h264ObjectUrl = null;
   }
 }
 
@@ -1406,6 +1400,7 @@ function resetCameraButtons() {
 let _camH264Ws = null;
 let _camH264MediaSource = null;
 let _camH264SourceBuffer = null;
+let _camH264ObjectUrl = null;
 let _camH264Queue = [];
 
 function connectCameraH264(taskId) {
@@ -1425,13 +1420,13 @@ function connectCameraH264(taskId) {
   if (fpsEl) { fpsEl.style.display = ''; fpsEl.textContent = '正在连接推流...'; }
 
   const ms = new MediaSource();
-  videoEl.src = URL.createObjectURL(ms);
+  _camH264ObjectUrl = URL.createObjectURL(ms);
+  videoEl.src = _camH264ObjectUrl;
   videoEl.load();  // 强制加载，确保 sourceopen 触发
   _camH264MediaSource = ms;
   _camH264SourceBuffer = null;
   _camH264Queue = [];
 
-  let _connectAttempt = 0;
   let cameraSegmentRate = null;
 
   function _updateCameraStreamStatus() {
@@ -1460,22 +1455,15 @@ function connectCameraH264(taskId) {
     } catch (e) {}
     if (_camH264Queue.length > 0) {
       try { sb.appendBuffer(_camH264Queue.shift()); } catch (e) {
-        if (e.name === 'QuotaExceededError') {
-          _camH264Queue.length = 0;
-          try {
-            const vEl = document.getElementById('cameraStream');
-            if (vEl && sb.buffered.length > 0) sb.remove(sb.buffered.start(0), vEl.currentTime);
-          } catch (e2) {}
+        console.warn('摄像头推流缓冲异常，重新建立解码连接:', e);
+        if (_camH264Ws && _camH264Ws.readyState === WebSocket.OPEN) {
+          _camH264Ws.close(1013, '解码缓冲积压');
         }
       }
     }
   }
 
   function _tryConnect() {
-    _connectAttempt++;
-    if (_connectAttempt > 1) {
-      console.log(`[H264 Result] 重试连接 #${_connectAttempt}...`);
-    }
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
     _camH264Ws = ws;
@@ -1492,9 +1480,7 @@ function connectCameraH264(taskId) {
         if (msgType === 0x01) {
           // Init segment（仅首次创建 SourceBuffer）
           if (_camH264SourceBuffer) {
-            if (!_camH264SourceBuffer.updating) {
-              try { _camH264SourceBuffer.appendBuffer(payload); } catch (e) {}
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.close(1012, '编码上下文已更新');
             return;
           }
           try {
@@ -1514,17 +1500,15 @@ function connectCameraH264(taskId) {
           const sb = _camH264SourceBuffer;
           if (!sb) return;
           if (sb.updating) {
-            if (_camH264Queue.length >= 3) _camH264Queue = _camH264Queue.slice(-1);
+            if (_camH264Queue.length >= 24) {
+              ws.close(1013, '解码队列积压');
+              return;
+            }
             _camH264Queue.push(payload);
           } else {
             try { sb.appendBuffer(payload); } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                try {
-                  const vEl = document.getElementById('cameraStream');
-                  if (vEl && sb.buffered.length > 0) sb.remove(sb.buffered.start(0), vEl.currentTime - 2);
-                } catch (e2) {}
-                _camH264Queue.unshift(payload);
-              }
+              console.warn('摄像头推流分片追加失败，重新建立解码连接:', e);
+              if (ws.readyState === WebSocket.OPEN) ws.close(1013, '分片追加失败');
             }
           }
           segmentCount++;
@@ -1548,21 +1532,21 @@ function connectCameraH264(taskId) {
     };
 
     ws.onclose = () => {
-      if (cameraTaskId === taskId && _connectAttempt < 10) {
-        const delay = Math.min(1000 * Math.pow(1.5, _connectAttempt - 1), 8000);
-        if (fpsEl) fpsEl.textContent = `重连中 (${(delay/1000).toFixed(1)}s)...`;
-        setTimeout(() => {
-          if (cameraTaskId === taskId) _tryConnect();
-        }, delay);
+      if (cameraTaskId === taskId) {
+        if (fpsEl) fpsEl.textContent = '正在重建解码连接...';
+        _scheduleReconnect('h264-cam', () => {
+          if (cameraTaskId === taskId) connectCameraH264(taskId);
+        }, taskId);
       }
     };
     ws.onerror = () => {};
   }
 
   ms.addEventListener('sourceopen', () => {
+    if (_camH264MediaSource !== ms) return;
     // 首次延迟 1.5 秒再连接，给后端 ffmpeg 启动时间
     setTimeout(() => {
-      if (cameraTaskId === taskId) _tryConnect();
+      if (cameraTaskId === taskId && _camH264MediaSource === ms) _tryConnect();
     }, 1500);
   });
 }
@@ -1570,6 +1554,9 @@ function connectCameraH264(taskId) {
 function disconnectCameraH264() {
   _clearReconnect('h264-cam');
   if (_camH264Ws) { _camH264Ws.onclose = null; _camH264Ws.close(); _camH264Ws = null; }
+  if (_camH264SourceBuffer) {
+    try { if (_camH264SourceBuffer.updating) _camH264SourceBuffer.abort(); } catch {}
+  }
   if (_camH264MediaSource && _camH264MediaSource.readyState === 'open') {
     try { _camH264MediaSource.endOfStream(); } catch {}
   }
@@ -1577,7 +1564,11 @@ function disconnectCameraH264() {
   _camH264SourceBuffer = null;
   _camH264Queue = [];
   const videoEl = document.getElementById('cameraStream');
-  if (videoEl) { videoEl.pause(); videoEl.src = ''; }
+  if (videoEl) { videoEl.pause(); videoEl.removeAttribute('src'); videoEl.load(); }
+  if (_camH264ObjectUrl) {
+    URL.revokeObjectURL(_camH264ObjectUrl);
+    _camH264ObjectUrl = null;
+  }
   const fpsEl = document.getElementById('cameraStreamFps');
   if (fpsEl) fpsEl.textContent = '';
 }
