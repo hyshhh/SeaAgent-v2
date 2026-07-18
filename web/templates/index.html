@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=8">
+<link rel="stylesheet" href="/static/css/style.css?v=9">
 </head>
 <body>
 <header class="app-header">
@@ -153,16 +153,14 @@
       </section>
     </div>
 
-    <div class="agent-detail-grid">
-      <section class="panel reasoning-panel">
-        <div class="panel-head"><div><span class="eyebrow">闭环记录</span><h3>每轮智能体协作结果</h3></div><span class="round-limit">最多三轮</span></div>
-        <div id="agentRounds" class="round-list"><div class="empty-msg">完成问答后显示各轮规划、观察与反思结果</div></div>
-      </section>
-      <section class="panel evidence-panel">
-        <div class="panel-head"><div><span class="eyebrow">证据工作区</span><h3>关键帧、目标船片段与库参考图</h3></div><span class="round-limit">最多三条轨迹</span></div>
-        <div id="evidenceGallery" class="evidence-grid"><div class="empty-msg">暂无可视证据</div></div>
-      </section>
-    </div>
+    <section class="panel evidence-panel evidence-panel-wide">
+      <div class="panel-head"><div><span class="eyebrow">Evidence Workspace</span><h3>Multimodal Evidence</h3></div><span class="round-limit">Top 3 Tracks</span></div>
+      <div id="evidenceGallery" class="evidence-columns">
+        <section class="evidence-column"><div class="evidence-column-head"><strong>Clip Evidence</strong><span>Target Vessel Clips</span></div><div class="evidence-column-media"><div class="evidence-column-empty">No evidence available</div></div></section>
+        <section class="evidence-column"><div class="evidence-column-head"><strong>Keyframe Evidence</strong><span>Recognition Frames</span></div><div class="evidence-column-media"><div class="evidence-column-empty">No evidence available</div></div></section>
+        <section class="evidence-column"><div class="evidence-column-head"><strong>Database Evidence</strong><span>First Registry Reference</span></div><div class="evidence-column-media"><div class="evidence-column-empty">No evidence available</div></div></section>
+      </div>
+    </section>
   </div>
 </section>
 <section class="tab-content" id="tab-database">
@@ -212,6 +210,6 @@
 <script src="/static/js/app.js?v=4"></script>
 <script src="/static/js/pipeline.js?v=8"></script>
 <script src="/static/js/memory.js?v=1"></script>
-<script src="/static/js/agent.js?v=7"></script>
+<script src="/static/js/agent.js?v=8"></script>
 </body>
 </html>

@@ -66,40 +66,17 @@ function renderAgentAnswer(result) {
     ${chain ? `<div class="tool-tags">${chain}</div>` : ''}`;
 }
 
-function callText(call) {
-  const argumentsText = call.arguments && Object.keys(call.arguments).length ? ` ${JSON.stringify(call.arguments)}` : '';
-  return `${call.tool || '未知工具'}(${call.id || '调用'})${argumentsText}`;
-}
-
-function renderAgentRounds(rounds) {
-  const container = document.getElementById('agentRounds');
-  if (!rounds?.length) {
-    container.innerHTML = '<div class="empty-msg">未产生工具调用轮次</div>';
-    return;
-  }
-  container.innerHTML = rounds.map((round, index) => {
-    const calls = round.plan?.calls || [];
-    const observations = round.observation?.calls || [];
-    const callTags = calls.length ? calls.map((call) => `<span class="tool-tag">${escapeHtml(callText(call))}</span>`).join('') : '<span>无工具调用</span>';
-    const observed = observations.length ? observations.map((item) => `${item.tool || item.id}：${item.skipped ? '跳过' : item.ok === false ? '失败' : '完成'}`).join('；') : '无观察结果';
-    return `<article class="round-card">
-      <div class="round-title"><strong>第 ${index + 1} 轮</strong><span>${escapeHtml(stateLabel(round.reflection?.state))}</span></div>
-      <div class="agent-step"><strong>规划智能体</strong><div><div>${escapeHtml(round.plan?.goal || '执行当前证据计划')}</div><div class="tool-tags">${callTags}</div></div></div>
-      <div class="agent-step"><strong>观察智能体</strong><div>${escapeHtml(observed)}</div></div>
-      <div class="agent-step"><strong>反思智能体</strong><div>${escapeHtml(round.reflection?.reason || '检查证据充分性')}</div></div>
-    </article>`;
-  }).join('');
-}
-
-function evidenceItem(type, id) {
-  const prefix = type === 'video' ? '目标船片段' : type === 'keyframe' ? '正式关键帧' : '先验库参考图';
+function evidenceItem(type, id, trackId = null) {
+  const prefix = type === 'video' ? 'Clip' : type === 'keyframe' ? 'Keyframe' : 'Database Reference';
   const route = type === 'video' ? 'clips' : type === 'keyframe' ? 'keyframes' : 'registry';
-  return {type, id, label: `${prefix} ${id}`, url: `/api/evidence/${route}/${encodeURIComponent(id)}`};
+  const owner = trackId == null ? '' : `Track ${trackId} · `;
+  return {type, id, label: `${owner}${prefix} ${id}`, url: `/api/evidence/${route}/${encodeURIComponent(id)}`};
 }
 
 function evidenceCard(item) {
   if (item.type === 'unavailable') {
-    return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>目标船片段暂不可用</strong><small>${escapeHtml(item.reason)}</small></div><span>目标船片段</span></article>`;
+    const owner = item.trackId == null ? 'Clip Evidence' : `Track ${escapeHtml(item.trackId)} · Clip Evidence`;
+    return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>Clip Unavailable</strong><small>${escapeHtml(item.reason)}</small></div><span>${owner}</span></article>`;
   }
   const media = item.type === 'video'
     ? `<video controls preload="metadata" src="${item.url}"></video>`
@@ -109,40 +86,42 @@ function evidenceCard(item) {
 
 function clipErrorText(error) {
   return ({
-    track_not_found: '未找到对应轨迹',
-    trajectory_not_found: '轨迹框序列不存在',
-    source_evidence_unavailable: '原视频或轨迹框不可用',
-    segment_codec_unavailable: '视频编码器不可用',
-    empty_target_segment: '指定范围内没有可用目标帧',
-    clip_unavailable: '片段尚未生成',
+    track_not_found: 'Track not found',
+    trajectory_not_found: 'Trajectory data unavailable',
+    source_evidence_unavailable: 'Source video or trajectory unavailable',
+    segment_codec_unavailable: 'Video encoder unavailable',
+    empty_target_segment: 'No target frames in the selected range',
+    clip_unavailable: 'Clip has not been generated',
   })[error] || valueText(error);
 }
 
-function renderEvidence(evidence, displayGroups) {
-  const container = document.getElementById('evidenceGallery');
-  const groups = (displayGroups || []).slice(0, 3).map((group) => {
-    const items = [];
-    if (group.shipSegmentIds?.[0]) items.push(evidenceItem('video', group.shipSegmentIds[0]));
-    else if (group.clipError) items.push({type: 'unavailable', reason: clipErrorText(group.clipError)});
-    if (group.keyframeIds?.[0]) items.push(evidenceItem('keyframe', group.keyframeIds[0]));
-    if (group.registryReferenceIds?.[0]) items.push(evidenceItem('registry', group.registryReferenceIds[0]));
-    return {trackId: group.trackId, items};
-  }).filter((group) => group.items.length);
-  if (groups.length) {
-    container.className = 'evidence-grid evidence-groups';
-    container.innerHTML = groups.map((group) => `<section class="evidence-group"><strong>轨迹 ${escapeHtml(group.trackId)}</strong><div class="evidence-group-media">${group.items.map(evidenceCard).join('')}</div></section>`).join('');
-    return;
-  }
-  const pools = [
-    (evidence?.shipSegmentIds || []).map((id) => evidenceItem('video', id)),
-    (evidence?.keyframeIds || []).map((id) => evidenceItem('keyframe', id)),
-    (evidence?.registryReferenceIds || []).map((id) => evidenceItem('registry', id)),
-  ];
-  const selected = pools.flatMap((items) => items.slice(0, 1));
-  container.className = 'evidence-grid';
-  container.innerHTML = selected.length ? selected.map(evidenceCard).join('') : '<div class="empty-msg">本次回答没有可展示的视觉证据</div>';
+function evidenceColumn(title, subtitle, items, emptyText) {
+  const content = items.length ? items.map(evidenceCard).join('') : `<div class="evidence-column-empty">${escapeHtml(emptyText)}</div>`;
+  return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle}</span></div><div class="evidence-column-media">${content}</div></section>`;
 }
 
+function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available') {
+  const container = document.getElementById('evidenceGallery');
+  const groups = (displayGroups || []).slice(0, 3);
+  let clips = groups.map((group) => group.shipSegmentIds?.[0]
+    ? evidenceItem('video', group.shipSegmentIds[0], group.trackId)
+    : group.clipError ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId} : null).filter(Boolean);
+  let keyframes = groups.map((group) => group.keyframeIds?.[0]
+    ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId) : null).filter(Boolean);
+  const registryGroup = groups.find((group) => group.registryReferenceIds?.[0]);
+  let database = registryGroup ? [evidenceItem('registry', registryGroup.registryReferenceIds[0], registryGroup.trackId)] : [];
+
+  if (!clips.length) clips = (evidence?.shipSegmentIds || []).slice(0, 3).map((id) => evidenceItem('video', id));
+  if (!keyframes.length) keyframes = (evidence?.keyframeIds || []).slice(0, 3).map((id) => evidenceItem('keyframe', id));
+  if (!database.length && evidence?.registryReferenceIds?.[0]) database = [evidenceItem('registry', evidence.registryReferenceIds[0])];
+
+  container.className = 'evidence-columns';
+  container.innerHTML = [
+    evidenceColumn('Clip Evidence', 'Target Vessel Clips', clips, emptyText),
+    evidenceColumn('Keyframe Evidence', 'Recognition Frames', keyframes, emptyText),
+    evidenceColumn('Database Evidence', 'First Registry Reference', database, emptyText),
+  ].join('');
+}
 function modelSummaryText(value) {
   if (!value) return '';
   if (typeof value === 'string') return value;
@@ -321,18 +300,15 @@ async function askAgent() {
     resetThoughtStream();
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
     document.getElementById('agentAnswer').textContent = '正在基于轨迹记忆生成回答…';
-    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">正在生成闭环协作记录…</div>';
-    document.getElementById('evidenceGallery').innerHTML = '<div class="empty-msg">正在收集视觉证据…</div>';
+    renderEvidence(null, null, 'Collecting evidence...');
     const result = await streamAgentQuery(question);
     renderAgentAnswer(result);
-    renderAgentRounds(result.rounds);
     renderEvidence(result.evidence, result.displayGroups);
   } catch (error) {
     setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
     document.getElementById('agentAnswer').textContent = `执行失败：${error.message}`;
-    document.getElementById('agentRounds').innerHTML = '<div class="empty-msg">闭环协作记录未完成</div>';
-    document.getElementById('evidenceGallery').innerHTML = '<div class="empty-msg">没有可展示证据</div>';
+    renderEvidence(null, null);
     showToast(error.message, 'error');
   } finally {
     button.disabled = false;
