@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -58,6 +59,27 @@ _h264_streams: dict[str, dict[str, Any]] = {}  # task_id → {ffmpeg, viewers, i
 _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BYTE_PROGRESS_RE = re.compile(r"\d+(?:\.\d+)?[KMG]?/\d+(?:\.\d+)?[KMG]?")
+_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,3})%")
+
+
+def _normalize_pipeline_output(line: str) -> str:
+    """清理终端控制符，并将回车刷新的动态进度折叠为最新状态。"""
+    cleaned = _ANSI_ESCAPE_RE.sub("", line).replace("\b", "")
+    segments = [segment.strip() for segment in cleaned.split("\r") if segment.strip()]
+    return segments[-1] if segments else cleaned.strip()
+
+
+def _compact_download_progress(text: str) -> str | None:
+    """将模型下载器的长进度条转换为适合网页展示的短状态。"""
+    if "B/s" not in text or not _BYTE_PROGRESS_RE.search(text):
+        return None
+    match = _PERCENT_RE.search(text)
+    if not match:
+        return "正在下载检测模型"
+    percent = min(100, int(match.group(1)))
+    return "检测模型下载完成" if percent >= 100 else f"正在下载检测模型：{percent}%"
 
 
 def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> None:
@@ -69,6 +91,9 @@ def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> N
         lowered = text.lower()
         level = "error" if "error" in lowered or "失败" in text or "异常" in text else "warning" if "warning" in lowered or "warn" in lowered or "警告" in text else "info"
     logs = _pipeline_logs.setdefault(task_id, [])
+    if logs and logs[-1]["line"] == text:
+        logs[-1]["time"] = time.strftime("%H:%M:%S")
+        return
     logs.append({"time": time.strftime("%H:%M:%S"), "line": text, "level": level})
     overflow = len(logs) - _MAX_LOG_LINES
     if overflow > 0:
@@ -756,8 +781,17 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
 
             if not line:
                 break
-            text = line.decode("utf-8", errors="replace").strip()
+            text = _normalize_pipeline_output(line.decode("utf-8", errors="replace"))
             if not text:
+                continue
+
+            download_progress = _compact_download_progress(text)
+            if download_progress:
+                async with _state_lock:
+                    _task_status[task_id]["progress"] = download_progress
+                if download_progress == "检测模型下载完成":
+                    _append_pipeline_log(task_id, download_progress, "info")
+                    logger.info("[%s] %s", task_id, download_progress)
                 continue
 
             if "进度" in text or "progress" in text.lower() or "%" in text or "处理帧" in text:

@@ -649,7 +649,14 @@ async function pollPipelineLogs() {
         const color = levelColors[level] || '#4caf50';
         const div = document.createElement('div');
         div.className = 'log-entry';
-        div.innerHTML = `<span class="log-time">${entry.time}</span><span style="color:${color}">${entry.line}</span>`;
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-time';
+        timeSpan.textContent = entry.time;
+        const messageSpan = document.createElement('span');
+        messageSpan.className = 'log-message';
+        messageSpan.style.color = color;
+        messageSpan.textContent = entry.line;
+        div.append(timeSpan, messageSpan);
         box.appendChild(div);
       }
       _logIndex = data.total;
