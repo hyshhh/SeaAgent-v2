@@ -31,6 +31,6 @@ paths:
   trajectory_dir: data/memory/trajectories
   clip_dir: data/memory/clips
   registry_image_dir: data/registry/reference_images
-  video_dir: data/videos
+  video_dir: /media/ddc/新加卷/hys/hysnew3/SQL-boat-v2/demovid/
   keyframe_index: data/indexes/keyframe_index.faiss
   registry_index: data/indexes/registry_index.faiss
