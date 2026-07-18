@@ -259,6 +259,38 @@ def _safe_filename(filename: str) -> str:
     return name
 
 
+def _extract_video_preview(video_path: Path) -> bytes:
+    """读取视频靠前的有效帧并编码为 JPEG。"""
+    import cv2
+
+    capture = cv2.VideoCapture(str(video_path))
+    try:
+        if not capture.isOpened():
+            raise RuntimeError("无法打开视频")
+
+        frame = None
+        for position_ms in (1000, 0, 2000):
+            capture.set(cv2.CAP_PROP_POS_MSEC, position_ms)
+            ok, candidate = capture.read()
+            if ok and candidate is not None and candidate.size:
+                frame = candidate
+                break
+        if frame is None:
+            raise RuntimeError("无法读取有效视频帧")
+
+        height, width = frame.shape[:2]
+        if width > 1280:
+            target_height = max(1, round(height * 1280 / width))
+            frame = cv2.resize(frame, (1280, target_height), interpolation=cv2.INTER_AREA)
+
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if not ok:
+            raise RuntimeError("视频预览编码失败")
+        return encoded.tobytes()
+    finally:
+        capture.release()
+
+
 # ── 视频编码检测与转码 ──
 
 _BROWSER_COMPATIBLE_CODECS = {"h264", "vp8", "vp9", "av1", "mpeg4part10"}
@@ -2575,6 +2607,25 @@ async def get_output_video(request: Request, filename: str):
         media_type=media_type,
         filename=filename,
         headers={"Accept-Ranges": "bytes"},
+    )
+
+
+@router.get("/video-preview/{filename}")
+async def get_video_preview(filename: str):
+    """返回所选视频的一张预览帧。"""
+    filename = _safe_filename(filename)
+    video_path = _get_demo_dir() / filename
+    if not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
+    try:
+        content = await asyncio.to_thread(_extract_video_preview, video_path)
+    except Exception as exc:
+        logger.warning("生成视频预览失败 %s: %s", filename, exc)
+        raise HTTPException(status_code=422, detail=f"无法生成视频预览: {filename}") from exc
+    return Response(
+        content=content,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 

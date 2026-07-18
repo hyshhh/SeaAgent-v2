@@ -186,15 +186,34 @@ function selectVideo(filename, el) {
   document.querySelectorAll('.video-item').forEach(item => item.classList.remove('selected'));
   if (el) el.classList.add('selected');
 
-  // 重置结果区域
-  const resultPlaceholder = document.getElementById('resultPlaceholder');
-  if (resultPlaceholder) {
-    resultPlaceholder.innerHTML = '<span>🎬</span><p>点击"开始处理"后实时显示</p>';
-    resultPlaceholder.className = 'video-placeholder';
-    resultPlaceholder.style.cssText = '';
-    resultPlaceholder.style.display = '';
-  }
+  showVideoPreview(filename);
   resetPipelineStatus();
+}
+
+/** 显示所选视频的预览帧 */
+function showVideoPreview(filename) {
+  const resultPlaceholder = document.getElementById('resultPlaceholder');
+  if (!resultPlaceholder || !filename) return;
+
+  resultPlaceholder.innerHTML = '';
+  resultPlaceholder.className = 'video-preview';
+  resultPlaceholder.style.cssText = '';
+  resultPlaceholder.style.display = '';
+
+  const image = document.createElement('img');
+  image.className = 'video-preview-image';
+  image.alt = `${filename} 视频预览`;
+  image.src = `${PIPE_API}/video-preview/${encodeURIComponent(filename)}`;
+  image.onerror = () => {
+    if (selectedVideo !== filename) return;
+    resultPlaceholder.innerHTML = '<span>⚠️</span><p>视频预览加载失败，仍可开始处理</p>';
+    resultPlaceholder.className = 'video-placeholder';
+  };
+
+  const label = document.createElement('div');
+  label.className = 'video-preview-label';
+  label.textContent = `视频预览 · ${filename}`;
+  resultPlaceholder.append(image, label);
 }
 
 async function deleteVideo(filename) {
@@ -207,6 +226,7 @@ async function deleteVideo(filename) {
     if (selectedVideo === filename) {
       selectedVideo = null;
       document.getElementById('pipelineControl').style.display = 'none';
+      _restoreResultPlaceholder();
     }
     loadVideoList();
   } catch (e) {
@@ -677,9 +697,12 @@ function resetPipelineButtons() {
 
 /** 恢复结果区域为初始占位状态 */
 function _restoreResultPlaceholder() {
+  if (selectedVideo) {
+    showVideoPreview(selectedVideo);
+  }
   const resultPlaceholder = document.getElementById('resultPlaceholder');
-  if (resultPlaceholder) {
-    resultPlaceholder.innerHTML = '<span>🎬</span><p>点击"开始处理"后实时显示</p>';
+  if (resultPlaceholder && !selectedVideo) {
+    resultPlaceholder.innerHTML = '<span>🎬</span><p>选择视频后显示预览</p>';
     resultPlaceholder.className = 'video-placeholder';
     resultPlaceholder.style.cssText = '';
   }
