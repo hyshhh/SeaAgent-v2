@@ -7,6 +7,14 @@
 
 const PIPE_API = '/api/pipeline';
 
+document.addEventListener('DOMContentLoaded', () => {
+  const videoTab = document.getElementById('tab-video-demo');
+  if (videoTab?.classList.contains('active')) {
+    loadVideoList();
+    loadTaskHistory();
+  }
+});
+
 // ── Tab 切换 ──
 function switchTab(tabName) {
   document.querySelectorAll('.tab-btn').forEach(btn => {
