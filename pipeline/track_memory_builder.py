@@ -127,7 +127,6 @@ class TrackMemoryBuilder:
         candidate.future = self._executor.submit(self.llm.recognize, crop)
         state.candidate_frames[candidate_id] = candidate
         self.trace.append({"event": "candidate_submitted", "trackId": state.track_id, "timestamp": timestamp, "qualityScore": quality})
-        self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description="等待单帧识别", status="识别中")
 
     def _reserve_candidate_slot(self, state: ActiveTrack, quality_score: float) -> bool:
         limit = int(self.settings.get("candidate_pool_size", 12))
