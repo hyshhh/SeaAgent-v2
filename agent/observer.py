@@ -20,7 +20,7 @@ class Observer:
             result = self.tools.execute(call["tool"], arguments)
             scope[call["id"]] = result
             observations.append({"id": call["id"], "tool": call["tool"], "arguments": self._compact(arguments), "result": result})
-        summary = {"calls": [{"id": item["id"], "tool": item["tool"], "ok": item.get("result", {}).get("ok"), "skipped": item.get("skipped", False)} for item in observations]}
+        summary = {"calls": [self._summarize_observation(item) for item in observations]}
         try:
             summary["modelObservation"] = self.llm.role("observer", summary, on_delta)
         except Exception as error:
@@ -74,3 +74,38 @@ class Observer:
             else:
                 compact[key] = value
         return compact
+
+    @classmethod
+    def _summarize_observation(cls, observation: dict[str, Any]) -> dict[str, Any]:
+        summary = {"id": observation["id"], "tool": observation["tool"], "skipped": observation.get("skipped", False)}
+        if summary["skipped"]:
+            return summary
+        result = observation.get("result", {})
+        summary["ok"] = result.get("ok")
+        if result.get("error"):
+            summary["error"] = result["error"]
+        tracks = result.get("tracks")
+        if "tracks" in result and isinstance(tracks, list):
+            summary["trackCount"] = len(tracks)
+            summary["tracks"] = [{key: cls._short(item.get(key)) for key in ("trackId", "startTime", "endTime", "finalHullNumber", "finalDescription", "finalMatchType") if item.get(key) not in (None, "")} for item in tracks[:5]]
+        keyframes = result.get("keyframes")
+        if "keyframes" in result and isinstance(keyframes, list):
+            summary["keyframeCount"] = len(keyframes)
+            summary["keyframes"] = [{key: cls._short(item.get(key)) for key in ("keyframeId", "trackId", "timestamp", "description", "isEmbedded") if item.get(key) not in (None, "")} for item in keyframes[:5]]
+        matches = result.get("matches")
+        if "matches" in result and isinstance(matches, list):
+            summary["matchCount"] = len(matches)
+            summary["matches"] = [{key: cls._short(item.get(key)) for key in ("matchedTrackId", "matchedRegistryId", "embeddingScore", "scoreBand", "matchedKeyframeIds", "matchedRegistryReferenceIds") if item.get(key) not in (None, "", [])} for item in matches[:5]]
+        for key in ("queryScope", "searchable", "found", "decision", "matchMode", "trackIds", "keyframeIds", "unsearchableTrackIds", "discardedKeyframeIds", "missingKeyframeIds"):
+            value = result.get(key)
+            if value not in (None, "", []):
+                summary[key] = cls._short(value)
+        return summary
+
+    @staticmethod
+    def _short(value: Any) -> Any:
+        if isinstance(value, str):
+            return value if len(value) <= 160 else value[:157] + "..."
+        if isinstance(value, list):
+            return value[:10]
+        return value

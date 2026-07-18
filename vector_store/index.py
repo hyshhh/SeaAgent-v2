@@ -21,6 +21,7 @@ class ExactFaissIndex:
         self.dimension = int(dimension)
         self.model_name = model_name
         self._index = None
+        self._loaded_signature = None
         self._lock = threading.RLock()
 
     @staticmethod
@@ -37,12 +38,14 @@ class ExactFaissIndex:
 
     def load(self):
         with self._lock:
-            if self._index is not None:
+            signature = self._storage_signature()
+            if self._index is not None and signature == self._loaded_signature:
                 return self._index
             self._validate_manifest()
             self._index = self._faiss().read_index(str(self.path)) if self.path.exists() else self._empty()
             if self._index.d != self.dimension:
                 raise ValueError(f"索引维度错误：{self.path}")
+            self._loaded_signature = self._storage_signature()
             return self._index
 
     @property
@@ -90,11 +93,13 @@ class ExactFaissIndex:
 
     def get_many(self, vector_ids: Iterable[int]) -> dict[int, np.ndarray]:
         result = {}
-        for vector_id in vector_ids:
-            try:
-                result[int(vector_id)] = self.get(int(vector_id))
-            except KeyError:
-                continue
+        with self._lock:
+            index = self.load()
+            for vector_id in vector_ids:
+                try:
+                    result[int(vector_id)] = np.asarray(index.reconstruct(int(vector_id)), dtype=np.float32)
+                except RuntimeError:
+                    continue
         return result
 
     def search(self, query: np.ndarray, top_k: int, allowed_ids: set[int] | None = None) -> list[dict[str, float | int]]:
@@ -119,16 +124,30 @@ class ExactFaissIndex:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        self._faiss().write_index(self.load(), str(temporary))
+        index = self._index if self._index is not None else self.load()
+        self._faiss().write_index(index, str(temporary))
         os.replace(temporary, self.path)
         manifest = {"model": self.model_name, "dimension": self.dimension, "normalized": True, "index_type": "IndexIDMap2(IndexFlatIP)"}
         temp_manifest = self.manifest_path.with_suffix(self.manifest_path.suffix + ".tmp")
         temp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp_manifest, self.manifest_path)
+        self._loaded_signature = self._storage_signature()
 
     def reset_cache(self) -> None:
         with self._lock:
             self._index = None
+            self._loaded_signature = None
+
+    def _storage_signature(self):
+        return self._file_signature(self.path), self._file_signature(self.manifest_path)
+
+    @staticmethod
+    def _file_signature(path: Path):
+        try:
+            stat = path.stat()
+            return stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)
+        except FileNotFoundError:
+            return None
 
     def _validate_manifest(self) -> None:
         if not self.manifest_path.exists():
