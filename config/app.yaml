@@ -5,9 +5,9 @@ web:
   host: 0.0.0.0
   port: 8000
 llm:
-  model: Qwen/Qwen3-VL-4B-Instruct
-  base_url: http://127.0.0.1:7890/v1
-  api_key: abc123
+  model: "Qwen/Qwen3-VL-4B-AWQ"
+  api_key: "abc123"
+  base_url: "http://localhost:7890/v1"
   temperature: 0.0
   timeout_seconds: 60
   max_context_tokens: 32768

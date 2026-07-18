@@ -28,15 +28,15 @@ ffmpeg -version
 python -c "import cv2, fastapi, faiss; print('基础依赖正常')"
 ```
 
-## 三、部署 Qwen3-VL-4B
+## 三、部署 Qwen3-VL-4B-AWQ
 
 单帧识别、规划智能体、观察智能体、反思智能体和灰区核验共享同一个兼容接口服务。无需为三个子智能体分别启动模型。
 
 示例：
 
 ```bash
-vllm serve Qwen/Qwen3-VL-4B-Instruct \
-  --served-model-name Qwen/Qwen3-VL-4B-Instruct \
+vllm serve Qwen/Qwen3-VL-4B-AWQ \
+  --served-model-name Qwen/Qwen3-VL-4B-AWQ \
   --api-key abc123 \
   --port 7890 \
   --max-model-len 32768
@@ -46,9 +46,9 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct \
 
 ```yaml
 llm:
-  model: Qwen/Qwen3-VL-4B-Instruct
-  base_url: http://127.0.0.1:7890/v1
-  api_key: abc123
+  model: "Qwen/Qwen3-VL-4B-AWQ"
+  api_key: "abc123"
+  base_url: "http://localhost:7890/v1"
 ```
 
 ## 四、部署 Qwen3-VL-Embedding-2B
