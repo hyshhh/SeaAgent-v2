@@ -69,7 +69,7 @@ def _merge_args_to_config(args, config: dict) -> dict:
             sys.exit(1)
     if args.pipe_scale is not None and 0.1 <= args.pipe_scale < 1.0 and pipeline.get("output_size"):
         width, height = pipeline["output_size"]
-        pipeline["pipe_output_size"] = [max(16, int(width * args.pipe_scale)), max(16, int(height * args.pipe_scale))]
+        pipeline["pipe_output_size"] = [max(16, int(width * args.pipe_scale)) // 2 * 2, max(16, int(height * args.pipe_scale)) // 2 * 2]
     if args.stop_file:
         pipeline["stop_file"] = args.stop_file
     return config

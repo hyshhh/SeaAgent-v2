@@ -53,13 +53,13 @@
           <div class="param-grid">
             <label>检测置信度<input id="optConf" type="number" value="0.25" min="0" max="1" step="0.05"></label>
             <label>交并比阈值<input id="optIou" type="number" value="0.45" min="0" max="1" step="0.05"></label>
-            <label>检测帧间隔<input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <label>检测帧间隔<input id="optDetectEvery" type="number" value="2" min="1"></label>
             <label>目标帧率<input id="optTargetFps" type="number" value="0" min="0"></label>
-            <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="optPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+            <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="optPipeScale" type="number" value="0.25" min="0.1" max="1" step="0.05"></label>
             <label>最大处理帧<input id="optMaxFrames" type="number" value="0" min="0"></label>
             <label>推理设备<input id="optDevice" type="text" placeholder="留空使用配置"></label>
             <label>检测模型<input id="optYoloModel" type="text" placeholder="留空使用配置"></label>
-            <label class="check-line"><input id="optSaveVideo" type="checkbox" checked>保存标注视频</label>
+            <label class="check-line"><input id="optSaveVideo" type="checkbox">保存标注视频</label>
           </div>
           <div class="history-head"><h3>任务历史</h3><button class="text-btn" onclick="clearTaskHistory()">清空</button></div>
           <div class="task-history" id="taskHistory"><div class="empty-msg">暂无任务</div></div>
@@ -120,14 +120,14 @@
         <span id="camStreamModeHint" class="hint" style="display:none">服务器输入统一使用压缩视频流。</span>
         <label>检测置信度<input id="camConf" type="number" value="0.25" step="0.05"></label>
         <label>交并比阈值<input id="camIou" type="number" value="0.45" step="0.05"></label>
-        <label>检测帧间隔<input id="camDetectEvery" type="number" value="1" min="1"></label>
+        <label>检测帧间隔<input id="camDetectEvery" type="number" value="2" min="1"></label>
         <label>目标帧率<input id="camTargetFps" type="number" value="0" min="0"></label>
         <label>采集帧率<input id="camCaptureFps" type="number" value="15" min="1"></label>
-        <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="camPipeScale" type="number" value="0.5" min="0.1" max="1" step="0.1"></label>
+        <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="camPipeScale" type="number" value="0.25" min="0.1" max="1" step="0.05"></label>
         <label>最大处理帧<input id="camMaxFrames" type="number" value="0" min="0"></label>
         <label>推理设备<input id="camDevice" type="text" placeholder="留空使用配置"></label>
         <label>检测模型<input id="camYoloModel" type="text" placeholder="留空使用配置"></label>
-        <label class="check-line"><input id="camOptSaveVideo" type="checkbox" checked>保存标注视频</label>
+        <label class="check-line"><input id="camOptSaveVideo" type="checkbox">保存标注视频</label>
       </div>
     </section>
   </div>
@@ -138,7 +138,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=4"></script>
-<script src="/static/js/pipeline.js?v=5"></script>
+<script src="/static/js/pipeline.js?v=6"></script>
 <script src="/static/js/agent.js?v=4"></script>
 </body>
 </html>

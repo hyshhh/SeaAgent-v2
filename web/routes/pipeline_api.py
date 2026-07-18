@@ -167,7 +167,7 @@ class PipelineStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
-    pipe_scale: float = 0.5  # 推流编码分辨率比例 (0.1-1.0)
+    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -183,7 +183,7 @@ class BrowserCameraStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
-    pipe_scale: float = 0.5  # 推流编码分辨率比例 (0.1-1.0)
+    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.1-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -718,8 +718,8 @@ async def start_pipeline(req: PipelineStartRequest):
     # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
     if 0.1 <= req.pipe_scale < 1.0:
         cmd.extend(["--pipe-scale", str(req.pipe_scale)])
-        pipe_w = max(16, int(video_w * req.pipe_scale))
-        pipe_h = max(16, int(video_h * req.pipe_scale))
+        pipe_w = max(16, int(video_w * req.pipe_scale)) // 2 * 2
+        pipe_h = max(16, int(video_h * req.pipe_scale)) // 2 * 2
     else:
         pipe_w, pipe_h = video_w, video_h
 
@@ -1121,7 +1121,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
         "-r", str(fps),  # 时间基准帧率（匹配目标 FPS）
         "-i", "pipe:0",
         "-c:v", "libx264",
-        "-preset", "ultrafast", "-tune", "zerolatency",
+        "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "28",
         "-profile:v", "baseline", "-level", "3.1",
         "-bf", "0",        # 无 B 帧（降低延迟）
         "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
@@ -1687,8 +1687,8 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
         cam_fps = int(req.target_fps) if req.target_fps > 0 else 15
         # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
         if 0.1 <= req.pipe_scale < 1.0:
-            pipe_out_w = max(16, int(640 * req.pipe_scale))
-            pipe_out_h = max(16, int(480 * req.pipe_scale))
+            pipe_out_w = max(16, int(640 * req.pipe_scale)) // 2 * 2
+            pipe_out_h = max(16, int(480 * req.pipe_scale)) // 2 * 2
         else:
             pipe_out_w, pipe_out_h = 640, 480
         asyncio.create_task(_start_h264_reader(task_id, fake_proc, pipe_out_w, pipe_out_h, fps=cam_fps))
