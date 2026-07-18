@@ -131,33 +131,15 @@ function renderEvidence(evidence, displayGroups) {
 function modelSummaryText(value) {
   if (!value) return '';
   if (typeof value === 'string') return value;
-  const preferred = ['summary', 'reason', 'goal', 'decision', 'action', 'nextStep'];
-  for (const key of preferred) {
-    if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
-  }
-  const serialized = JSON.stringify(value);
-  return serialized.length > 360 ? `${serialized.slice(0, 360)}…` : serialized;
+  if (typeof value.summary === 'string') return value.summary;
+  return JSON.stringify(value);
 }
 
-function thoughtDetails(event) {
-  if (event.type === 'classification') {
-    const scope = event.queryScope ? `${event.queryScope[0]}秒—${event.queryScope[1]}秒` : '全视频';
-    return `<span class="thought-tag">${escapeHtml(questionTypeLabel(event.questionType))}</span><span class="thought-tag">${escapeHtml(scope)}</span>`;
-  }
-  if (event.type === 'plan') {
-    return (event.calls || []).map((call) => `<span class="thought-tag">${escapeHtml(call.tool || '工具')}</span>`).join('');
-  }
-  if (event.type === 'observation') {
-    return (event.calls || []).map((call) => `<span class="thought-tag ${call.ok === false ? 'failed' : ''}">${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : call.ok === false ? '失败' : '完成'}</span>`).join('');
-  }
-  if (event.type === 'reflection') {
-    return `<span class="thought-tag state">${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span class="thought-tag">缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
-  }
-  if (event.type === 'synthesis') {
-    return `<span class="thought-tag state">${escapeHtml(stateLabel(event.state))}</span><span class="thought-tag">候选轨迹 ${Number(event.trackCount || 0)}</span>`;
-  }
-  return '';
-}
+const agentRoles = {
+  planner: {name: 'PlanAgent', label: '规划智能体', hint: '目标分析与工具规划'},
+  observer: {name: 'ObserveAgent', label: '观察智能体', hint: '工具执行与证据整理'},
+  reflector: {name: 'ReflectAgent', label: '反思智能体', hint: '充分性检查与退出判断'},
+};
 
 function setThinkingState(text, state = '') {
   const label = document.getElementById('agentThinkingState');
@@ -172,27 +154,106 @@ function resetThoughtStream() {
   setThinkingState('正在推理', 'active');
 }
 
+function ensureThoughtRound(roundNumber) {
+  const stream = document.getElementById('agentThoughtStream');
+  if (!stream) return null;
+  let round = stream.querySelector(`.thought-round[data-round="${roundNumber}"]`);
+  if (round) return round;
+  round = document.createElement('section');
+  round.className = 'thought-round';
+  round.dataset.round = roundNumber;
+  round.innerHTML = `
+    <div class="thought-round-head"><strong>第 ${roundNumber} 轮推理</strong><span>PlanAgent → ObserveAgent → ReflectAgent</span></div>
+    <div class="thought-agent-grid">
+      ${Object.entries(agentRoles).map(([role, meta]) => `
+        <article class="agent-thought-card ${role}" data-role="${role}">
+          <div class="agent-thought-head"><div><strong>${meta.name}</strong><span>${meta.label}</span></div><em>等待</em></div>
+          <p class="agent-thought-hint">${meta.hint}</p>
+          <div class="agent-stream-text"><span class="agent-stream-placeholder">等待本轮执行…</span></div>
+          <div class="agent-thought-tags"></div>
+        </article>`).join('')}
+    </div>`;
+  stream.appendChild(round);
+  stream.scrollTop = stream.scrollHeight;
+  return round;
+}
+
+function ensureAgentCard(roundNumber, role) {
+  const round = ensureThoughtRound(roundNumber);
+  return round?.querySelector(`.agent-thought-card[data-role="${role}"]`) || null;
+}
+
+function agentTags(event) {
+  if (event.role === 'planner') {
+    return (event.calls || []).map((call) => `<span>${escapeHtml(call.tool || '工具')}</span>`).join('');
+  }
+  if (event.role === 'observer') {
+    return (event.calls || []).map((call) => `<span class="${call.ok === false ? 'failed' : ''}">${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : call.ok === false ? '失败' : '完成'}</span>`).join('');
+  }
+  if (event.role === 'reflector') {
+    return `<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
+  }
+  return '';
+}
+
+function appendSystemThought(event) {
+  const stream = document.getElementById('agentThoughtStream');
+  if (!stream) return;
+  const item = document.createElement('div');
+  item.className = `thought-system-card ${event.type}`;
+  let detail = '';
+  if (event.type === 'classification') {
+    const scope = event.queryScope ? `${event.queryScope[0]}秒—${event.queryScope[1]}秒` : '全视频';
+    detail = `${questionTypeLabel(event.questionType)} · ${scope}`;
+  } else if (event.type === 'synthesis') {
+    detail = `${stateLabel(event.state)} · 候选轨迹 ${Number(event.trackCount || 0)}`;
+  }
+  item.innerHTML = `<strong>${escapeHtml(event.title || '系统事件')}</strong><span>${escapeHtml(detail || event.message || '')}</span><time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time>`;
+  stream.appendChild(item);
+  stream.scrollTop = stream.scrollHeight;
+}
+
 function appendThoughtEvent(event) {
   if (event.type === 'complete') {
     setThinkingState('推理完成', 'completed');
     return;
   }
-  if (event.type === 'error') setThinkingState('推理失败', 'failed');
+  if (event.type === 'error') {
+    setThinkingState('推理失败', 'failed');
+    appendSystemThought(event);
+    return;
+  }
+  if (event.type === 'agent_start') {
+    const card = ensureAgentCard(event.round, event.role);
+    if (!card) return;
+    card.classList.add('active');
+    card.querySelector('.agent-thought-head em').textContent = '生成中';
+    const content = card.querySelector('.agent-stream-text');
+    content.innerHTML = '<span class="agent-stream-cursor"></span>';
+  } else if (event.type === 'agent_delta') {
+    const card = ensureAgentCard(event.round, event.role);
+    if (!card || !event.delta) return;
+    const content = card.querySelector('.agent-stream-text');
+    const cursor = content.querySelector('.agent-stream-cursor');
+    content.insertBefore(document.createTextNode(event.delta), cursor);
+  } else if (event.type === 'agent_end') {
+    const card = ensureAgentCard(event.round, event.role);
+    if (!card) return;
+    const content = card.querySelector('.agent-stream-text');
+    const streamedText = content.textContent.trim();
+    const fallbackText = modelSummaryText(event.modelSummary);
+    if (!streamedText && fallbackText) content.textContent = fallbackText;
+    if (!content.textContent.trim()) content.textContent = event.fallback || '模型未返回可展示内容';
+    card.querySelector('.agent-stream-cursor')?.remove();
+    card.classList.remove('active');
+    card.classList.toggle('failed', Boolean(event.fallback));
+    card.querySelector('.agent-thought-head em').textContent = event.fallback ? '调用失败' : '完成';
+    card.querySelector('.agent-thought-tags').innerHTML = agentTags(event);
+  } else {
+    appendSystemThought(event);
+  }
   const stream = document.getElementById('agentThoughtStream');
-  if (!stream) return;
-  const card = document.createElement('article');
-  const role = event.role || event.type;
-  card.className = `thought-card ${role}`;
-  const summary = modelSummaryText(event.modelSummary);
-  const details = thoughtDetails(event);
-  card.innerHTML = `
-    <div class="thought-card-head"><span>${escapeHtml(event.title || '推理事件')}</span><time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time></div>
-    <p>${escapeHtml(event.message || '')}</p>
-    ${details ? `<div class="thought-tags">${details}</div>` : ''}
-    ${summary ? `<div class="thought-model-summary"><strong>模型摘要</strong><span>${escapeHtml(summary)}</span></div>` : ''}`;
-  stream.appendChild(card);
-  while (stream.children.length > 80) stream.firstElementChild.remove();
-  stream.scrollTop = stream.scrollHeight;
+  if (stream) stream.scrollTop = stream.scrollHeight;
 }
 
 async function streamAgentQuery(question) {

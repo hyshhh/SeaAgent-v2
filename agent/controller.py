@@ -246,16 +246,18 @@ class AgentController:
         if len(self.rounds) >= self.max_rounds:
             raise RuntimeError("达到最大推理轮次")
         round_number = len(self.rounds) + 1
-        self._emit("stage", f"第 {round_number} 轮·规划", "规划智能体正在生成受控工具计划", round=round_number, role="planner")
-        plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap)
+        self._emit("agent_start", "PlanAgent", "正在分析目标并组织工具计划", round=round_number, role="planner")
+        plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta))
         public_plan = self._public_plan(plan, calls)
-        self._emit("plan", f"第 {round_number} 轮·规划完成", goal, round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"))
-        self._emit("stage", f"第 {round_number} 轮·观察", "观察智能体正在执行工具并读取轨迹记忆", round=round_number, role="observer")
-        observed = self.observer.execute(plan)
-        self._emit("observation", f"第 {round_number} 轮·观察完成", "工具执行结果已写入当前证据工作区", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"))
-        self._emit("stage", f"第 {round_number} 轮·反思", "反思智能体正在检查证据充分性与冲突", round=round_number, role="reflector")
-        reflection = self.reflector.review(default_state, reason, observed["summary"], evidence_gap)
-        self._emit("reflection", f"第 {round_number} 轮·反思完成", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"))
+        self._emit("agent_end", "PlanAgent", "规划完成", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"))
+
+        self._emit("agent_start", "ObserveAgent", "正在执行工具并整理轨迹证据", round=round_number, role="observer")
+        observed = self.observer.execute(plan, on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta))
+        self._emit("agent_end", "ObserveAgent", "观察完成", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"), fallback=observed["summary"].get("modelFallback"))
+
+        self._emit("agent_start", "ReflectAgent", "正在检查证据充分性、冲突与后续动作", round=round_number, role="reflector")
+        reflection = self.reflector.review(default_state, reason, observed["summary"], evidence_gap, lambda delta: self._emit("agent_delta", "ReflectAgent", "", round=round_number, role="reflector", delta=delta))
+        self._emit("agent_end", "ReflectAgent", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"), fallback=reflection.get("modelFallback"))
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
         self._store_observations(round_id, observed)

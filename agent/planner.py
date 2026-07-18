@@ -1,7 +1,7 @@
 """生成受控的最短工具计划。"""
 from __future__ import annotations
 import re
-from typing import Any
+from typing import Any, Callable
 from services import AgentLLMService
 
 class Planner:
@@ -24,13 +24,13 @@ class Planner:
         hull_match = re.search(r"[舷弦]号\s*[:：]?\s*([0-9A-Za-z-]+)", question, re.I)
         return {"questionType": question_type, "timeRange": time_range, "hullNumber": hull_match.group(1).upper() if hull_match else None, "description": question if question_type == "description" else None}
 
-    def build(self, goal: str, calls: list[dict[str, Any]], scope: Any = None, evidence_gap: str | None = None) -> dict[str, Any]:
+    def build(self, goal: str, calls: list[dict[str, Any]], scope: Any = None, evidence_gap: str | None = None, on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
         invalid = [call["tool"] for call in calls if call["tool"] not in self.allowed_tools]
         if invalid:
             raise ValueError(f"工具不在白名单：{invalid}")
         plan = {"goal": goal, "scope": scope, "calls": calls, "evidenceGap": evidence_gap, "stopCondition": "证据足够、证据冲突或达到最大轮次"}
         try:
-            model_plan = self.llm.role("planner", {"goal": goal, "scope": scope, "calls": [{"id": item["id"], "tool": item["tool"]} for item in calls], "evidenceGap": evidence_gap})
+            model_plan = self.llm.role("planner", {"goal": goal, "scope": scope, "calls": [{"id": item["id"], "tool": item["tool"]} for item in calls], "evidenceGap": evidence_gap}, on_delta)
             plan["modelPlan"] = model_plan
         except Exception as error:
             plan["modelFallback"] = str(error)

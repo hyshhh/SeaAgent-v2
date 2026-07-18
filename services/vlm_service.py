@@ -4,7 +4,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 import cv2
 import httpx
 import numpy as np
@@ -62,6 +62,43 @@ class AgentLLMService:
                 last_error = error
         raise LLMServiceError(f"生成模型调用失败：{last_error}")
 
+    def complete_text(self, prompt: str) -> str:
+        payload = {"model": self.settings["model"], "temperature": self.settings.get("temperature", 0.0), "messages": [{"role": "user", "content": prompt}]}
+        url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
+        try:
+            response = httpx.post(url, headers=headers, json=payload, timeout=float(self.settings.get("timeout_seconds", 60)))
+            response.raise_for_status()
+            return str(response.json()["choices"][0]["message"]["content"] or "").strip()
+        except Exception as error:
+            raise LLMServiceError(f"生成模型调用失败：{error}") from error
+
+    def complete_text_stream(self, prompt: str, on_delta: Callable[[str], None]) -> str:
+        payload = {"model": self.settings["model"], "temperature": self.settings.get("temperature", 0.0), "messages": [{"role": "user", "content": prompt}], "stream": True}
+        url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
+        chunks: list[str] = []
+        try:
+            with httpx.stream("POST", url, headers=headers, json=payload, timeout=float(self.settings.get("timeout_seconds", 60))) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    event = json.loads(data)
+                    choices = event.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}).get("content") or ""
+                    if delta:
+                        chunks.append(delta)
+                        on_delta(delta)
+        except Exception as error:
+            raise LLMServiceError(f"生成模型流式调用失败：{error}") from error
+        return "".join(chunks).strip()
+
     def recognize(self, image: str | Path | np.ndarray) -> dict[str, Any]:
         result = self.complete_json(self.prompts["single_frame_recognition"], [image])
         readable = "yes" if str(result.get("has_readable_hull_number", "no")).lower() == "yes" else "no"
@@ -83,6 +120,7 @@ class AgentLLMService:
         facts = result.get("facts", [])
         return {"decision": decision, "facts": facts if isinstance(facts, list) else [str(facts)]}
 
-    def role(self, role: str, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = self.prompts[role] + "\n输入：" + json.dumps(payload, ensure_ascii=False)
-        return self.complete_json(prompt)
+    def role(self, role: str, payload: dict[str, Any], on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
+        prompt = self.prompts[role] + "\n请使用简洁自然语言输出可审计的推理摘要，不输出 JSON 或代码块。\n输入：" + json.dumps(payload, ensure_ascii=False)
+        content = self.complete_text_stream(prompt, on_delta) if on_delta else self.complete_text(prompt)
+        return {"summary": content}
