@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Tab 切换 ──
 function switchTab(tabName) {
+  if (typeof stopMemoryAutoRefresh === 'function') stopMemoryAutoRefresh();
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
@@ -27,6 +28,9 @@ function switchTab(tabName) {
   if (tabName === 'monitoring') {
     loadVideoList();
     loadTaskHistory();
+  } else if (tabName === 'memory') {
+    if (typeof loadTrackMemory === 'function') loadTrackMemory();
+    if (typeof startMemoryAutoRefresh === 'function') startMemoryAutoRefresh();
   } else if (tabName === 'agent-qa') {
     if (typeof loadAgentMemorySummary === 'function') loadAgentMemorySummary();
   } else if (tabName === 'camera-demo') {

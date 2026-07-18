@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import sys
 import threading
 import uuid
@@ -15,7 +14,7 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 from config import load_config
-from memory import MemoryRepository
+from memory import MemoryRepository, TrackMemoryManager
 from pipeline.aggregation import aggregate_keyframes
 from pipeline.quality import score_frame
 from services import AgentLLMService, QwenMultimodalEmbedder
@@ -58,12 +57,14 @@ class TrackMemoryBuilder:
         self.embedder = embedder or QwenMultimodalEmbedder(self.config)
         self.llm = llm or AgentLLMService(self.config)
         self.vectors = vectors or VectorCatalog(self.config)
+        self.memory_manager = TrackMemoryManager(self.config, self.repository, self.vectors)
         self.active: dict[str, ActiveTrack] = {}
         self._executor = ThreadPoolExecutor(max_workers=int(self.settings.get("recognition_workers", 2)), thread_name_prefix="frame-recognition")
         self._lock = threading.RLock()
         self._source_path = ""
         self._source_fps = 25.0
         self._frame_size = [0, 0]
+        self._last_maintenance_time = -1.0
         self.trace: list[dict[str, Any]] = []
         self._pool_event_callback = pool_event_callback
 
@@ -78,13 +79,7 @@ class TrackMemoryBuilder:
             logger.warning("池状态事件发送失败：%s", error)
 
     def reset_persistent_memory(self) -> None:
-        self.repository.clear_track_memory()
-        self.vectors.keyframes.rebuild([])
-        for key in ("keyframe_dir", "trajectory_dir", "clip_dir"):
-            directory = Path(self.config["paths"][key]).resolve()
-            directory.mkdir(parents=True, exist_ok=True)
-            for item in directory.iterdir():
-                shutil.rmtree(item) if item.is_dir() else item.unlink(missing_ok=True)
+        self.memory_manager.clear_all()
         self.trace.clear()
 
     def observe(self, frame: np.ndarray, detections: list[Any], frame_index: int, timestamp: float, source_path: str = "", source_fps: float = 25.0) -> None:
@@ -110,6 +105,7 @@ class TrackMemoryBuilder:
                 if track_id not in seen:
                     state.missed_frames += 1
             self._drain_completed()
+            self._prune_expired(timestamp)
             self._finalize_stale()
 
     def _submit_candidate(self, state: ActiveTrack, crop: np.ndarray, bbox: tuple[int, int, int, int], frame_shape: tuple[int, ...], timestamp: float) -> None:
@@ -319,6 +315,25 @@ class TrackMemoryBuilder:
         current = self.repository.get_track(state.track_id)
         saved_path = current.get("trajectoryPath", "") if current else ""
         self.repository.upsert_track({"track_id": state.track_id, "start_time": state.start_time, "end_time": state.last_time, "final_hull_number": state.final_hull_number, "final_description": state.final_description, "final_match_type": state.final_match_type, "trajectory_path": trajectory_path or saved_path})
+
+    def _prune_expired(self, timestamp: float) -> None:
+        if self._last_maintenance_time >= 0 and timestamp - self._last_maintenance_time < 1.0:
+            return
+        self._last_maintenance_time = timestamp
+        for state in self.active.values():
+            self._write_track(state)
+        retention = self.memory_manager.settings.read()["retentionSeconds"]
+        protected = [track_id for track_id, state in self.active.items() if retention <= 0 or timestamp - state.last_time <= retention]
+        expired = self.memory_manager.prune_expired(timestamp, protected)
+        if expired:
+            for track_id in expired:
+                state = self.active.pop(str(track_id), None)
+                if state:
+                    for candidate in state.candidate_frames.values():
+                        if candidate.future:
+                            candidate.future.cancel()
+            self.trace.append({"event": "memory_expired", "trackIds": expired, "timestamp": timestamp})
+            logger.info("轨迹记忆自动清理：%s", ", ".join(expired))
 
     def _finalize_stale(self) -> None:
         threshold = int(self.settings.get("max_stale_frames", 90))

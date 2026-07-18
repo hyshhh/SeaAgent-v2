@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=7">
+<link rel="stylesheet" href="/static/css/style.css?v=8">
 </head>
 <body>
 <header class="app-header">
@@ -14,6 +14,7 @@
 </header>
 <nav class="tab-nav">
   <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">海域监控</button>
+  <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">轨迹记忆</button>
   <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">智能体问答</button>
   <button class="tab-btn" data-tab="database" onclick="switchTab('database')">先验库管理</button>
   <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">实时摄像头</button>
@@ -77,6 +78,33 @@
         </section>
       </div>
     </div>
+  </div>
+</section>
+<section class="tab-content" id="tab-memory">
+  <div class="memory-workspace">
+    <div class="memory-page-head">
+      <div><span class="eyebrow">轨迹记忆管理</span><h2>当前轨迹表与自动维护</h2><p>实时查看当前视频形成的轨迹记忆，并控制轨迹消失后的保留时间。</p></div>
+      <button class="btn ghost" onclick="loadTrackMemory()">刷新轨迹表</button>
+    </div>
+    <div class="memory-summary-grid">
+      <article class="memory-stat-card"><span>当前轨迹</span><strong id="memoryTrackCount">-</strong><small>条轨迹记录</small></article>
+      <article class="memory-stat-card"><span>正式关键帧</span><strong id="memoryKeyframeCount">-</strong><small>张入池图像</small></article>
+      <article class="memory-stat-card"><span>可检索关键帧</span><strong id="memoryEmbeddedCount">-</strong><small>张已完成向量</small></article>
+      <section class="memory-settings-card">
+        <div><span>记忆维护时间</span><p>轨迹消失超过设定秒数后自动删除；填 0 表示一直保留。</p></div>
+        <div class="memory-setting-row"><label><input id="memoryRetentionSeconds" type="number" value="0" min="0" max="86400" step="1"><em>秒</em></label><button class="btn primary" onclick="saveMemorySettings()">保存设置</button></div>
+      </section>
+    </div>
+    <section class="panel memory-table-panel">
+      <div class="panel-head">
+        <div><span class="eyebrow">当前记忆内容</span><h3>轨迹主表</h3></div>
+        <div class="memory-table-actions"><span id="memoryRefreshState">每两秒自动刷新</span><button class="btn danger" onclick="clearAllMemory()">清除全部记忆</button></div>
+      </div>
+      <div class="memory-warning">清除操作会删除全部轨迹、正式关键帧、向量和问答证据，但不会删除先验库。</div>
+      <div class="table-wrap memory-table-wrap">
+        <table class="memory-table"><thead><tr><th>轨迹编号</th><th>时间范围</th><th>舷号</th><th>聚合状态</th><th>关键帧</th><th>记忆状态</th><th>外观描述</th></tr></thead><tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">正在读取轨迹记忆…</td></tr></tbody></table>
+      </div>
+    </section>
   </div>
 </section>
 <section class="tab-content" id="tab-agent-qa">
@@ -182,7 +210,8 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=4"></script>
-<script src="/static/js/pipeline.js?v=7"></script>
+<script src="/static/js/pipeline.js?v=8"></script>
+<script src="/static/js/memory.js?v=1"></script>
 <script src="/static/js/agent.js?v=7"></script>
 </body>
 </html>

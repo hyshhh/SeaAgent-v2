@@ -66,6 +66,12 @@ _pool_rows_lock = threading.Lock()
 _VIDEO_LIST_CACHE_TTL = 15.0
 _video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
 _video_list_lock = asyncio.Lock()
+
+
+def has_running_pipeline() -> bool:
+    return bool(_running_processes) or any(item.get("status") == "running" for item in _task_status.values())
+
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BYTE_PROGRESS_RE = re.compile(r"\d+(?:\.\d+)?[KMG]?/\d+(?:\.\d+)?[KMG]?")
 _PERCENT_RE = re.compile(r"(?<!\d)(\d{1,3})%")
