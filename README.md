@@ -104,7 +104,7 @@ flowchart LR
 | **观察智能体** | 执行白名单工具，整理结果并写入证据工作区 | 轨迹、时间、特征分数和证据编号 |
 | **反思智能体** | 检查证据完整性、一致性和查询目标覆盖情况 | 继续规划、直接回答或返回无法确认 |
 
-三个角色共享一个 `Qwen3-VL-4B-AWQ` 推理服务，不需要部署三份模型。`Qwen3-VL-Embedding-2B` 由应用进程延迟加载，专门负责图像与文本的统一特征生成。
+三个角色共享一个 `Qwen3-VL-4B-AWQ` 推理服务，不需要部署三份模型。`Qwen3-VL-Embedding-2B` 使用独立接口服务，专门负责图像与文本的统一特征生成。
 
 ---
 
@@ -132,15 +132,9 @@ cd SeaAgent
 pip install -e .
 ```
 
-需要在本地加载统一多模态特征模型时，安装附加依赖：
-
-```bash
-pip install -e ".[embedding]"
-```
-
 ### 2. 准备模型服务
 
-确保 `Qwen3-VL-4B-AWQ` 已通过兼容接口启动，并在 `config/app.yaml` 中填写服务地址。统一多模态特征模型路径同样在该文件中配置。
+确保 `Qwen3-VL-4B-AWQ` 和 `Qwen3-VL-Embedding-2B` 均已通过兼容接口启动，并在 `config/app.yaml` 中分别填写服务地址。
 
 ```yaml
 llm:
@@ -149,8 +143,12 @@ llm:
   base_url: "http://localhost:7890/v1"
 
 embedding:
-  model: Qwen/Qwen3-VL-Embedding-2B
-  model_path: ./models/Qwen3-VL-Embedding-2B
+  model: "Qwen/Qwen3-VL-Embedding-2B"
+  api_key: "abc123"
+  base_url: "http://localhost:7891/v1"
+  timeout_seconds: 60
+  dimension: 2048
+  normalize: true
 ```
 
 ### 3. 启动网页

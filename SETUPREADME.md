@@ -5,17 +5,11 @@
 - 建议使用 Python 3.10 或 3.11。
 - 视频转码和目标船片段生成需要 `ffmpeg`。
 - `Qwen3-VL-4B` 建议部署在独立显卡上。
-- `Qwen3-VL-Embedding-2B` 由应用本地加载，建议使用另一张显卡或预留足够显存。
+- `Qwen3-VL-Embedding-2B` 使用独立接口服务，建议部署在另一张显卡上。
 
 ## 二、安装项目依赖
 
-先按本机 CUDA 版本安装对应的 `PyTorch`，再执行：
-
-```bash
-pip install -e ".[embedding]"
-```
-
-仅检查网页和不调用统一多模态特征模型时可执行：
+安装项目依赖：
 
 ```bash
 pip install -e .
@@ -53,33 +47,29 @@ llm:
 
 ## 四、部署 Qwen3-VL-Embedding-2B
 
-从官方页面下载模型权重，并将官方实现放到以下默认位置：
+使用兼容接口单独启动向量服务：
 
-```text
-models/Qwen3-VL-Embedding-2B
-third_party/Qwen3-VL-Embedding
-```
-
-当前封装调用：
-
-```python
-Qwen3VLEmbedder.process(inputs, normalize=True)
+```bash
+vllm serve Qwen/Qwen3-VL-Embedding-2B \
+  --served-model-name Qwen/Qwen3-VL-Embedding-2B \
+  --runner pooling \
+  --api-key abc123 \
+  --port 7891
 ```
 
 对应配置：
 
 ```yaml
 embedding:
-  model: Qwen/Qwen3-VL-Embedding-2B
-  model_path: ./models/Qwen3-VL-Embedding-2B
-  source_path: ./third_party/Qwen3-VL-Embedding
+  model: "Qwen/Qwen3-VL-Embedding-2B"
+  api_key: "abc123"
+  base_url: "http://localhost:7891/v1"
+  timeout_seconds: 60
   dimension: 2048
   normalize: true
-  dtype: bfloat16
-  attention: eager
 ```
 
-模型权重与代码位置可按实际路径修改。正式关键帧和先验库参考图只保存图像特征；用户描述在查询时即时编码。
+应用通过 `/v1/embeddings` 调用向量服务。正式关键帧和先验库参考图只保存图像特征；用户描述在查询时即时编码。
 
 ## 五、配置检测器
 
@@ -159,8 +149,8 @@ python -m pipeline.cli data/videos/example.mp4 \
 
 ```text
 进程一：Qwen3-VL-4B 接口服务，供识别和三个子智能体共享
-进程二：SeaAgent 网页服务，延迟加载 Qwen3-VL-Embedding-2B
-进程三：当前单视频流水线，由网页按任务启动
+进程二：Qwen3-VL-Embedding-2B 向量接口服务
+进程三：SeaAgent 网页服务和当前单视频流水线
 ```
 
 系统面向单视频监控任务，`config/pipeline.yaml` 默认固定 `max_parallel_pipelines: 1`，因为同一任务只维护一段监控视频、一套轨迹记忆和两类共享特征索引。多个视频流水线不得同时重置或写入这些共享状态。

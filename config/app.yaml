@@ -12,13 +12,12 @@ llm:
   timeout_seconds: 60
   max_context_tokens: 32768
 embedding:
-  model: Qwen/Qwen3-VL-Embedding-2B
-  model_path: ./models/Qwen3-VL-Embedding-2B
-  source_path: ./third_party/Qwen3-VL-Embedding
+  model: "Qwen/Qwen3-VL-Embedding-2B"
+  api_key: "abc123"
+  base_url: "http://localhost:7891/v1"
+  timeout_seconds: 60
   dimension: 2048
   normalize: true
-  dtype: bfloat16
-  attention: eager
 paths:
   registry_csv: data/registry/registry.csv
   registry_images_csv: data/registry/registry_reference_images.csv
