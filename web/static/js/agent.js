@@ -122,18 +122,21 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     : group.clipError ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId} : null).filter(Boolean);
   let keyframes = groups.map((group) => group.keyframeIds?.[0]
     ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId) : null).filter(Boolean);
-  const registryGroup = groups.find((group) => group.registryReferenceIds?.[0]);
-  let database = registryGroup ? [evidenceItem('registry', registryGroup.registryReferenceIds[0], registryGroup.trackId)] : [];
+  const registryGroup = groups.find((group) => group.registryReferenceIds?.length);
+  const registryIds = [...new Set(groups.flatMap(group => group.registryReferenceIds || []))].slice(0, 6);
+  let database = registryIds.map(id => evidenceItem('registry', id, registryGroup?.trackId));
 
   if (!clips.length) clips = (evidence?.shipSegmentIds || []).slice(0, 3).map((id) => evidenceItem('video', id));
   if (!keyframes.length) keyframes = (evidence?.keyframeIds || []).slice(0, 3).map((id) => evidenceItem('keyframe', id));
-  if (!database.length && evidence?.registryReferenceIds?.[0]) database = [evidenceItem('registry', evidence.registryReferenceIds[0])];
+  if (!database.length && evidence?.registryReferenceIds?.length) {
+    database = [...new Set(evidence.registryReferenceIds)].slice(0, 6).map(id => evidenceItem('registry', id));
+  }
 
   container.className = 'evidence-columns';
   container.innerHTML = [
     evidenceColumn('Clip Evidence', 'Target Vessel Clips', clips, emptyText),
     evidenceColumn('Keyframe Evidence', 'Recognition Frames', keyframes, emptyText),
-    evidenceColumn('Database Evidence', 'First Registry Reference', database, emptyText),
+    evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText),
   ].join('');
 }
 function modelSummaryText(value) {

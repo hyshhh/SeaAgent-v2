@@ -227,7 +227,7 @@ class ToolService:
         return {"ok": True, "targetType": "description" if description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
 
     def showEvidence(self, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None, registryReferenceIds: list[str] | None = None) -> dict[str, Any]:
-        return {"ok": True, "displayId": f"display-{uuid.uuid4().hex[:12]}", "shownKeyframeIds": (keyframeIds or [])[:3], "shownShipSegmentIds": (shipSegmentIds or [])[:3], "shownRegistryReferenceIds": (registryReferenceIds or [])[:3]}
+        return {"ok": True, "displayId": f"display-{uuid.uuid4().hex[:12]}", "shownKeyframeIds": (keyframeIds or [])[:3], "shownShipSegmentIds": (shipSegmentIds or [])[:3], "shownRegistryReferenceIds": (registryReferenceIds or [])[:6]}
 
     def dedupTracks(self, tracks: list[dict[str, Any]], keyframesByTrack: dict[str, Any]) -> dict[str, Any]:
         candidates = {}

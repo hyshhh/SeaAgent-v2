@@ -274,7 +274,7 @@ class AgentController:
             track_id = str(track["trackId"])
             keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")[:3]
             segment_ids = self._ids(track, "shipSegmentIds")[:1]
-            reference_ids = self._ids(track, "matchedRegistryReferenceIds", "queryRegistryReferenceIds", "registryReferenceIds")[:3] if include_registry else []
+            reference_ids = self._ids(track, "matchedRegistryReferenceIds", "queryRegistryReferenceIds", "registryReferenceIds")[:6] if include_registry else []
             frame_call = f"displayFrames{index}"
             clip_call = f"displayClip{index}"
             show_call = f"displayTrack{index}"
