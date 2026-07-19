@@ -30,6 +30,18 @@ function updateSettingInput(input, value, spec = {}) {
     if (spec.max_chars) input.maxLength = spec.max_chars;
     return;
   }
+  if (spec.type === 'enum' || input.tagName === 'SELECT') {
+    const next = value == null ? '' : String(value);
+    input.value = next;
+    if (spec.choices && !spec.choices.map(String).includes(next) && next) {
+      const option = document.createElement('option');
+      option.value = next;
+      option.textContent = next;
+      input.appendChild(option);
+      input.value = next;
+    }
+    return;
+  }
   if (spec.min !== undefined) input.min = spec.min;
   if (spec.max !== undefined) input.max = spec.max;
   if (spec.step !== undefined) input.step = spec.step;
@@ -72,6 +84,12 @@ function collectSystemSettings() {
         throw new Error(`提示词“${spec.label || path}”过长，最多 ${spec.max_chars} 字符`);
       }
       setSettingValue(values, path, text);
+      continue;
+    }
+    if (spec.type === 'enum' || input.tagName === 'SELECT') {
+      const choice = String(raw || '').trim();
+      if (!choice) throw new Error(`参数「${path}」不能为空`);
+      setSettingValue(values, path, choice);
       continue;
     }
     if (String(raw).trim() === '') throw new Error(`参数“${path}”不能为空`);

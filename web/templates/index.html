@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=16">
+<link rel="stylesheet" href="/static/css/style.css?v=17">
 </head>
 <body>
 <header class="app-header">
@@ -268,6 +268,13 @@
           <label>去重高阈值<input data-setting="pipeline.retrieval.dedup_high" type="number"><small>跨轨迹相似度达到该值时合并。</small></label>
           <label>去重低阈值<input data-setting="pipeline.retrieval.dedup_low" type="number"><small>低于该值时不合并。</small></label>
           <label>问答最大轮数<input data-setting="pipeline.agent.max_rounds" type="number"><small>规划、观察、反思闭环的最大执行轮数。</small></label>
+          <label class="settings-toggle">PlanAgent 规划模式
+            <select data-setting="pipeline.agent.plan_mode">
+              <option value="guided">硬编码辅助（稳定）</option>
+              <option value="autonomous">完全自主（Plan 决策工具）</option>
+            </select>
+            <small>硬编码辅助：控制器固定工具链，Plan 只解释。完全自主：Plan 根据工具说明自行规划调用。</small>
+          </label>
         </div>
       </section>
 
@@ -278,7 +285,7 @@
             <textarea data-setting="prompts.planner_intent" rows="8" spellcheck="false"></textarea>
             <small>按 R01-R16 规则表让模型自选意图，再编译成描述检索、在库关系、舷号或列表等工具链。</small>
           </label>
-          <label class="settings-prompt-item">PlanAgent 提示词
+          <label class="settings-prompt-item">PlanAgent 提示词（硬编码辅助模式）
             <textarea data-setting="prompts.planner" rows="8" spellcheck="false"></textarea>
             <small>解释本轮工具计划；不能增删工具，也不能直接回答用户问题。</small>
           </label>
@@ -313,14 +320,18 @@
   </div>
 </section>
 </main>
-<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">新建先验库项</h3><button onclick="closeModal()">×</button></div><label>舷号<input id="modalHullNumber" type="text" placeholder="例如 0857"></label><label>描述<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label><label>参考图<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">新建或追加参考图，总数最多六张。</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">保存</button></div></div></div>
+<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">新建先验库项</h3><button onclick="closeModal()">×</button></div><label>舷号<input id="modalHullNumber" type="text" placeholder="例如 0857"></label><label>描述<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label>
+          <label class="settings-prompt-item">PlanAgent 提示词（完全自主模式）
+            <textarea data-setting="prompts.planner_autonomous" rows="10" spellcheck="false"></textarea>
+            <small>仅在“完全自主”模式下使用；需包含工具白名单与 JSON 输出格式。</small>
+          </label><label>参考图<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">新建或追加参考图，总数最多六张。</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">保存</button></div></div></div>
 <div class="modal-overlay" id="bulkModal"><div class="modal"><div class="modal-head"><h3>批量导入库项</h3><button onclick="closeBulkModal()">×</button></div><label>请输入舷号与描述的对象<textarea id="bulkInput" rows="9" placeholder='{"0857":"灰色船体，白色上层建筑"}'></textarea></label><div class="modal-actions"><button class="btn ghost" onclick="closeBulkModal()">取消</button><button class="btn primary" onclick="submitBulk()">导入</button></div></div></div>
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
-<script src="/static/js/app.js?v=6"></script>
-<script src="/static/js/pipeline.js?v=11"></script>
-  <script src="/static/js/memory.js?v=4"></script>
-<script src="/static/js/agent.js?v=16"></script>
-<script src="/static/js/settings.js?v=3"></script>
+<script src="/static/js/app.js?v=7"></script>
+<script src="/static/js/pipeline.js?v=12"></script>
+  <script src="/static/js/memory.js?v=5"></script>
+<script src="/static/js/agent.js?v=17"></script>
+<script src="/static/js/settings.js?v=4"></script>
 </body>
 </html>

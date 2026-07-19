@@ -284,6 +284,19 @@ function appendSystemThought(event) {
     renderIntentAgentCard(event);
     return;
   }
+
+  if (event.type === 'status' && (event.planMode || /规划模式|PlanAgent/.test(`${event.title || ''}${event.message || ''}`))) {
+    let mode = stream.querySelector('.plan-mode-banner');
+    if (!mode) {
+      mode = document.createElement('div');
+      mode.className = 'plan-mode-banner';
+      stream.prepend(mode);
+    }
+    const label = event.planMode === 'autonomous' ? '完全自主' : (event.planMode === 'guided' ? '硬编码辅助' : (event.message || ''));
+    mode.textContent = `PlanAgent 模式：${label}`;
+    if (event.planMode) mode.dataset.mode = event.planMode;
+  }
+
   if (event.type === 'status' && /IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`)) {
     let card = stream.querySelector('.intent-agent-card.pending, .intent-agent-card');
     if (!card || card.classList.contains('ready')) {

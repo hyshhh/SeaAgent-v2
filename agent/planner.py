@@ -1,6 +1,7 @@
 """将自然语言问题转为受控的海域监控查询规格。"""
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta
 from typing import Any, Callable
@@ -283,6 +284,291 @@ class Planner:
             "track_relation_description": "relation_description",
         }[spec["strategy"]]
 
+    def decide_tools(
+        self,
+        question: str,
+        intent: dict[str, Any],
+        history: list[dict[str, Any]] | None = None,
+        memory_scope: dict[str, Any] | None = None,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """完全自主模式：由模型输出本轮工具调用计划，再做白名单与参数校验。"""
+        history = history or []
+        memory_scope = memory_scope or {}
+        payload = {
+            "question": question,
+            "intent": {
+                "questionType": intent.get("questionType"),
+                "strategy": intent.get("strategy"),
+                "targetScope": intent.get("targetScope"),
+                "targetKind": intent.get("targetKind"),
+                "operation": intent.get("operation"),
+                "registryRelation": intent.get("registryRelation"),
+                "hullNumber": intent.get("hullNumber"),
+                "description": intent.get("description"),
+                "timeRange": list(intent["timeRange"]) if intent.get("timeRange") else None,
+                "selectedRules": intent.get("selectedRules") or [],
+            },
+            "round": len(history) + 1,
+            "maxRounds": intent.get("maxRounds"),
+            "previousRounds": history,
+            "availableResultKeys": sorted(memory_scope.keys()),
+            "allowedTools": sorted(self.allowed_tools),
+        }
+        model_plan: dict[str, Any] = {}
+        raw = ""
+        try:
+            prompt = self.llm._prompt("planner_autonomous")
+            raw = self.llm.complete_text_stream(prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False), on_delta) if on_delta else self.llm.complete_text(prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False))
+            model_plan = self._extract_json_object(raw)
+        except Exception as error:
+            model_plan = self._fallback_autonomous_plan(intent)
+            model_plan["modelFallback"] = str(error)
+            if on_delta and model_plan.get("modelFallback"):
+                on_delta(f"\n[兜底规划] {model_plan['goal']}")
+
+        calls = self._sanitize_calls(model_plan.get("calls") or [])
+        if not calls:
+            calls = self._sanitize_calls(self._fallback_autonomous_plan(intent).get("calls") or [])
+        state = str(model_plan.get("proposedState") or "replan").lower()
+        if state not in {"sufficient", "replan", "conflict", "uncertain"}:
+            state = "replan"
+        goal = str(model_plan.get("goal") or "根据意图检索轨迹记忆与先验库证据").strip()
+        reason = str(model_plan.get("reason") or "按自主规划执行工具并收集证据").strip()
+        evidence_gap = model_plan.get("evidenceGap")
+        if evidence_gap is not None:
+            evidence_gap = str(evidence_gap).strip() or None
+        answer_hint = str(model_plan.get("answerHint") or "").strip()
+        plan = {
+            "goal": goal,
+            "intent": intent or {},
+            "scope": intent.get("timeRange"),
+            "calls": calls,
+            "evidenceGap": evidence_gap,
+            "proposedState": state,
+            "reason": reason,
+            "answerHint": answer_hint,
+            "planMode": "guided",
+            "stopCondition": "证据足够、冲突、已读完全部候选或达到轮次上限",
+            "modelPlan": {
+                "summary": raw.strip()[:500] if raw else goal,
+                "goal": goal,
+                "proposedState": state,
+                "reason": reason,
+                "answerHint": answer_hint,
+            },
+            "planMode": "autonomous",
+        }
+        if model_plan.get("modelFallback"):
+            plan["modelFallback"] = model_plan["modelFallback"]
+        return plan
+
+    def _sanitize_calls(self, calls: Any) -> list[dict[str, Any]]:
+        if not isinstance(calls, list):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        used_ids: set[str] = set()
+        for index, item in enumerate(calls[:6]):
+            if not isinstance(item, dict):
+                continue
+            tool = str(item.get("tool") or "").strip()
+            if tool not in self.allowed_tools:
+                continue
+            call_id = str(item.get("id") or f"call{index + 1}").strip() or f"call{index + 1}"
+            call_id = re.sub(r"[^0-9A-Za-z_\-]", "", call_id) or f"call{index + 1}"
+            if call_id in used_ids:
+                call_id = f"{call_id}_{index + 1}"
+            used_ids.add(call_id)
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            arguments = self._sanitize_arguments(tool, arguments)
+            call: dict[str, Any] = {"id": call_id, "tool": tool, "arguments": arguments}
+            condition = item.get("condition")
+            if isinstance(condition, dict) and condition.get("ref"):
+                call["condition"] = condition
+            cleaned.append(call)
+        return cleaned
+
+    def _sanitize_arguments(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        allowed_fields = {
+            "getTrack": {"timeRange", "hullNumber", "finalMatchType", "offset", "limit"},
+            "getFrames": {"trackIds"},
+            "getClip": {"trackId", "timeRange"},
+            "getRegistry": {"hullNumber"},
+            "listRegistry": set(),
+            "matchHull": {"hullNumberArray"},
+            "matchText": {"description", "galleryImages", "topK"},
+            "matchImage": {"queryImages", "galleryImages", "topK"},
+            "verifyTarget": {"description", "registryReferenceIds", "keyframeIds", "shipSegmentIds"},
+            "showEvidence": {"keyframeIds", "shipSegmentIds", "registryReferenceIds"},
+            "dedupTracks": {"tracks", "keyframesByTrack"},
+        }.get(tool, set())
+        cleaned: dict[str, Any] = {}
+        for key, value in arguments.items():
+            if key not in allowed_fields:
+                continue
+            cleaned[key] = self._sanitize_value(value)
+        # 时间范围统一
+        if "timeRange" in cleaned:
+            cleaned["timeRange"] = self._normalize_time_range(cleaned.get("timeRange"))
+        if tool == "getTrack":
+            if "offset" in cleaned:
+                try:
+                    cleaned["offset"] = max(0, int(cleaned["offset"]))
+                except (TypeError, ValueError):
+                    cleaned["offset"] = 0
+            if "limit" in cleaned:
+                try:
+                    cleaned["limit"] = max(0, min(200, int(cleaned["limit"])))
+                except (TypeError, ValueError):
+                    cleaned["limit"] = 60
+            if "hullNumber" in cleaned and cleaned["hullNumber"] is not None:
+                cleaned["hullNumber"] = str(cleaned["hullNumber"]).strip().upper() or None
+        if tool == "getRegistry" and "hullNumber" in cleaned:
+            cleaned["hullNumber"] = str(cleaned.get("hullNumber") or "").strip().upper()
+        if tool == "getClip" and "trackId" in cleaned and not isinstance(cleaned["trackId"], dict):
+            cleaned["trackId"] = str(cleaned["trackId"])
+        if tool == "getFrames" and "trackIds" in cleaned and not isinstance(cleaned["trackIds"], dict):
+            values = cleaned["trackIds"] if isinstance(cleaned["trackIds"], list) else [cleaned["trackIds"]]
+            cleaned["trackIds"] = [str(item) for item in values if item not in (None, "")]
+        if tool == "matchHull" and "hullNumberArray" in cleaned and not isinstance(cleaned["hullNumberArray"], dict):
+            values = cleaned["hullNumberArray"] if isinstance(cleaned["hullNumberArray"], list) else [cleaned["hullNumberArray"]]
+            cleaned["hullNumberArray"] = [str(item).strip().upper() for item in values if item not in (None, "")]
+        if tool in {"matchText", "matchImage"} and "topK" in cleaned and cleaned["topK"] is not None and not isinstance(cleaned["topK"], dict):
+            try:
+                cleaned["topK"] = max(1, min(50, int(cleaned["topK"])))
+            except (TypeError, ValueError):
+                cleaned.pop("topK", None)
+        return cleaned
+
+    def _sanitize_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                ref = str(value.get("$ref") or "").strip()
+                if not ref:
+                    return None
+                result: dict[str, Any] = {"$ref": ref}
+                if value.get("$map"):
+                    result["$map"] = str(value["$map"])
+                if value.get("$list"):
+                    result["$list"] = True
+                if value.get("$compact"):
+                    result["$compact"] = True
+                if "$default" in value:
+                    result["$default"] = value["$default"]
+                return result
+            return {str(key): self._sanitize_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._sanitize_value(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    @staticmethod
+    def _normalize_time_range(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, dict) and "$ref" in value:
+            return value
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            try:
+                return [float(value[0]), float(value[1])]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _fallback_autonomous_plan(self, intent: dict[str, Any]) -> dict[str, Any]:
+        time_range = list(intent["timeRange"]) if intent.get("timeRange") else None
+        hull = intent.get("hullNumber")
+        description = intent.get("description")
+        target_scope = intent.get("targetScope") or "track_memory"
+        target_kind = intent.get("targetKind") or "all"
+        operation = intent.get("operation") or "list"
+        page = int(intent.get("retrievalPageSize") or 60)
+        if target_scope == "registry" and target_kind == "hull" and hull:
+            return {
+                "goal": f"查询先验库舷号 {hull}",
+                "calls": [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}],
+                "proposedState": "sufficient",
+                "reason": "库项查询可直接返回库记录",
+                "evidenceGap": None,
+                "answerHint": f"返回舷号 {hull} 的库项信息",
+            }
+        if target_scope == "registry" and operation == "list" and target_kind == "all":
+            return {
+                "goal": "列出先验库全部条目",
+                "calls": [{"id": "registryList", "tool": "listRegistry", "arguments": {}}],
+                "proposedState": "sufficient",
+                "reason": "直接读取先验库目录",
+                "evidenceGap": None,
+                "answerHint": "列出全部库项",
+            }
+        if target_kind == "hull" and hull:
+            return {
+                "goal": f"检索视频中舷号 {hull} 的轨迹与库项",
+                "calls": [
+                    {"id": "tracks", "tool": "getTrack", "arguments": {"hullNumber": hull, "timeRange": time_range, "offset": 0, "limit": page}},
+                    {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
+                ],
+                "proposedState": "replan",
+                "reason": "先查直接轨迹与库项，再决定是否向量匹配",
+                "evidenceGap": "若无直接轨迹且库项可检索，需对关键帧做图像匹配",
+                "answerHint": "",
+            }
+        if target_kind == "description" and description:
+            return {
+                "goal": f"按描述检索候选轨迹：{description}",
+                "calls": [
+                    {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": page}},
+                    {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                    {"id": "matches", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "frames.keyframes"}, "topK": 3}},
+                ],
+                "proposedState": "replan",
+                "reason": "描述问题需要先取关键帧再文本匹配",
+                "evidenceGap": "根据匹配分数决定是否灰区核验或继续分页",
+                "answerHint": "",
+            }
+        if operation == "count":
+            return {
+                "goal": "统计时间范围内船舶数量并去重",
+                "calls": [
+                    {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": 0}},
+                    {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                    {"id": "dedup", "tool": "dedupTracks", "arguments": {"tracks": {"$ref": "tracks.tracks"}, "keyframesByTrack": {"$ref": "frames.keyframesByTrack"}}},
+                ],
+                "proposedState": "sufficient",
+                "reason": "数量统计依赖轨迹集合与跨轨迹去重",
+                "evidenceGap": None,
+                "answerHint": "按去重结果统计数量",
+            }
+        return {
+            "goal": "读取时间范围内轨迹列表",
+            "calls": [{"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": page}}],
+            "proposedState": "sufficient",
+            "reason": "默认先读取轨迹列表作为证据",
+            "evidenceGap": None,
+            "answerHint": "返回轨迹列表",
+        }
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict[str, Any]:
+        content = (text or "").strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        try:
+            value = json.loads(content)
+            if isinstance(value, dict):
+                return value
+        except Exception:
+            pass
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not match:
+            raise ValueError("模型未返回可解析 JSON 计划")
+        value = json.loads(match.group())
+        if not isinstance(value, dict):
+            raise ValueError("计划 JSON 必须是对象")
+        return value
+
+
     def build(self, goal: str, calls: list[dict[str, Any]], scope: Any = None, evidence_gap: str | None = None, on_delta: Callable[[str], None] | None = None, intent: dict[str, Any] | None = None) -> dict[str, Any]:
         invalid = [call["tool"] for call in calls if call["tool"] not in self.allowed_tools]
         if invalid:
@@ -293,6 +579,7 @@ class Planner:
             "scope": scope,
             "calls": calls,
             "evidenceGap": evidence_gap,
+            "planMode": "guided",
             "stopCondition": "证据足够、证据冲突、已读取全部候选或达到最大轮次",
         }
         try:

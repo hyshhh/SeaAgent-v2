@@ -13,6 +13,7 @@ from .loader import load_config, project_root
 PROMPT_SETTING_KEYS: tuple[str, ...] = (
     "planner_intent",
     "planner",
+    "planner_autonomous",
     "observer",
     "reflector",
     "single_frame_recognition",
@@ -29,7 +30,8 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
         "max_chars": 8000,
         "label": {
             "planner_intent": "意图分析提示词",
-            "planner": "PlanAgent 提示词",
+            "planner": "PlanAgent 提示词（硬编码辅助模式）",
+            "planner_autonomous": "PlanAgent 提示词（完全自主模式）",
             "observer": "ObserveAgent 提示词",
             "reflector": "ReflectAgent 提示词",
             "single_frame_recognition": "单帧识别提示词",
@@ -78,7 +80,14 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.retrieval.dedup_high": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.dedup_low": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.agent.max_rounds": {"type": "int", "min": 1, "max": 10, "step": 1},
+    "pipeline.agent.plan_mode": {
+        "type": "enum",
+        "choices": ["guided", "autonomous"],
+        "label": "PlanAgent 规划模式",
+        "help": "guided=控制器硬编码工具链，Plan 只解释；autonomous=Plan 自主决定工具调用。",
+    },
 }
+
 
 RUNTIME_FILE = Path(os.getenv("SEAAGENT_CONFIG_DIR", project_root() / "config")) / "runtime.yaml"
 
@@ -129,6 +138,12 @@ def _coerce(path: str, value: Any) -> int | float | str:
     # numeric specs first; prompt specs second
     if path in SETTING_SPECS:
         spec = SETTING_SPECS[path]
+        if spec["type"] == "enum":
+            text_value = str(value if value is not None else "").strip().lower()
+            choices = [str(item).lower() for item in spec.get("choices", [])]
+            if text_value not in choices:
+                raise ValueError(f"参数 {path} 必须是 {', '.join(spec.get('choices', []))}")
+            return text_value
         try:
             number = int(value) if spec["type"] == "int" else float(value)
         except (TypeError, ValueError) as error:

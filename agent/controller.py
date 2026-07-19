@@ -26,6 +26,10 @@ class AgentController:
         settings = self.config["pipeline"]["agent"]
         self.max_rounds = int(settings.get("max_rounds", 3))
         self.display_limit = int(settings.get("display_limit", 3))
+        self.plan_mode = str(settings.get("plan_mode", "guided")).strip().lower()
+        if self.plan_mode not in {"guided", "autonomous"}:
+            self.plan_mode = "guided"
+        self.retrieval_page_size = int(settings.get("retrieval_page_size", 60))
         self.session_id = ""
         self.question = ""
         self.meta: dict[str, Any] = {}
@@ -33,6 +37,7 @@ class AgentController:
         self.tool_chain: list[str] = []
         self.display_record: dict[str, Any] | None = None
         self.display_groups: list[dict[str, Any]] = []
+        self.working_scope: dict[str, Any] = {}
         self.event_handler = event_handler
 
     def _emit(self, event_type: str, title: str, message: str, **payload: Any) -> None:
@@ -69,8 +74,25 @@ class AgentController:
         )
         self.rounds, self.tool_chain = [], []
         self.display_record, self.display_groups = None, []
+        self.working_scope = {}
+        agent_settings = self.config.get("pipeline", {}).get("agent", {})
+        self.plan_mode = str(agent_settings.get("plan_mode", self.plan_mode)).strip().lower()
+        if self.plan_mode not in {"guided", "autonomous"}:
+            self.plan_mode = "guided"
+        self.max_rounds = int(agent_settings.get("max_rounds", self.max_rounds))
+        self.display_limit = int(agent_settings.get("display_limit", self.display_limit))
+        self.retrieval_page_size = int(agent_settings.get("retrieval_page_size", getattr(self, "retrieval_page_size", 60)))
+        self.meta["planMode"] = self.plan_mode
+        self.meta["maxRounds"] = self.max_rounds
+        self.meta["retrievalPageSize"] = self.retrieval_page_size
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
+        self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '完全自主'}", planMode=self.plan_mode)
         try:
+            if self.plan_mode == "autonomous":
+                result = self._answer_autonomous()
+                result = self._finalize_answer(result)
+                self.repository.finish_session(self.session_id, self._session_audit_result(result))
+                return result
             handlers = {
                 "hull": self._answer_hull,
                 "registry_hull": self._answer_registry_hull,
@@ -911,6 +933,266 @@ class AgentController:
         uncertainty = "sufficient" if dedup.get("countStability") == "stable" else "uncertain"
         reason = f"计数状态为 {dedup.get('countStability', 'unknown')}，两种结果表示阈值敏感性"
         return self._finish(conclusion, tracks, reason, uncertainty, extra=extra, display={"tracks": representatives})
+
+    def _answer_autonomous(self) -> dict[str, Any]:
+        """完全自主模式：每轮由 PlanAgent 决定工具，观察后由 Reflect 决定是否继续。"""
+        final_state = "uncertain"
+        final_reason = "自主规划未形成充分证据"
+        last_round: dict[str, Any] | None = None
+        while len(self.rounds) < self.max_rounds:
+            history = self._autonomous_history()
+            round_result = self._round_autonomous(history)
+            last_round = round_result
+            state = str(round_result.get("reflection", {}).get("state") or "uncertain")
+            reason = str(round_result.get("reflection", {}).get("reason") or final_reason)
+            final_state, final_reason = state, reason
+            if state == "replan":
+                continue
+            break
+        return self._finish_autonomous(last_round, final_state, final_reason)
+
+    def _round_autonomous(self, history: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(self.rounds) >= self.max_rounds:
+            raise RuntimeError("达到最大问答轮次")
+        round_number = len(self.rounds) + 1
+        self._emit("agent_start", "PlanAgent", "自主规划本轮工具调用", round=round_number, role="planner", planMode="autonomous")
+        plan = self.planner.decide_tools(
+            self.question,
+            self.meta,
+            history=history,
+            memory_scope=self.working_scope,
+            on_delta=lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta),
+        )
+        calls = plan.get("calls") or []
+        public_plan = self._public_plan(plan, calls)
+        public_plan["planMode"] = "autonomous"
+        self._emit(
+            "agent_end",
+            "PlanAgent",
+            "自主规划完成",
+            round=round_number,
+            role="planner",
+            calls=public_plan["calls"],
+            modelSummary=plan.get("modelPlan"),
+            fallback=plan.get("modelFallback"),
+            planMode="autonomous",
+        )
+
+        self._emit("agent_start", "ObserveAgent", "正在执行自主规划的工具并汇总证据", round=round_number, role="observer")
+        observed = self.observer.execute(
+            plan,
+            context=self.working_scope,
+            on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
+        )
+        # 累积结果供后续 $ref
+        self.working_scope.update(observed.get("scope") or {})
+        self._emit(
+            "agent_end",
+            "ObserveAgent",
+            "观察完成",
+            round=round_number,
+            role="observer",
+            calls=observed["summary"].get("calls", []),
+            modelSummary=observed["summary"].get("modelObservation"),
+            fallback=observed["summary"].get("modelFallback"),
+        )
+
+        default_state = str(plan.get("proposedState") or "uncertain")
+        reason = str(plan.get("reason") or "根据观察结果判定证据是否充分")
+        evidence_gap = plan.get("evidenceGap")
+        self._emit("agent_start", "ReflectAgent", "正在审计自主规划证据充分性", round=round_number, role="reflector")
+        reflection = self.reflector.review(
+            default_state,
+            reason,
+            observed["summary"],
+            evidence_gap,
+            lambda delta: self._emit("agent_delta", "ReflectAgent", "", round=round_number, role="reflector", delta=delta),
+        )
+        # 若模型希望 sufficient 但本轮无任何成功工具结果，降为 uncertain
+        if reflection.get("state") == "sufficient" and not self._has_successful_observation(observed):
+            reflection["state"] = "uncertain"
+            reflection["reason"] = "本轮未获得有效工具结果，暂不能确认"
+        self._emit(
+            "agent_end",
+            "ReflectAgent",
+            reflection.get("reason", reason),
+            round=round_number,
+            role="reflector",
+            state=reflection.get("state"),
+            evidenceGap=reflection.get("evidenceGap"),
+            modelSummary=reflection.get("modelReflection"),
+            fallback=reflection.get("modelFallback"),
+        )
+        round_id = f"round-{uuid.uuid4().hex[:12]}"
+        self.repository.add_round(round_id, self.session_id, public_plan, reflection)
+        self._store_observations(round_id, observed)
+        record = {
+            "roundId": round_id,
+            "plan": public_plan,
+            "observed": observed["summary"],
+            "reflection": reflection,
+            "scope": observed.get("scope") or {},
+            "answerHint": plan.get("answerHint") or "",
+        }
+        self.rounds.append(record)
+        self._append_tool_chain(calls)
+        return record
+
+    def _autonomous_history(self) -> list[dict[str, Any]]:
+        history = []
+        for item in self.rounds:
+            history.append(
+                {
+                    "roundId": item.get("roundId"),
+                    "goal": (item.get("plan") or {}).get("goal"),
+                    "calls": [
+                        {"id": call.get("id"), "tool": call.get("tool"), "arguments": call.get("arguments")}
+                        for call in ((item.get("plan") or {}).get("calls") or [])
+                    ],
+                    "observation": item.get("observed"),
+                    "state": (item.get("reflection") or {}).get("state"),
+                    "reason": (item.get("reflection") or {}).get("reason"),
+                    "evidenceGap": (item.get("reflection") or {}).get("evidenceGap"),
+                }
+            )
+        return history
+
+    @staticmethod
+    def _has_successful_observation(observed: dict[str, Any]) -> bool:
+        for item in observed.get("observations") or []:
+            if item.get("skipped"):
+                continue
+            result = item.get("result") or {}
+            if isinstance(result, dict) and result.get("ok") is False:
+                continue
+            return True
+        return False
+
+    def _finish_autonomous(self, last_round: dict[str, Any] | None, state: str, reason: str) -> dict[str, Any]:
+        tracks = self._collect_tracks_from_scope()
+        matches = self._collect_matches_from_scope()
+        registry_items = self._collect_registry_from_scope()
+        count_value = self._collect_count_from_scope()
+        answer_hint = ""
+        if last_round:
+            answer_hint = str(last_round.get("answerHint") or "").strip()
+            plan = last_round.get("plan") or {}
+            answer_hint = answer_hint or str(plan.get("answerHint") or "").strip()
+
+        if matches:
+            conclusion = "找到匹配目标" if any(item.get("scoreBand") == "match" for item in matches) else "得到候选结果"
+            if not answer_hint:
+                answer_hint = f"共得到 {len(matches)} 条匹配候选"
+            display_tracks = tracks[: max(self.display_limit, len(tracks))]
+            extra = {"matches": matches, "planMode": "autonomous"}
+            if registry_items:
+                extra["registryItems"] = registry_items
+            return self._finish(conclusion, tracks or self._tracks_from_matches(matches), answer_hint or reason, state, extra=extra, display={"tracks": display_tracks or tracks, "includeClips": True, "includeRegistry": bool(registry_items)})
+
+        if count_value is not None:
+            conclusion = f"统计结果为 {count_value}"
+            return self._finish(conclusion, tracks, answer_hint or reason, state, extra={"count": count_value, "planMode": "autonomous"}, display={"tracks": tracks, "includeClips": False})
+
+        if registry_items and not tracks:
+            conclusion = "已查询先验库"
+            text = answer_hint or self._format_registry_hits(registry_items) or reason
+            return self._finish(conclusion, [], text, state, extra={"registryItems": registry_items, "planMode": "autonomous"})
+
+        if tracks:
+            conclusion = "已定位相关轨迹" if state == "sufficient" else "仅获得部分轨迹证据"
+            return self._finish(conclusion, tracks, answer_hint or reason, state, extra={"planMode": "autonomous"}, display={"tracks": tracks, "includeClips": True})
+
+        conclusion = "未找到可靠证据" if state != "conflict" else "证据存在冲突"
+        return self._finish(conclusion, [], answer_hint or reason, state, extra={"planMode": "autonomous"})
+
+    def _collect_tracks_from_scope(self) -> list[dict[str, Any]]:
+        collected: dict[str, dict[str, Any]] = {}
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            for track in value.get("tracks") or []:
+                if isinstance(track, dict) and track.get("trackId") is not None:
+                    collected[str(track["trackId"])] = track
+            # match results may embed track summaries
+            for match in value.get("matches") or []:
+                if not isinstance(match, dict):
+                    continue
+                track = match.get("track") or {}
+                track_id = match.get("trackId") or track.get("trackId")
+                if track_id is not None:
+                    item = dict(track) if isinstance(track, dict) else {"trackId": track_id}
+                    item.setdefault("trackId", track_id)
+                    if match.get("embeddingScore") is not None:
+                        item["embeddingScore"] = match.get("embeddingScore")
+                    if match.get("scoreBand"):
+                        item["scoreBand"] = match.get("scoreBand")
+                    collected[str(track_id)] = {**collected.get(str(track_id), {}), **item}
+        return list(collected.values())
+
+    def _collect_matches_from_scope(self) -> list[dict[str, Any]]:
+        matches: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            for match in value.get("matches") or []:
+                if not isinstance(match, dict):
+                    continue
+                key = str(match.get("trackId") or match.get("registryId") or match.get("keyframeId") or len(matches))
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append(match)
+        matches.sort(key=lambda item: float(item.get("embeddingScore") or item.get("score") or 0), reverse=True)
+        return matches
+
+    def _collect_registry_from_scope(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            for item in value.get("registryItems") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("registryId") or item.get("hullNumber") or len(items))
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(item)
+        return items
+
+    def _collect_count_from_scope(self) -> int | None:
+        for value in reversed(list(self.working_scope.values())):
+            if not isinstance(value, dict):
+                continue
+            for key in ("uniqueCount", "count", "dedupCount", "finalCount"):
+                if value.get(key) is not None:
+                    try:
+                        return int(value[key])
+                    except (TypeError, ValueError):
+                        pass
+            groups = value.get("upperGroups") or value.get("groups") or value.get("mergedGroups")
+            if isinstance(groups, list) and groups:
+                return len(groups)
+        return None
+
+    def _tracks_from_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        tracks = []
+        for match in matches:
+            track_id = match.get("trackId")
+            if track_id is None:
+                continue
+            item = {"trackId": track_id}
+            if match.get("embeddingScore") is not None:
+                item["embeddingScore"] = match.get("embeddingScore")
+            if match.get("scoreBand"):
+                item["scoreBand"] = match.get("scoreBand")
+            if match.get("hullNumber"):
+                item["finalHullNumber"] = match.get("hullNumber")
+            tracks.append(item)
+        return tracks
+
 
     def _round(self, goal: str, calls: list[dict[str, Any]], default_state: str, reason: str, evidence_gap: str | None = None) -> dict[str, Any]:
         if len(self.rounds) >= self.max_rounds:
