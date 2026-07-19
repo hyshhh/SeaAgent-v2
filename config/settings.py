@@ -38,7 +38,7 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
             "text_retrieval_instruction": "文本检索指令",
         }.get(key, key),
         "help": {
-            "planner_intent": "把自然语言压缩成 targetScope/targetKind/operation 等查询规格。",
+            "planner_intent": "按规则表选择意图：模型自选 R01-R16，并输出 targetScope/targetKind/operation 等查询规格。",
             "planner": "解释本轮工具计划，不改工具清单。",
             "observer": "记录工具执行事实，不重判答案。",
             "reflector": "审计证据是否充分，决定停止或继续。",

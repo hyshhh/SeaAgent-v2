@@ -276,7 +276,7 @@
         <div class="settings-prompt-grid">
           <label class="settings-prompt-item">意图分析提示词（planner_intent）
             <textarea data-setting="prompts.planner_intent" rows="8" spellcheck="false"></textarea>
-            <small>把自然语言问题压缩为查询规格，决定是否进入描述检索、舷号检索或列表查询。</small>
+            <small>按 R01-R16 规则表让模型自选意图，再编译成描述检索、在库关系、舷号或列表等工具链。</small>
           </label>
           <label class="settings-prompt-item">PlanAgent 提示词
             <textarea data-setting="prompts.planner" rows="8" spellcheck="false"></textarea>
@@ -321,6 +321,6 @@
 <script src="/static/js/pipeline.js?v=11"></script>
   <script src="/static/js/memory.js?v=4"></script>
 <script src="/static/js/agent.js?v=13"></script>
-<script src="/static/js/settings.js?v=2"></script>
+<script src="/static/js/settings.js?v=3"></script>
 </body>
 </html>

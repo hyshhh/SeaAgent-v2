@@ -895,34 +895,42 @@ class AgentController:
 
 
     def _guard_meta(self, meta: dict[str, Any]) -> dict[str, Any]:
-        """防止意图被模型误判成轨迹列表，导致描述查询只跑一轮 getTrack。"""
-        question = self.question
+        """最小结构校验：防止无效 description 触发错误工具链。意图本身由规则表+模型决定。"""
         description = str(meta.get("description") or "").strip()
-        visual_tokens = ("黄色", "白色", "灰色", "黑色", "蓝色", "红色", "绿色", "无人艇", "快艇", "货船", "巡逻艇", "渔船", "军舰", "游艇", "拖船", "客船")
-        has_visual = any(token in question for token in visual_tokens) or any(token in description for token in visual_tokens)
-        if has_visual and meta.get("questionType") in {"track_list", "count", "registry_list", "registry_count"}:
-            # 有外观目标时，强制回到描述检索/描述统计
-            if meta.get("operation") == "count" or any(token in question for token in ("多少", "数量", "几艘", "几只")):
-                if meta.get("targetScope") == "registry":
-                    meta["questionType"] = "registry_description_count"
-                    meta["strategy"] = "registry_description_count"
-                else:
-                    meta["questionType"] = "description_count"
-                    meta["strategy"] = "track_description_count"
-            elif meta.get("targetScope") == "registry":
-                meta["questionType"] = "registry_description"
-                meta["strategy"] = "registry_description"
-            elif meta.get("targetScope") == "both":
-                meta["questionType"] = "cross_reference"
-                meta["strategy"] = "cross_reference"
+        weak = description in {"", "船", "船舶", "船只", "目标", "在库船", "未在库船", "库船", "未在", "在"}
+        if meta.get("questionType") == "relation_description" and weak:
+            # 无真实外观时，在库/未在库应走结构化库关系链路
+            meta["description"] = None
+            meta["targetKind"] = "all"
+            if meta.get("registryRelation") == "out":
+                meta["questionType"] = "out_of_registry"
+                meta["strategy"] = "registry_relation"
             else:
-                meta["questionType"] = "description"
-                meta["strategy"] = "track_description"
-            meta["targetKind"] = "description"
-            if not description:
-                meta["description"] = self.planner._description_text(question)
-        if meta.get("questionType") == "description" and not meta.get("description"):
-            meta["description"] = self.planner._description_text(question)
+                meta["questionType"] = "in_registry"
+                meta["strategy"] = "registry_relation"
+                meta["registryRelation"] = meta.get("registryRelation") or "in"
+        if meta.get("questionType") in {"description", "description_count", "registry_description", "registry_description_count", "relation_description"} and weak:
+            # 描述类问题缺少有效 targetText 时，避免 matchText 空转
+            if meta.get("questionType") == "description":
+                meta["questionType"] = "track_list"
+                meta["strategy"] = "track_list"
+                meta["targetKind"] = "all"
+                meta["description"] = None
+            elif meta.get("questionType") == "description_count":
+                meta["questionType"] = "count"
+                meta["strategy"] = "track_count"
+                meta["targetKind"] = "all"
+                meta["description"] = None
+            elif meta.get("questionType") == "registry_description":
+                meta["questionType"] = "registry_list"
+                meta["strategy"] = "registry_list"
+                meta["targetKind"] = "all"
+                meta["description"] = None
+            elif meta.get("questionType") == "registry_description_count":
+                meta["questionType"] = "registry_count"
+                meta["strategy"] = "registry_count"
+                meta["targetKind"] = "all"
+                meta["description"] = None
         return meta
 
     def _finalize_answer(self, result: dict[str, Any]) -> dict[str, Any]:

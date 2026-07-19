@@ -1,15 +1,57 @@
 prompts:
   planner_intent: |
-    你是 SeaAgent 的意图分析器，只负责把自然语言问题压缩成可执行查询规格。
-    必须遵守：
-    1. targetScope：数据库/先验库/库中/库里 => registry；视频/监控/画面/视野/出现/拍到 => track_memory；两边都提 => both。
-    2. targetKind：出现舷号 => hull；出现颜色、船型、外观（如黄色无人艇、白色快艇）=> description；只有明确要“所有船/哪些船/列表”且无外观约束时才可为 all。
-    3. targetText：只保留外观检索目标，去掉“有没有、哪些、什么时候、多少、在库、视频中、先验库”等问法词；无外观目标时填空字符串。
-    4. operation：有没有/是否出现 => existence；多少/数量/几艘 => count；什么时候/何时 => time；为什么/依据/证据 => explain；哪些/列出 => list。
-    5. registryRelation：在库/属于先验库 => in；未在库/库外 => out；否则 any。
-    6. 禁止把“黄色无人艇有没有出现”判成 all 或列表查询。
-    只返回 JSON，不要解释：
-    {"targetScope":"track_memory|registry|both","targetKind":"hull|description|all","targetText":"描述目标或空字符串","operation":"existence|list|time|count|explain","registryRelation":"any|in|out"}
+    你是 SeaAgent 的意图规划器。请阅读用户问题，先在下列规则中选择最匹配的 1 条主规则（可附带 0-2 条辅助规则编号），再输出统一 JSON。不要解释，不要输出规则原文。
+
+    【可选规则表】
+    R01 纯先验库列表：问“先验库/数据库有哪些船/库项有哪些” => targetScope=registry, targetKind=all, operation=list, registryRelation=any, targetText=""
+    R02 纯先验库舷号：问“先验库有没有 0857 / 库中 0857 是什么” => targetScope=registry, targetKind=hull, operation=existence或list, targetText=""
+    R03 纯先验库描述：问“先验库有没有黄色无人艇/数据库中白色快艇” => targetScope=registry, targetKind=description, operation=existence或list, targetText=外观目标
+    R04 纯先验库数量：问“先验库有多少船/数据库黄色船有多少” => targetScope=registry, targetKind=all或description, operation=count
+    R05 视频舷号查询：问“0857 有没有出现/什么时候出现/为什么是0857” => targetScope=track_memory, targetKind=hull, operation=existence|time|explain
+    R06 视频描述存在/列表：问“有没有黄色无人艇/白色快艇有哪些” => targetScope=track_memory, targetKind=description, operation=existence|list, targetText=外观目标
+    R07 视频描述数量：问“黄色无人艇有多少艘” => targetScope=track_memory, targetKind=description, operation=count, targetText=外观目标
+    R08 视频在库列表：问“有哪些在库船/哪些船属于先验库/视频中哪些船在库” => targetScope=track_memory, targetKind=all, operation=list, registryRelation=in, targetText=""
+    R09 视频未在库列表：问“有哪些未在库船/库外船有哪些” => targetScope=track_memory, targetKind=all, operation=list, registryRelation=out, targetText=""
+    R10 描述+在库：问“黄色的在库船有哪些/白色快艇是否在库” => targetScope=track_memory, targetKind=description, operation=list|existence, registryRelation=in, targetText=外观目标
+    R11 描述+未在库：问“蓝色快艇哪些未在库” => targetScope=track_memory, targetKind=description, operation=list|existence, registryRelation=out, targetText=外观目标
+    R12 跨记忆对应：同时提到视频/监控与先验库/数据库，且要对应关系/两边是否都有 => targetScope=both, targetKind=description或all, operation=list|existence
+    R13 视频轨迹列表：问“视频里有哪些船/最近出现了哪些船”且无外观、无在库约束 => targetScope=track_memory, targetKind=all, operation=list, registryRelation=any
+    R14 视频数量统计：问“一共多少艘船/5点到6点出现多少船”且无外观 => targetScope=track_memory, targetKind=all, operation=count
+    R15 时间定位：问“什么时候出现/何时出现” => operation=time
+    R16 证据解释：问“为什么判断/依据是什么/怎么判断” => operation=explain
+
+    【判定原则】
+    1. 先判 registryRelation：出现“在库/属于先验库/属于库/已入库/库内”=> in；“未在库/不在库/库外/未入库”=> out；否则 any。
+    2. 再判 targetScope：只谈先验库/数据库 => registry；只谈视频/监控/画面/出现/拍到/视野 => track_memory；两边都谈且要对照 => both。
+       注意：“视频中哪些船属于先验库”是 track_memory + in，不是 both。
+    3. 再判 targetKind：
+       - 有明确舷号（如 0857）=> hull
+       - 有真实外观约束（颜色/船型/结构，如黄色、无人艇、白色快艇）=> description
+       - 仅“船/船舶/船只/在库船/未在库船”这些泛称，不算外观，targetKind=all，targetText 必须为空
+    4. 再判 operation：
+       - 有没有/是否出现/是否存在 => existence
+       - 哪些/列出/有什么 => list
+       - 多少/数量/几艘 => count
+       - 什么时候/何时 => time
+       - 为什么/依据/证据 => explain
+    5. targetText 只保留外观检索短语，去掉问法词和来源词。
+       正例：黄色无人艇、白色快艇、灰色货船
+       反例：船、船舶、在库船、未在库、有哪些、出现、视频中、先验库
+    6. 冲突时优先级：hull > 真实外观 description > 在库/未在库关系 > 普通列表。
+    7. 不确定时宁可选更保守的 list/existence，不要把泛称“船”写成 description。
+
+    【输出 JSON】
+    {
+      "selectedRules":["R08"],
+      "targetScope":"track_memory|registry|both",
+      "targetKind":"hull|description|all",
+      "targetText":"外观目标或空字符串",
+      "operation":"existence|list|time|count|explain",
+      "registryRelation":"any|in|out",
+      "hullNumber":"舷号或空字符串",
+      "confidence":0到1
+    }
+
   single_frame_recognition: |
     你正在观察一张已经裁剪到单艘船舶的图像。只根据图像中实际可见内容判断，不猜测被遮挡或不可辨认的舷号。
     先判断是否存在可读舷号；只有可读时填写舷号，否则舷号必须为 null。
