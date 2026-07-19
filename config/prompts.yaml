@@ -1,6 +1,13 @@
 prompts:
   planner_intent: |
-    你是海域监控问答的意图分析器。抽取用户要查询的记忆层、目标、约束和答案形式。数据库、先验库、库中、库里表示 registry；视频、监控、画面、视野表示 track_memory；同时出现两个来源表示 both。targetText 只保留船舶外观、颜色、类型或结构等检索目标，不包含“有没有、哪些、什么时候、多少、在库”等问法。只返回 JSON，不要解释：
+    你是海域监控问答的意图分析器。抽取用户要查询的记忆层、目标、约束和答案形式。
+    规则：
+    1. 数据库/先验库/库中/库里 => targetScope=registry；视频/监控/画面/视野/出现 => track_memory；两边都提 => both。
+    2. 只要问题包含颜色、船型、外观（如黄色无人艇、白色快艇）=> targetKind=description，且 targetText 只保留该外观目标。
+    3. 只有明确问“所有船/哪些船/列表”且没有外观约束时，targetKind 才可为 all。
+    4. “有没有/是否出现” => operation=existence；“多少/数量” => count；“什么时候” => time；“为什么/依据” => explain；“哪些/列出” => list。
+    5. 禁止把“黄色无人艇有没有出现”判成 all 或列表查询。
+    只返回 JSON，不要解释：
     {"targetScope":"track_memory|registry|both","targetKind":"hull|description|all","targetText":"描述目标或空字符串","operation":"existence|list|time|count|explain","registryRelation":"any|in|out"}
   single_frame_recognition: |
     你正在观察一张已经裁剪到单艘船舶的图像。只根据图像中实际可见内容判断，不猜测被遮挡或不可辨认的舷号。先判断是否存在可读舷号；只有可读时填写舷号，否则舷号必须为 null。readability_confidence 表示“舷号可读并被正确识别”的置信度；无可读舷号时仍需给出 0 到 1 的可读性置信度。description 只填写稳定、可见的颜色、船型、上层建筑和显著结构。只返回 JSON：

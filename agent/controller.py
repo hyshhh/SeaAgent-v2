@@ -48,6 +48,7 @@ class AgentController:
         self.question = question.strip()
         self._emit("status", "创建问答会话", "正在解析用户意图与查询范围")
         self.meta = self.planner.classify(self.question)
+        self.meta = self._guard_meta(self.meta)
         scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
         self._emit(
             "classification",
@@ -891,6 +892,38 @@ class AgentController:
         result["registryDecision"] = "exact"
         return result
 
+
+
+    def _guard_meta(self, meta: dict[str, Any]) -> dict[str, Any]:
+        """防止意图被模型误判成轨迹列表，导致描述查询只跑一轮 getTrack。"""
+        question = self.question
+        description = str(meta.get("description") or "").strip()
+        visual_tokens = ("黄色", "白色", "灰色", "黑色", "蓝色", "红色", "绿色", "无人艇", "快艇", "货船", "巡逻艇", "渔船", "军舰", "游艇", "拖船", "客船")
+        has_visual = any(token in question for token in visual_tokens) or any(token in description for token in visual_tokens)
+        if has_visual and meta.get("questionType") in {"track_list", "count", "registry_list", "registry_count"}:
+            # 有外观目标时，强制回到描述检索/描述统计
+            if meta.get("operation") == "count" or any(token in question for token in ("多少", "数量", "几艘", "几只")):
+                if meta.get("targetScope") == "registry":
+                    meta["questionType"] = "registry_description_count"
+                    meta["strategy"] = "registry_description_count"
+                else:
+                    meta["questionType"] = "description_count"
+                    meta["strategy"] = "track_description_count"
+            elif meta.get("targetScope") == "registry":
+                meta["questionType"] = "registry_description"
+                meta["strategy"] = "registry_description"
+            elif meta.get("targetScope") == "both":
+                meta["questionType"] = "cross_reference"
+                meta["strategy"] = "cross_reference"
+            else:
+                meta["questionType"] = "description"
+                meta["strategy"] = "track_description"
+            meta["targetKind"] = "description"
+            if not description:
+                meta["description"] = self.planner._description_text(question)
+        if meta.get("questionType") == "description" and not meta.get("description"):
+            meta["description"] = self.planner._description_text(question)
+        return meta
 
     def _finalize_answer(self, result: dict[str, Any]) -> dict[str, Any]:
         """根据 operation 重组答案文本，保留原有证据与结论。"""

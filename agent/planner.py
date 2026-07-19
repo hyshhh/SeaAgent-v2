@@ -44,32 +44,90 @@ class Planner:
         return result
 
     def _refine_intent(self, question: str, heuristic: dict[str, Any]) -> dict[str, Any]:
-        """允许模型处理同义表达和组合问题，但不覆盖明确事实。"""
+        """模型只补充歧义项；舷号、显式来源、外观描述和明确操作不被覆盖。"""
+        locked_kind = heuristic.get("targetKind") in {"hull", "description"} or bool(heuristic.get("hullNumber"))
+        locked_scope = bool(heuristic.get("explicitScope"))
+        locked_relation = heuristic.get("registryRelation") in {"in", "out"}
+        locked_operation = heuristic.get("operation") in {"count", "time", "explain"} or any(
+            token in question for token in ("有没有", "是否有", "是否出现", "有无", "出现没有", "存在吗")
+        )
+        locked_description = bool(heuristic.get("description"))
+
         prompt = self.llm.prompts.get("planner_intent") if self.llm else None
         if not prompt or not self.llm:
             heuristic["intentSource"] = "heuristic"
-            return heuristic
+            return self._normalize_spec(question, heuristic)
+
         try:
             inferred = self.llm.complete_json(prompt + "\n用户问题：" + question)
         except Exception:
             heuristic["intentSource"] = "heuristic"
-            return heuristic
+            return self._normalize_spec(question, heuristic)
 
-        if not heuristic["explicitScope"] and inferred.get("targetScope") in self._SCOPES:
+        if not locked_scope and inferred.get("targetScope") in self._SCOPES:
             heuristic["targetScope"] = inferred["targetScope"]
-        if not heuristic["hullNumber"] and inferred.get("targetKind") in self._TARGET_KINDS:
+        if not locked_kind and inferred.get("targetKind") in self._TARGET_KINDS:
             heuristic["targetKind"] = inferred["targetKind"]
-        if inferred.get("operation") in self._OPERATIONS:
+        if not locked_operation and inferred.get("operation") in self._OPERATIONS:
             heuristic["operation"] = inferred["operation"]
-        if heuristic["registryRelation"] == "any" and inferred.get("registryRelation") in self._REGISTRY_RELATIONS:
+        if not locked_relation and inferred.get("registryRelation") in self._REGISTRY_RELATIONS:
             heuristic["registryRelation"] = inferred["registryRelation"]
+
         target_text = str(inferred.get("targetText") or "").strip()
-        if heuristic["targetKind"] == "description" and 1 <= len(target_text) <= 120:
-            heuristic["description"] = target_text
-        elif heuristic["targetKind"] != "description":
+        if heuristic.get("targetKind") == "description":
+            if 1 <= len(target_text) <= 120:
+                # 模型描述优先，但禁止把完整问句原样塞回
+                if target_text not in question or len(target_text) <= max(8, len(question) // 2):
+                    heuristic["description"] = target_text
+            elif not heuristic.get("description"):
+                heuristic["description"] = self._description_text(question)
+        elif not locked_description:
             heuristic["description"] = None
+
         heuristic["intentSource"] = "model"
-        return heuristic
+        return self._normalize_spec(question, heuristic)
+
+    def _normalize_spec(self, question: str, spec: dict[str, Any]) -> dict[str, Any]:
+        """最终约束：有外观描述就不能退化成轨迹列表。"""
+        if spec.get("hullNumber"):
+            spec["targetKind"] = "hull"
+            spec["description"] = None
+        else:
+            visual = self._has_visual_target(question) or self._has_visual_target(str(spec.get("description") or ""))
+            if visual:
+                spec["targetKind"] = "description"
+                if not spec.get("description"):
+                    spec["description"] = self._description_text(question)
+            elif spec.get("targetKind") == "description" and not spec.get("description"):
+                # 没有可检索描述时，才允许退回列表
+                if any(token in question for token in ("哪些", "列出", "有什么", "全部", "所有")):
+                    spec["targetKind"] = "all"
+                    spec["description"] = None
+
+        if spec.get("targetKind") == "description" and not spec.get("description"):
+            spec["description"] = self._description_text(question)
+
+        # 有没有/是否 类问题保持 existence，除非已是 count/time/explain
+        if spec.get("operation") not in {"count", "time", "explain"} and any(
+            token in question for token in ("有没有", "是否有", "是否出现", "有无", "存在吗")
+        ):
+            spec["operation"] = "existence"
+
+        # 描述存在时，禁止 all/list 直接列表化
+        if spec.get("description") and spec.get("targetKind") == "all":
+            spec["targetKind"] = "description"
+        return spec
+
+    @staticmethod
+    def _has_visual_target(text: str) -> bool:
+        if not text:
+            return False
+        visual_tokens = (
+            "黄色", "白色", "灰色", "黑色", "蓝色", "红色", "绿色",
+            "无人艇", "快艇", "货船", "巡逻艇", "渔船", "军舰", "游艇", "拖船", "客船",
+            "上层建筑", "船体",
+        )
+        return any(token in text for token in visual_tokens)
 
     @staticmethod
     def _explicit_scope(question: str) -> str | None:
@@ -102,13 +160,20 @@ class Planner:
         return None
 
     @staticmethod
-    def _target_kind(question: str, hull_match: re.Match[str] | None) -> str:
+    def _target_kind(question: str, hull_match: str | None) -> str:
         if hull_match:
             return "hull"
-        visual_tokens = ("黄色", "白色", "灰色", "黑色", "蓝色", "红色", "绿色", "无人艇", "快艇", "渔船", "巡逻艇", "货船", "帆船", "游艇", "舰艇", "船体", "上层建筑")
-        if any(token in question for token in visual_tokens):
+        if Planner._has_visual_target(question):
             return "description"
-        if any(token in question for token in ("哪些船", "什么船", "所有船", "全部船", "几艘", "多少艘", "船只", "船舶")):
+        # 只有明确要“全部/列表”且没有外观约束时，才视为 all
+        if any(token in question for token in ("哪些船", "什么船", "所有船", "全部船", "列出所有", "列表")) and not any(
+            token in question for token in ("黄色", "白色", "灰色", "黑色", "蓝色", "红色", "绿色", "无人艇", "快艇", "货船")
+        ):
+            return "all"
+        # 默认按描述检索，避免“有没有出现...”被误判成列表
+        if any(token in question for token in ("有没有", "是否", "出现", "找一下", "查找", "看见", "拍到")):
+            return "description"
+        if any(token in question for token in ("哪些", "有什么", "列出", "分别")):
             return "all"
         return "description"
 
