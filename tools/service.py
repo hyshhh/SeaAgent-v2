@@ -146,9 +146,25 @@ class ToolService:
         return {"ok": True, "registryItems": items, "registryReferenceIds": [item["referenceId"] for item in valid], "registryReferences": valid, "discardedReferenceIds": discarded, "unsearchableRegistryIds": [item["registryId"] for item in items if item["registryId"] not in searchable_ids]}
 
     def matchText(self, description: str, galleryImages: list[dict[str, Any]], topK: int | None = None) -> dict[str, Any]:
-        images = [item for item in galleryImages if item.get("isEmbedded") and item.get("keyframeVectorId") is not None]
         if not description.strip():
             return {"ok": False, "error": "description_required", "matches": []}
+        registry_images = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
+        if registry_images:
+            query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
+            vectors = self.vectors.registry.get_many(item["registryVectorId"] for item in registry_images)
+            grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+            for image in registry_images:
+                vector = vectors.get(int(image["registryVectorId"]))
+                if vector is not None:
+                    grouped.setdefault(str(image["registryId"]), []).append((float(np.dot(query, vector)), image))
+            matches = []
+            for registry_id, scored in grouped.items():
+                top = sorted(scored, key=lambda item: item[0], reverse=True)[:3]
+                score = float(np.mean([item[0] for item in top]))
+                matches.append({"matchedRegistryId": registry_id, "embeddingScore": round(score, 6), "scoreBand": self._band(score, "text"), "matchedRegistryReferenceIds": [item[1]["referenceId"] for item in top]})
+            matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
+            return {"ok": True, "matchMode": "text_to_registry", "matches": matches[:topK] if topK else matches}
+        images = [item for item in galleryImages if item.get("isEmbedded") and item.get("keyframeVectorId") is not None]
         if not images:
             return {"ok": True, "matchMode": "text_to_image", "matches": [], "missingKeyframeIds": []}
         query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])

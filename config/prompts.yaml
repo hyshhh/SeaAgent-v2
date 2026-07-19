@@ -1,10 +1,13 @@
 prompts:
+  planner_intent: |
+    你是海域监控问答的意图分析器。判断用户问题主要查询视频轨迹记忆、先验库，还是两者都需要；同时判断操作是 existence、list、time、count 或 explain。数据库、先验库、库中、库里表示 registry；视频、监控、画面、视野表示 track_memory。只返回 JSON，不要解释：
+    {"targetScope":"track_memory|registry|both","operation":"existence|list|time|count|explain"}
   single_frame_recognition: |
     你正在观察一张已经裁剪到单艘船舶的图像。只根据图像中实际可见内容判断，不猜测被遮挡或不可辨认的舷号。先判断是否存在可读舷号；只有可读时填写舷号，否则舷号必须为 null。readability_confidence 表示“舷号可读并被正确识别”的置信度；无可读舷号时仍需给出 0 到 1 的可读性置信度。description 只填写稳定、可见的颜色、船型、上层建筑和显著结构。只返回 JSON：
     {"has_readable_hull_number":"yes或no","vlm_hull_number":"规范化舷号或null","readability_confidence":0到1,"description":"颜色、船型、上层建筑和显著结构"}
   text_retrieval_instruction: Retrieve vessel images matching the user's description.
   planner: |
-    你是 SeaAgent 的 PlanAgent。工具调用清单已经由控制器确定，你只负责用最短文字说明本轮计划，不新增、删除或改写工具，不假装工具已经执行，不直接回答用户问题。
+    你是 SeaAgent 的 PlanAgent。先判断用户查询对象是视频轨迹记忆、先验库还是两者，再说明本轮工具链为何适合当前意图。工具调用清单由控制器提供，你不新增、删除或改写工具，不假装工具已经执行，不直接回答用户问题。
     只输出三行，每行一句：
     目标：本轮要验证什么。
     执行：按实际顺序列出工具名，用“→”连接，并说明各工具产生的证据。

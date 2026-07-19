@@ -54,7 +54,7 @@ class AgentController:
         self.display_record, self.display_groups = None, []
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
         try:
-            handlers = {"hull": self._answer_hull, "description": self._answer_description, "out_of_registry": lambda: self._answer_registry(False), "in_registry": lambda: self._answer_registry(True), "count": self._answer_count}
+            handlers = {"hull": self._answer_hull, "description": self._answer_description, "registry_description": self._answer_registry_description, "out_of_registry": lambda: self._answer_registry(False), "in_registry": lambda: self._answer_registry(True), "count": self._answer_count}
             result = handlers[self.meta["questionType"]]()
         except Exception as error:
             result = self._finish("执行失败", [], f"工具链执行失败：{error}", "uncertain", extra={"error": str(error)})
@@ -136,6 +136,22 @@ class AgentController:
         if unresolved or missing:
             return self._finish("无法确认", unresolved, "灰区证据或不可检索轨迹未形成稳定结论", "uncertain", display={"tracks": unresolved, "includeClips": True})
         return self._finish("未发现", [], "灰区候选经视觉核验均不符合目标描述", "sufficient")
+
+    def _answer_registry_description(self) -> dict[str, Any]:
+        description = self._description_target()
+        first = self._round("判断先验库中是否存在符合描述的库项", [
+            {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
+            {"id": "registryTextMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "registryCatalog.registryReferences"}, "topK": 3}},
+        ], "replan", "先判断目标属于先验库还是视频轨迹，再根据匹配分数决定是否需要补充核验")
+        match_result = self._result(first, "registryTextMatch")
+        matches = match_result.get("matches", [])
+        confirmed = [item for item in matches if item.get("scoreBand") == "match"]
+        uncertain = [item for item in matches if item.get("scoreBand") == "uncertain"]
+        if confirmed:
+            return self._finish("先验库中存在符合描述的库项", [], "文本与先验库参考图完成特征匹配", "sufficient", extra={"registryMatches": confirmed, "registryDescription": description})
+        if uncertain:
+            return self._finish("无法确认", [], "先验库存在相似但未达到确定阈值的库项", "uncertain", extra={"registryMatches": uncertain, "registryDescription": description})
+        return self._finish("先验库中未找到符合描述的库项", [], "先验库参考图均未达到匹配阈值", "sufficient", extra={"registryMatches": [], "registryDescription": description})
 
     def _answer_registry(self, want_in_registry: bool) -> dict[str, Any]:
         time_range = self.meta.get("timeRange")
@@ -247,7 +263,7 @@ class AgentController:
             raise RuntimeError("达到最大推理轮次")
         round_number = len(self.rounds) + 1
         self._emit("agent_start", "PlanAgent", "正在分析目标并组织工具计划", round=round_number, role="planner")
-        plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta))
+        plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
         public_plan = self._public_plan(plan, calls)
         self._emit("agent_end", "PlanAgent", "规划完成", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"))
 
@@ -408,6 +424,6 @@ class AgentController:
 
     def _description_target(self) -> str:
         question = self.question
-        for prefix in ("视频中有没有出现", "视频中是否出现", "有没有出现", "找一下", "查找一下"):
+        for prefix in ("数据库中有没有出现", "数据库中是否出现", "先验库中有没有出现", "先验库中是否出现", "视频中有没有出现", "视频中是否出现", "有没有出现", "找一下", "查找一下"):
             question = question.replace(prefix, "")
         return question.strip("？?。 ") or self.question
