@@ -586,19 +586,121 @@ class AgentController:
 
     def _answer_registry_description(self) -> dict[str, Any]:
         description = self.meta.get("description") or self._description_target()
-        first = self._round("判断先验库中是否存在符合描述的库项", [
-            {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
-            {"id": "registryTextMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "registryCatalog.registryReferences"}, "topK": 3}},
-        ], "replan", "先判断目标属于先验库还是视频轨迹，再根据匹配分数决定是否需要补充核验")
+        first = self._round(
+            "判断先验库中是否存在符合描述的库项",
+            [
+                {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
+                {"id": "registryTextMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "registryCatalog.registryReferences"}, "topK": 3}},
+            ],
+            "replan",
+            "先做文本-库图特征匹配；高分直接确认，灰区再对库参考图做视觉核验",
+        )
         match_result = self._result(first, "registryTextMatch")
         matches = match_result.get("matches", [])
         confirmed = [item for item in matches if item.get("scoreBand") == "match"]
         uncertain = [item for item in matches if item.get("scoreBand") == "uncertain"]
+        rejected = [item for item in matches if item.get("scoreBand") == "mismatch"]
+
         if confirmed:
-            return self._finish("先验库中存在符合描述的库项", [], "文本与先验库参考图完成特征匹配", "sufficient", extra={"registryMatches": confirmed, "registryDescription": description})
+            refs = []
+            for item in confirmed:
+                refs.extend(item.get("matchedRegistryReferenceIds") or [])
+            if refs and len(self.rounds) < self.max_rounds:
+                self._round(
+                    "展示命中的先验库参考图证据",
+                    [{"id": "registryShow", "tool": "showEvidence", "arguments": {"registryReferenceIds": list(dict.fromkeys(refs))[:6]}}],
+                    "sufficient",
+                    "返回已确认库项及参考图",
+                )
+            return self._finish(
+                "先验库中存在符合描述的库项",
+                [],
+                f"目标描述：{description}；特征匹配达到确定阈值",
+                "sufficient",
+                extra={"registryMatches": confirmed, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs))},
+            )
+
+        if uncertain and len(self.rounds) < self.max_rounds:
+            calls = []
+            for index, item in enumerate(uncertain[: self.display_limit]):
+                ref_ids = item.get("matchedRegistryReferenceIds") or []
+                if not ref_ids:
+                    continue
+                calls.append({
+                    "id": f"verifyRegistryDesc{index}",
+                    "tool": "verifyTarget",
+                    "arguments": {"description": description, "registryReferenceIds": ref_ids[:3]},
+                })
+            if calls:
+                second = self._round(
+                    "对先验库描述匹配灰区做视觉核验",
+                    calls,
+                    "uncertain",
+                    "用库参考图核对是否真正符合文字描述，避免仅因相似度灰区直接放弃",
+                )
+                verified, still_uncertain = [], []
+                for index, item in enumerate(uncertain[: self.display_limit]):
+                    if not item.get("matchedRegistryReferenceIds"):
+                        still_uncertain.append(item)
+                        continue
+                    decision = self._result(second, f"verifyRegistryDesc{index}").get("decision", "uncertain")
+                    enriched = dict(item)
+                    enriched["verifyDecision"] = decision
+                    if decision == "match":
+                        enriched["scoreBand"] = "verified"
+                        verified.append(enriched)
+                    elif decision == "mismatch":
+                        rejected.append(enriched)
+                    else:
+                        still_uncertain.append(enriched)
+                if verified:
+                    refs = []
+                    for item in verified:
+                        refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                    if refs and len(self.rounds) < self.max_rounds:
+                        self._round(
+                            "展示核验通过的先验库参考图",
+                            [{"id": "registryVerifiedShow", "tool": "showEvidence", "arguments": {"registryReferenceIds": list(dict.fromkeys(refs))[:6]}}],
+                            "sufficient",
+                            "返回视觉核验通过的库项",
+                        )
+                    return self._finish(
+                        "先验库中存在符合描述的库项",
+                        [],
+                        f"目标描述：{description}；灰区库项经视觉核验确认",
+                        "sufficient",
+                        extra={"registryMatches": verified, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs)), "rejectedRegistryMatches": rejected},
+                    )
+                if still_uncertain:
+                    refs = []
+                    for item in still_uncertain:
+                        refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                    return self._finish(
+                        "无法确认",
+                        [],
+                        f"目标描述：{description}；存在相似库项但视觉核验仍无法确认",
+                        "uncertain",
+                        extra={"registryMatches": still_uncertain, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs)), "rejectedRegistryMatches": rejected},
+                    )
+
         if uncertain:
-            return self._finish("无法确认", [], "先验库存在相似但未达到确定阈值的库项", "uncertain", extra={"registryMatches": uncertain, "registryDescription": description})
-        return self._finish("先验库中未找到符合描述的库项", [], "先验库参考图均未达到匹配阈值", "sufficient", extra={"registryMatches": [], "registryDescription": description})
+            refs = []
+            for item in uncertain:
+                refs.extend(item.get("matchedRegistryReferenceIds") or [])
+            return self._finish(
+                "无法确认",
+                [],
+                f"目标描述：{description}；存在灰区匹配但没有剩余轮次完成视觉核验",
+                "uncertain",
+                extra={"registryMatches": uncertain, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs))},
+            )
+        return self._finish(
+            "先验库中未找到符合描述的库项",
+            [],
+            f"目标描述：{description}；特征匹配均未达到接受阈值",
+            "sufficient",
+            extra={"registryMatches": [], "registryDescription": description, "rejectedRegistryMatches": rejected},
+        )
 
     def _answer_registry(self, want_in_registry: bool) -> dict[str, Any]:
         time_range = self.meta.get("timeRange")

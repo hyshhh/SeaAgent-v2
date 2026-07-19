@@ -232,19 +232,43 @@ class ToolService:
         return {"ok": True, "matchMode": "image_to_image", "queryType": "track" if query_is_track else "registry", "matches": matches, "missingKeyframeIds": missing_keyframes, "missingRegistryReferenceIds": missing_references}
 
     def verifyTarget(self, description: str | None = None, registryReferenceIds: list[str] | None = None, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None) -> dict[str, Any]:
-        if bool(description) == bool(registryReferenceIds) or bool(keyframeIds) == bool(shipSegmentIds):
-            return {"ok": False, "error": "one_target_and_one_evidence_type_required", "decision": "uncertain"}
+        """支持三类核验：
+        1) 文字描述 vs 轨迹关键帧/片段
+        2) 库参考图 vs 轨迹关键帧/片段
+        3) 文字描述 vs 库参考图（先验库描述灰区）
+        """
+        has_description = bool(description and str(description).strip())
+        has_registry = bool(registryReferenceIds)
+        has_keyframes = bool(keyframeIds)
+        has_segments = bool(shipSegmentIds)
+        text_to_registry = has_description and has_registry and not has_keyframes and not has_segments
+        text_to_track = has_description and not has_registry and (has_keyframes != has_segments)
+        registry_to_track = has_registry and not has_description and (has_keyframes != has_segments)
+        if not (text_to_registry or text_to_track or registry_to_track):
+            return {"ok": False, "error": "unsupported_verify_combination", "decision": "uncertain"}
+
         references = self.repository.references_by_ids(registryReferenceIds or [])
         reference_paths = [item["imagePath"] for item in references if Path(item["imagePath"]).exists()][:3]
-        if keyframeIds:
-            frames = self.repository.keyframes_by_ids(keyframeIds)
-            evidence = [item["keyframePath"] for item in frames if Path(item["keyframePath"]).exists()][:6 if description else 3]
+        if has_keyframes:
+            frames = self.repository.keyframes_by_ids(keyframeIds or [])
+            evidence = [item["keyframePath"] for item in frames if Path(item["keyframePath"]).exists()][:6 if has_description else 3]
+        elif has_segments:
+            evidence = self._sample_segments(shipSegmentIds or [], 6 if has_description else 3)
         else:
-            evidence = self._sample_segments(shipSegmentIds or [], 6 if description else 3)
-        if not evidence or not description and not reference_paths:
-            return {"ok": True, "targetType": "description" if description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": "uncertain", "facts": ["视觉证据不足"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
-        result = self.llm.verify(description, reference_paths, evidence)
-        return {"ok": True, "targetType": "description" if description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
+            # 文字描述核验先验库：库参考图本身作为待审图像
+            evidence = reference_paths[:3]
+
+        if text_to_registry:
+            if not evidence:
+                return {"ok": True, "targetType": "description_registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": "uncertain", "facts": ["先验库参考图不可用"], "keyframeIds": [], "shipSegmentIds": []}
+            result = self.llm.verify(description, [], evidence)
+            return {"ok": True, "targetType": "description_registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": [], "shipSegmentIds": []}
+
+        if not evidence or (registry_to_track and not reference_paths):
+            return {"ok": True, "targetType": "description" if has_description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": "uncertain", "facts": ["视觉证据不足"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
+        result = self.llm.verify(description if has_description else None, reference_paths, evidence)
+        return {"ok": True, "targetType": "description" if has_description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
+
 
     def showEvidence(self, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None, registryReferenceIds: list[str] | None = None) -> dict[str, Any]:
         return {"ok": True, "displayId": f"display-{uuid.uuid4().hex[:12]}", "shownKeyframeIds": (keyframeIds or [])[:3], "shownShipSegmentIds": (shipSegmentIds or [])[:3], "shownRegistryReferenceIds": (registryReferenceIds or [])[:6]}
