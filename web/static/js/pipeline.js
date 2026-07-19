@@ -10,6 +10,7 @@ const PIPE_API = '/api/pipeline';
 document.addEventListener('DOMContentLoaded', () => {
   const videoTab = document.getElementById('tab-monitoring');
   if (videoTab?.classList.contains('active')) {
+    initializeContinuousMonitorControls();
     loadVideoList();
     loadTaskHistory();
   }
@@ -57,6 +58,9 @@ let _h264SourceBuffer = null;// SourceBuffer
 let _h264ObjectUrl = null;   // MediaSource 对象地址
 let _h264Queue = [];         // 积压的 segment 队列
 let videoListLoading = false;
+let videoCatalog = [];
+let continuousSelectedVideos = new Set();
+let continuousMonitorState = null;
 
 // ── 视频上传 ──
 const videoUploadZone = document.getElementById('videoUploadZone');
@@ -160,23 +164,30 @@ async function loadVideoList() {
     const resp = await fetch(`${PIPE_API}/videos`, { signal: controller.signal });
     if (!resp.ok) throw new Error(`请求失败 (${resp.status})`);
     const data = await resp.json();
-    if (!data.videos.length) {
+    videoCatalog = data.videos || [];
+    const availableNames = new Set(videoCatalog.map(video => video.filename));
+    continuousSelectedVideos = new Set([...continuousSelectedVideos].filter(name => availableNames.has(name)));
+    if (!videoCatalog.length) {
       container.innerHTML = '<div class="empty-msg">暂无视频，请上传</div>';
+      updateContinuousMonitorControls();
       return;
     }
-    container.innerHTML = data.videos.map(v => `
-      <div class="video-item ${selectedVideo === v.filename ? 'selected' : ''}"
+    container.innerHTML = videoCatalog.map((v, index) => `
+      <div class="video-item ${selectedVideo === v.filename ? 'selected' : ''} ${continuousSelectedVideos.has(v.filename) ? 'sequence-selected' : ''}"
            onclick="selectVideo(this.dataset.name, this)" data-name="${safeAttr(v.filename)}">
+        <label class="video-sequence-check" onclick="event.stopPropagation()" title="加入连续监控序列"><input type="checkbox" data-name="${safeAttr(v.filename)}" ${continuousSelectedVideos.has(v.filename) ? 'checked' : ''} onchange="toggleContinuousVideo(this.dataset.name, this.checked)"></label>
+        <span class="video-sequence-index">${index + 1}</span>
         <div class="video-item-icon">🎬</div>
         <div class="video-item-info">
-          <div class="video-item-name">${escHtml(v.filename)}</div>
-          <div class="video-item-meta">${v.size_mb == null ? '视频文件' : `${v.size_mb} MB`}</div>
+           <div class="video-item-name">${escHtml(v.filename)}</div>
+           <div class="video-item-meta">${v.size_mb == null ? '视频文件' : `${v.size_mb} MB`}<span class="video-sequence-state" data-sequence-state="${safeAttr(v.filename)}">${continuousSelectedVideos.has(v.filename) ? '待处理' : '未加入'}</span></div>
         </div>
         <div class="video-item-actions">
           <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteVideo(this.dataset.name)" data-name="${safeAttr(v.filename)}">🗑️</button>
         </div>
       </div>
     `).join('');
+    updateContinuousMonitorControls();
   } catch (e) {
     const message = e.name === 'AbortError' ? '目录响应超时，请检查视频盘是否已挂载' : e.message;
     container.innerHTML = `<div class="empty-msg">加载失败：${escHtml(message)}<br><button class="btn btn-sm" onclick="loadVideoList()">重新加载</button></div>`;
@@ -187,6 +198,10 @@ async function loadVideoList() {
 }
 
 function selectVideo(filename, el) {
+  if (continuousMonitorState) {
+    showToast('连续监控进行中，请先停止当前序列', 'info');
+    return;
+  }
   // 如果有 pipeline 在运行，先提示用户
   if (currentTaskId) {
     if (!confirm('当前有 Pipeline 正在运行，切换视频将停止当前任务。是否继续？')) return;
@@ -230,12 +245,17 @@ function showVideoPreview(filename) {
 }
 
 async function deleteVideo(filename) {
+  if (continuousMonitorState) {
+    showToast('连续监控进行中，暂不能删除视频', 'info');
+    return;
+  }
   if (!confirm(`确定删除视频 "${filename}"？`)) return;
   try {
     const resp = await fetch(`${PIPE_API}/videos/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || '删除失败');
     showToast('已删除: ' + filename);
+    continuousSelectedVideos.delete(filename);
     if (selectedVideo === filename) {
       selectedVideo = null;
       document.getElementById('pipelineControl').style.display = 'none';
@@ -283,17 +303,24 @@ function collectCameraParams() {
 
 async function startVideoPipeline() {
   if (!selectedVideo) { showToast('请先选择视频', 'error'); return; }
+  await launchVideoPipeline(selectedVideo, null, false);
+}
+
+async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMode = false) {
 
   const btn = document.getElementById('btnStartPipeline');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="loading-spinner"></span> 启动中...';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> 启动中...';
+  }
 
   try {
     const resp = await fetch(`${PIPE_API}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        video_filename: selectedVideo,
+        video_filename: filename,
+        monitor_start_time: monitorStartTime,
         ...collectVideoParams(),
       }),
     });
@@ -301,10 +328,13 @@ async function startVideoPipeline() {
     if (!resp.ok) throw new Error(data.detail || '启动失败');
 
     currentTaskId = data.task_id;
-    showToast(`Pipeline 已启动 (${currentTaskId})`);
-    updatePipelineStatus('running', '处理中...');
-    document.getElementById('btnStartPipeline').style.display = 'none';
-    document.getElementById('btnStopPipeline').style.display = '';
+    if (continuousMonitorState && sequenceMode) continuousMonitorState.currentTaskId = currentTaskId;
+    if (!sequenceMode) showToast(`流水线已启动 (${currentTaskId})`);
+    updatePipelineStatus('running', sequenceMode ? `连续监控处理中：${filename}` : '处理中...');
+    const startButton = document.getElementById('btnStartPipeline');
+    const stopButton = document.getElementById('btnStopPipeline');
+    if (startButton) startButton.style.display = 'none';
+    if (stopButton) stopButton.style.display = '';
 
     // 实时预览：H.264 WebSocket 推流 + MSE 播放
     const resultPlaceholder = document.getElementById('resultPlaceholder');
@@ -319,11 +349,100 @@ async function startVideoPipeline() {
 
     connectStreamWs(currentTaskId);
     startStatusPolling();
+    return true;
   } catch (e) {
-    showToast('启动失败: ' + e.message, 'error');
+    if (!sequenceMode) showToast('启动失败: ' + e.message, 'error');
+    else showToast(`启动失败：${filename}`, 'error');
+    return false;
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = '▶ 开始处理';
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '▶ 开始处理';
+    }
+    updateContinuousMonitorControls();
+  }
+}
+
+async function startContinuousMonitoring() {
+  if (continuousMonitorState) return;
+  const queue = videoCatalog.map(video => video.filename).filter(filename => continuousSelectedVideos.has(filename));
+  if (!queue.length) {
+    showToast('请先勾选要连续监控的视频，或点击全选', 'error');
+    return;
+  }
+  const startInput = document.getElementById('continuousStartTime');
+  const startTime = startInput ? new Date(startInput.value).getTime() / 1000 : NaN;
+  if (!Number.isFinite(startTime) || startTime <= 0) {
+    showToast('请设置有效的监控起始时间', 'error');
+    return;
+  }
+  const gapInput = document.getElementById('continuousGapSeconds');
+  const parsedGap = Number(gapInput?.value || 0);
+  const gapSeconds = Number.isFinite(parsedGap) ? Math.max(0, parsedGap) : 0;
+  continuousMonitorState = {
+    queue,
+    index: 0,
+    cursor: startTime,
+    gapSeconds,
+    failurePolicy: document.getElementById('continuousFailurePolicy')?.value || 'skip',
+    currentTaskId: null,
+    cancelled: false,
+    results: [],
+  };
+  updateContinuousMonitorControls();
+  await startNextContinuousVideo();
+}
+
+async function startNextContinuousVideo() {
+  const state = continuousMonitorState;
+  if (!state || state.cancelled) return;
+  if (state.index >= state.queue.length) {
+    finishContinuousMonitoring('连续监控序列已完成', 'completed');
+    return;
+  }
+  const filename = state.queue[state.index];
+  selectedVideo = filename;
+  markSequenceVideo(filename, 'running');
+  showVideoPreview(filename);
+  clearPoolTables();
+  updateContinuousProgress(`正在处理 ${state.index + 1} / ${state.queue.length}：${filename}`);
+  const started = await launchVideoPipeline(filename, state.cursor, true);
+  if (!started) handleContinuousFailure(filename, '启动失败');
+}
+
+function handleContinuousFailure(filename, reason) {
+  const state = continuousMonitorState;
+  if (!state) return;
+  state.results.push({filename, status: 'failed', reason});
+  markSequenceVideo(filename, 'failed');
+  if (state.cancelled || state.failurePolicy === 'stop') {
+    finishContinuousMonitoring(`连续监控已停止：${filename}`, 'failed');
+    return;
+  }
+  state.index += 1;
+  updateContinuousProgress(`已跳过 ${filename}，准备处理下一段`);
+  setTimeout(startNextContinuousVideo, 250);
+}
+
+function finishContinuousMonitoring(message, status = 'completed') {
+  const state = continuousMonitorState;
+  continuousMonitorState = null;
+  updateContinuousMonitorControls();
+  resetPipelineButtons();
+  updatePipelineStatus(status, message);
+  updateContinuousProgress(message);
+  if (status === 'completed') showToast(message);
+  else showToast(message, 'info');
+  loadTaskHistory();
+}
+
+async function stopContinuousMonitoring() {
+  if (!continuousMonitorState) return;
+  continuousMonitorState.cancelled = true;
+  if (currentTaskId) {
+    await stopVideoPipeline();
+  } else {
+    finishContinuousMonitoring('连续监控已停止', 'failed');
   }
 }
 
@@ -547,6 +666,7 @@ function disconnectStreamWs() {
 async function stopVideoPipeline() {
   if (!currentTaskId) return;
   const taskId = currentTaskId;
+  const stoppingSequence = Boolean(continuousMonitorState);
 
   // 立即停止轮询，防止后续 pollTaskStatus 干扰新任务
   stopStatusPolling();
@@ -576,6 +696,7 @@ async function stopVideoPipeline() {
   _restoreResultPlaceholder();
 
   loadTaskHistory();
+  if (stoppingSequence) finishContinuousMonitoring('连续监控已停止', 'failed');
 }
 
 function startStatusPolling() {
@@ -620,8 +741,30 @@ async function pollTaskStatus() {
       if (currentTaskId === taskId) {
         await pollPoolStatus(taskId);
         stopStatusPolling();
-        resetPipelineButtons();
         disconnectStreamWs();
+        currentTaskId = null;
+        const sequence = continuousMonitorState;
+        if (sequence && sequence.currentTaskId === taskId) {
+          const filename = sequence.queue[sequence.index];
+          const summary = data.summary || {};
+          const duration = Number(summary.video_duration_seconds || 0);
+          const monitorEnd = Number(summary.monitor_end_time);
+          sequence.results.push({filename, status: 'completed'});
+          markSequenceVideo(filename, 'completed');
+          sequence.cursor = Number.isFinite(monitorEnd) && monitorEnd > 0 ? monitorEnd + sequence.gapSeconds : sequence.cursor + duration + sequence.gapSeconds;
+          sequence.index += 1;
+          sequence.currentTaskId = null;
+          if (sequence.cancelled) {
+            finishContinuousMonitoring('连续监控已停止', 'failed');
+          } else if (sequence.index >= sequence.queue.length) {
+            finishContinuousMonitoring('连续监控序列已完成', 'completed');
+          } else {
+            updateContinuousProgress(`已完成 ${sequence.index} / ${sequence.queue.length}，准备切换下一段`);
+            setTimeout(startNextContinuousVideo, 250);
+          }
+          return;
+        }
+        resetPipelineButtons();
         showToast('✅ 处理完成!');
         const resultPlaceholder = document.getElementById('resultPlaceholder');
         if (resultPlaceholder) {
@@ -630,23 +773,29 @@ async function pollTaskStatus() {
           resultPlaceholder.style.cssText = '';
         }
         loadTaskHistory();
-        currentTaskId = null;
       }
     } else if (data.status === 'failed') {
       if (currentTaskId === taskId) {
         await pollPoolStatus(taskId);
         stopStatusPolling();
-        resetPipelineButtons();
         disconnectStreamWs();
-        _restoreResultPlaceholder();
         const errorMsg = data.error || '未知错误';
+        currentTaskId = null;
+        const sequence = continuousMonitorState;
+        if (sequence && sequence.currentTaskId === taskId) {
+          const filename = sequence.queue[sequence.index];
+          sequence.currentTaskId = null;
+          handleContinuousFailure(filename, errorMsg);
+          return;
+        }
+        resetPipelineButtons();
+        _restoreResultPlaceholder();
         if (errorMsg === '用户手动停止') {
           showToast('已停止', 'info');
         } else {
           showToast('处理失败: ' + errorMsg, 'error');
         }
         loadTaskHistory();
-        currentTaskId = null;
       }
     }
   } catch (e) {
@@ -682,6 +831,75 @@ function renderPoolRows(elementId, rows, emptyText) {
       <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
     </div>`;
   }).join('');
+}
+
+function initializeContinuousMonitorControls() {
+  const input = document.getElementById('continuousStartTime');
+  if (input && !input.value) {
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    input.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  }
+  updateContinuousMonitorControls();
+}
+
+function toggleContinuousVideo(filename, checked) {
+  if (continuousMonitorState) return;
+  if (checked) continuousSelectedVideos.add(filename);
+  else continuousSelectedVideos.delete(filename);
+  const item = [...document.querySelectorAll('.video-item')].find(node => node.dataset.name === filename);
+  if (item) item.classList.toggle('sequence-selected', checked);
+  const stateLabel = [...document.querySelectorAll('.video-sequence-state')].find(node => node.dataset.sequenceState === filename);
+  if (stateLabel) stateLabel.textContent = checked ? '待处理' : '未加入';
+  updateContinuousMonitorControls();
+}
+
+function toggleAllContinuousVideos(checked) {
+  if (continuousMonitorState) return;
+  continuousSelectedVideos = checked ? new Set(videoCatalog.map(video => video.filename)) : new Set();
+  document.querySelectorAll('.video-sequence-check input').forEach(input => { input.checked = checked; });
+  document.querySelectorAll('.video-item').forEach(item => item.classList.toggle('sequence-selected', checked));
+  document.querySelectorAll('.video-sequence-state').forEach(label => { label.textContent = checked ? '待处理' : '未加入'; });
+  updateContinuousMonitorControls();
+}
+
+function updateContinuousMonitorControls() {
+  const selectedCount = document.getElementById('continuousSelectedCount');
+  const selectAll = document.getElementById('continuousSelectAll');
+  const startButton = document.getElementById('btnStartContinuous');
+  const stopButton = document.getElementById('btnStopContinuous');
+  const active = Boolean(continuousMonitorState);
+  const count = continuousSelectedVideos.size;
+  if (selectedCount) selectedCount.textContent = `已选 ${count} 条`;
+  if (selectAll) {
+    selectAll.checked = videoCatalog.length > 0 && count === videoCatalog.length;
+    selectAll.indeterminate = count > 0 && count < videoCatalog.length;
+    selectAll.disabled = active;
+  }
+  const singleStartButton = document.getElementById('btnStartPipeline');
+  if (singleStartButton) singleStartButton.disabled = active;
+  if (startButton) startButton.disabled = active || count === 0;
+  if (stopButton) stopButton.style.display = active ? '' : 'none';
+  document.querySelectorAll('.video-sequence-check input').forEach(input => { input.disabled = active; });
+  ['continuousStartTime', 'continuousGapSeconds', 'continuousFailurePolicy'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.disabled = active;
+  });
+}
+
+function updateContinuousProgress(text) {
+  const element = document.getElementById('continuousProgress');
+  if (element) element.textContent = text;
+}
+
+function markSequenceVideo(filename, state) {
+  document.querySelectorAll('.video-item').forEach(item => {
+    item.classList.remove('sequence-running', 'sequence-completed', 'sequence-failed');
+    if (item.dataset.name === filename) item.classList.add(`sequence-${state}`);
+  });
+  const stateLabels = {running: '处理中', completed: '已完成', failed: '已跳过'};
+  const label = [...document.querySelectorAll('.video-sequence-state')].find(node => node.dataset.sequenceState === filename);
+  if (label) label.textContent = stateLabels[state] || '待处理';
 }
 
 function renderTrackRows(rows) {

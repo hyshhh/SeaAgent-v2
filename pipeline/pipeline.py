@@ -21,6 +21,7 @@ class ShipPipeline:
         self._config = config or load_config()
         settings = self._config["pipeline"]
         self._target_fps = float(settings.get("target_fps", 0))
+        self._monitor_start_time = float(settings.get("monitor_start_time", 0))
         self._detect_every_n = max(1, int(settings.get("detect_every_n_frames", 1)))
         self._demo_enabled = bool(settings.get("demo", True))
         self._save_output_video = bool(settings.get("save_output_video", True))
@@ -101,7 +102,10 @@ class ShipPipeline:
                         break
             self._memory.finalize_all()
             elapsed = max(1e-6, time.time() - start)
-            return {"total_frames": frame_index, "processed_frames": processed, "total_detections": detections_total, "total_tracks": len(seen_track_ids), "elapsed_seconds": round(elapsed, 2), "avg_fps": round(processed / elapsed, 2), "output_path": output_path or ""}
+            video_duration = frame_index / source_fps
+            monitor_start_time = self._monitor_start_time or start
+            monitor_end_time = monitor_start_time + video_duration if self._monitor_start_time else time.time()
+            return {"total_frames": frame_index, "processed_frames": processed, "total_detections": detections_total, "total_tracks": len(seen_track_ids), "video_duration_seconds": round(video_duration, 6), "monitor_start_time": monitor_start_time, "monitor_end_time": monitor_end_time, "elapsed_seconds": round(elapsed, 2), "avg_fps": round(processed / elapsed, 2), "output_path": output_path or ""}
         finally:
             try:
                 if self._memory.active:

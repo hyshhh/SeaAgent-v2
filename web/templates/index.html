@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=12">
+<link rel="stylesheet" href="/static/css/style.css?v=13">
 </head>
 <body>
 <header class="app-header">
@@ -64,6 +64,16 @@
             <input id="videoFileInput" type="file" accept="video/*" hidden>
           </div>
           <div class="upload-progress" id="videoUploadProgress" style="display:none"><div class="progress-track"><div id="videoProgressBar"></div></div><span id="videoProgressText">0%</span></div>
+          <div class="continuous-monitor-box">
+            <div class="continuous-monitor-head"><div><strong>连续监控序列</strong><span>逐段处理所选视频并保持连续监控时间</span></div><em id="continuousSelectedCount">已选 0 条</em></div>
+            <div class="continuous-monitor-options">
+              <label class="continuous-select-all"><input id="continuousSelectAll" type="checkbox" onchange="toggleAllContinuousVideos(this.checked)">全选视频</label>
+              <label>监控起始时间<input id="continuousStartTime" type="datetime-local" step="1"></label>
+              <label>片段间隔<input id="continuousGapSeconds" type="number" value="0" min="0" max="86400" step="1"><span>秒</span></label>
+              <label>失败处理<select id="continuousFailurePolicy"><option value="skip">跳过并继续</option><option value="stop">立即停止</option></select></label>
+            </div>
+            <div class="continuous-monitor-actions"><button class="btn secondary" id="btnStartContinuous" onclick="startContinuousMonitoring()">开始连续监控</button><button class="btn danger" id="btnStopContinuous" onclick="stopContinuousMonitoring()" style="display:none">停止连续监控</button><span id="continuousProgress">等待选择视频</span></div>
+          </div>
           <div class="video-list" id="videoList"><div class="empty-msg">正在加载视频列表…</div></div>
         </section>
         <section class="panel compact-panel">
@@ -269,7 +279,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=6"></script>
-<script src="/static/js/pipeline.js?v=10"></script>
+<script src="/static/js/pipeline.js?v=11"></script>
   <script src="/static/js/memory.js?v=4"></script>
 <script src="/static/js/agent.js?v=10"></script>
 <script src="/static/js/settings.js?v=1"></script>

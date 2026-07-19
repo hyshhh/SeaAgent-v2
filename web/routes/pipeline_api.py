@@ -200,6 +200,7 @@ def _get_stream_dir(task_id: str) -> Path:
 class PipelineStartRequest(BaseModel):
     video_filename: str
     display: bool = False
+    monitor_start_time: float | None = None  # 连续监控序列中的模拟起始时间
     # ── 核心检测参数 ──
     conf_threshold: float = 0.25
     iou_threshold: float = 0.45
@@ -241,9 +242,12 @@ class PipelineStartResponse(BaseModel):
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
+    video_filename: str | None = None
     progress: str | None = None
     output_filename: str | None = None
     error: str | None = None
+    monitor_start_time: float | None = None
+    summary: dict[str, Any] | None = None
 
 
 class VideoListResponse(BaseModel):
@@ -768,6 +772,8 @@ async def start_pipeline(req: PipelineStartRequest):
     # ── 帧率控制 ──
     if req.target_fps > 0:
         cmd.extend(["--target-fps", str(req.target_fps)])
+    if req.monitor_start_time is not None and req.monitor_start_time > 0:
+        cmd.extend(["--monitor-start-time", str(req.monitor_start_time)])
 
     # ── 高级参数 ──
     if req.max_frames > 0:
@@ -814,6 +820,7 @@ async def start_pipeline(req: PipelineStartRequest):
             "progress": "处理中...",
             "error": None,
             "is_camera": is_camera,
+            "monitor_start_time": req.monitor_start_time,
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0

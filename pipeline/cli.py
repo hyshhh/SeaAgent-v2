@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iou", type=float, default=None, help="交并比阈值")
     parser.add_argument("--detect-every", type=int, default=None, help="每多少帧执行一次检测")
     parser.add_argument("--target-fps", type=float, default=None, help="目标处理帧率，零表示不限制")
+    parser.add_argument("--monitor-start-time", type=float, default=None, help="连续监控序列中的模拟起始时间戳")
     parser.add_argument("--camera", action="store_true", help="相机输入标记")
     parser.add_argument("--frames-dir", default=None, help="浏览器摄像头共享帧目录")
     parser.add_argument("--virtual-fps", type=float, default=15.0, help="共享帧目录的虚拟帧率")
@@ -52,6 +53,8 @@ def _merge_args_to_config(args, config: dict) -> dict:
         pipeline["detect_every_n_frames"] = max(1, args.detect_every)
     if args.target_fps is not None:
         pipeline["target_fps"] = max(0.0, args.target_fps)
+    if args.monitor_start_time is not None:
+        pipeline["monitor_start_time"] = max(0.0, args.monitor_start_time)
     if args.no_output:
         pipeline["no_output"] = True
     if args.save_output_video is not None:

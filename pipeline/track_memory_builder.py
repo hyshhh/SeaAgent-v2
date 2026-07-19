@@ -67,6 +67,7 @@ class TrackMemoryBuilder:
         self._source_path = ""
         self._source_fps = 25.0
         self._frame_size = [0, 0]
+        self._monitor_start_time = float(self.settings.get("monitor_start_time", 0))
         self._last_maintenance_time = -1.0
         self.trace: list[dict[str, Any]] = []
         self._pool_event_callback = pool_event_callback
@@ -122,7 +123,7 @@ class TrackMemoryBuilder:
     def observe(self, frame: np.ndarray, detections: list[Any], frame_index: int, timestamp: float, source_path: str = "", source_fps: float = 25.0) -> None:
         self._source_path, self._source_fps = source_path, float(source_fps or 25)
         self._frame_size = [int(frame.shape[1]), int(frame.shape[0])]
-        observed_at = time.time()
+        observed_at = self._monitor_start_time + timestamp if self._monitor_start_time > 0 else time.time()
         seen = set()
         interval = max(1, int(self.settings.get("candidate_every_n_frames", 10)))
         with self._lock:
