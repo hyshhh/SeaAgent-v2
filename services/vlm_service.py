@@ -46,6 +46,13 @@ class AgentLLMService:
         self.settings = self.config["llm"]
         self.prompts = self.config.get("prompts", {})
 
+    def _prompt(self, key: str) -> str:
+        prompts = self.config.get("prompts", self.prompts) if isinstance(self.config, dict) else self.prompts
+        value = (prompts or {}).get(key) or (self.prompts or {}).get(key) or ""
+        if not value:
+            raise LLMServiceError(f"缺少提示词：{key}")
+        return value
+
     def complete_json(self, prompt: str, images: Iterable[str | Path | np.ndarray] = (), retries: int = 1) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         content.extend({"type": "image_url", "image_url": {"url": _data_url(image)}} for image in images)
@@ -121,6 +128,6 @@ class AgentLLMService:
         return {"decision": decision, "facts": facts if isinstance(facts, list) else [str(facts)]}
 
     def role(self, role: str, payload: dict[str, Any], on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
-        prompt = self.prompts[role] + "\n请使用简洁自然语言输出可审计的推理摘要，不输出 JSON 或代码块。\n输入：" + json.dumps(payload, ensure_ascii=False)
+        prompt = self._prompt(role) + "\n请使用简洁自然语言输出可审计的推理摘要，不输出 JSON 或代码块。\n输入：" + json.dumps(payload, ensure_ascii=False)
         content = self.complete_text_stream(prompt, on_delta) if on_delta else self.complete_text(prompt)
         return {"summary": content}

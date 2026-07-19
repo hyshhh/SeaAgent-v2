@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=13">
+<link rel="stylesheet" href="/static/css/style.css?v=14">
 </head>
 <body>
 <header class="app-header">
@@ -221,7 +221,7 @@
 <section class="tab-content" id="tab-settings">
   <div class="settings-workspace">
     <div class="settings-page-head">
-      <div><span class="eyebrow">系统运行参数</span><h2>检测、记忆与问答设置</h2><p>调整关键阈值后，新的监控任务和下一轮问答会使用最新配置；正在运行的任务不强制重载。</p></div>
+      <div><span class="eyebrow">系统运行参数</span><h2>检测、记忆与问答设置</h2><p>调整关键阈值与智能体提示词后，新的监控任务和下一轮问答会使用最新配置；正在运行的任务不强制重载。</p></div>
       <div class="panel-actions"><span class="settings-status" id="settingsStatus">等待读取</span><button class="btn ghost" onclick="loadSystemSettings(true)">重新读取</button><button class="btn ghost" onclick="resetSystemSettings()">恢复默认</button><button class="btn primary" id="saveSettingsButton" onclick="saveSystemSettings()">保存设置</button></div>
     </div>
     <div class="settings-grid">
@@ -270,6 +270,45 @@
           <label>问答最大轮数<input data-setting="pipeline.agent.max_rounds" type="number"><small>规划、观察、反思闭环的最大执行轮数。</small></label>
         </div>
       </section>
+
+      <section class="panel settings-card settings-card-wide">
+        <div class="panel-head"><div><span class="eyebrow">智能体提示词</span><h3>四个智能体与核验提示词</h3></div><p class="settings-card-note">可在此直接修改并保存；下一轮问答与识别会使用最新提示词。</p></div>
+        <div class="settings-prompt-grid">
+          <label class="settings-prompt-item">意图分析提示词（planner_intent）
+            <textarea data-setting="prompts.planner_intent" rows="8" spellcheck="false"></textarea>
+            <small>把自然语言问题压缩为查询规格，决定是否进入描述检索、舷号检索或列表查询。</small>
+          </label>
+          <label class="settings-prompt-item">PlanAgent 提示词
+            <textarea data-setting="prompts.planner" rows="8" spellcheck="false"></textarea>
+            <small>解释本轮工具计划；不能增删工具，也不能直接回答用户问题。</small>
+          </label>
+          <label class="settings-prompt-item">ObserveAgent 提示词
+            <textarea data-setting="prompts.observer" rows="8" spellcheck="false"></textarea>
+            <small>记录工具执行事实与证据缺口，不重判最终答案。</small>
+          </label>
+          <label class="settings-prompt-item">ReflectAgent 提示词
+            <textarea data-setting="prompts.reflector" rows="8" spellcheck="false"></textarea>
+            <small>审计证据是否充分，决定停止或继续下一轮。</small>
+          </label>
+          <label class="settings-prompt-item">单帧识别提示词
+            <textarea data-setting="prompts.single_frame_recognition" rows="7" spellcheck="false"></textarea>
+            <small>单帧舷号可读性判断与外观描述提取。</small>
+          </label>
+          <label class="settings-prompt-item">描述核验提示词
+            <textarea data-setting="prompts.verify_description" rows="7" spellcheck="false"></textarea>
+            <small>灰区时核验轨迹图像是否符合文字描述。</small>
+          </label>
+          <label class="settings-prompt-item">库项核验提示词
+            <textarea data-setting="prompts.verify_registry" rows="7" spellcheck="false"></textarea>
+            <small>灰区时核验轨迹图像是否与先验库参考图同船。</small>
+          </label>
+          <label class="settings-prompt-item">文本检索指令
+            <textarea data-setting="prompts.text_retrieval_instruction" rows="3" spellcheck="false"></textarea>
+            <small>文本向量检索时使用的英文指令，建议保持简短稳定。</small>
+          </label>
+        </div>
+      </section>
+
     </div>
   </div>
 </section>
@@ -282,6 +321,6 @@
 <script src="/static/js/pipeline.js?v=11"></script>
   <script src="/static/js/memory.js?v=4"></script>
 <script src="/static/js/agent.js?v=13"></script>
-<script src="/static/js/settings.js?v=1"></script>
+<script src="/static/js/settings.js?v=2"></script>
 </body>
 </html>

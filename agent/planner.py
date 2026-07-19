@@ -53,7 +53,12 @@ class Planner:
         )
         locked_description = bool(heuristic.get("description"))
 
-        prompt = self.llm.prompts.get("planner_intent") if self.llm else None
+        prompt = None
+        if self.llm:
+            try:
+                prompt = self.llm._prompt("planner_intent") if hasattr(self.llm, "_prompt") else self.llm.prompts.get("planner_intent")
+            except Exception:
+                prompt = self.llm.prompts.get("planner_intent") if self.llm.prompts else None
         if not prompt or not self.llm:
             heuristic["intentSource"] = "heuristic"
             return self._normalize_spec(question, heuristic)

@@ -10,7 +10,49 @@ import yaml
 
 from .loader import load_config, project_root
 
+PROMPT_SETTING_KEYS: tuple[str, ...] = (
+    "planner_intent",
+    "planner",
+    "observer",
+    "reflector",
+    "single_frame_recognition",
+    "verify_description",
+    "verify_registry",
+    "text_retrieval_instruction",
+)
+
+PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
+    f"prompts.{key}": {
+        "type": "text",
+        "multiline": key != "text_retrieval_instruction",
+        "min_chars": 1,
+        "max_chars": 8000,
+        "label": {
+            "planner_intent": "意图分析提示词",
+            "planner": "PlanAgent 提示词",
+            "observer": "ObserveAgent 提示词",
+            "reflector": "ReflectAgent 提示词",
+            "single_frame_recognition": "单帧识别提示词",
+            "verify_description": "描述核验提示词",
+            "verify_registry": "库项核验提示词",
+            "text_retrieval_instruction": "文本检索指令",
+        }.get(key, key),
+        "help": {
+            "planner_intent": "把自然语言压缩成 targetScope/targetKind/operation 等查询规格。",
+            "planner": "解释本轮工具计划，不改工具清单。",
+            "observer": "记录工具执行事实，不重判答案。",
+            "reflector": "审计证据是否充分，决定停止或继续。",
+            "single_frame_recognition": "单帧舷号可读性与外观描述识别。",
+            "verify_description": "灰区时核验轨迹图像是否符合文字描述。",
+            "verify_registry": "灰区时核验轨迹图像是否与库参考图同船。",
+            "text_retrieval_instruction": "文本向量检索时使用的英文指令。",
+        }.get(key, ""),
+    }
+    for key in PROMPT_SETTING_KEYS
+}
+
 SETTING_SPECS: dict[str, dict[str, Any]] = {
+
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.iou": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.detect_every_n_frames": {"type": "int", "min": 1, "max": 100, "step": 1},
@@ -83,15 +125,26 @@ def _write_runtime(data: dict[str, Any]) -> None:
     temporary.replace(RUNTIME_FILE)
 
 
-def _coerce(path: str, value: Any) -> int | float:
-    spec = SETTING_SPECS[path]
-    try:
-        number = int(value) if spec["type"] == "int" else float(value)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"参数 {path} 必须是数字") from error
-    if not spec["min"] <= number <= spec["max"]:
-        raise ValueError(f"参数 {path} 必须在 {spec['min']} 到 {spec['max']} 之间")
-    return number
+def _coerce(path: str, value: Any) -> int | float | str:
+    # numeric specs first; prompt specs second
+    if path in SETTING_SPECS:
+        spec = SETTING_SPECS[path]
+        try:
+            number = int(value) if spec["type"] == "int" else float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"参数 {path} 必须是数字") from error
+        if not spec["min"] <= number <= spec["max"]:
+            raise ValueError(f"参数 {path} 必须在 {spec['min']} 到 {spec['max']} 之间")
+        return number
+    if path in PROMPT_SETTING_SPECS:
+        spec = PROMPT_SETTING_SPECS[path]
+        text = str(value if value is not None else "").strip()
+        if len(text) < int(spec.get("min_chars", 1)):
+            raise ValueError(f"提示词 {path} 不能为空")
+        if len(text) > int(spec.get("max_chars", 8000)):
+            raise ValueError(f"提示词 {path} 过长，最多 {spec['max_chars']} 字符")
+        return text
+    raise ValueError(f"未知参数：{path}")
 
 
 def _validate_relations(config: dict[str, Any]) -> None:
@@ -108,14 +161,23 @@ def public_settings(config: dict[str, Any]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for path in SETTING_SPECS:
         _set(values, path, _get(config, path))
-    return {"settings": values, "specs": deepcopy(SETTING_SPECS)}
+    for path in PROMPT_SETTING_SPECS:
+        _set(values, path, _get(config, path) or "")
+    specs = deepcopy(SETTING_SPECS)
+    specs.update(deepcopy(PROMPT_SETTING_SPECS))
+    return {
+        "settings": values,
+        "specs": specs,
+        "promptKeys": list(PROMPT_SETTING_KEYS),
+    }
 
 
 def update_settings(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     submitted = payload.get("settings", payload)
     if not isinstance(submitted, dict):
         raise ValueError("设置内容格式不正确")
-    changes = {path: _coerce(path, value) for path, value in _flatten(submitted).items() if path in SETTING_SPECS}
+    allowed = set(SETTING_SPECS) | set(PROMPT_SETTING_SPECS)
+    changes = {path: _coerce(path, value) for path, value in _flatten(submitted).items() if path in allowed}
     if not changes:
         raise ValueError("没有收到可修改的参数")
     updated = deepcopy(config)
@@ -128,6 +190,7 @@ def update_settings(config: dict[str, Any], payload: dict[str, Any]) -> dict[str
     _write_runtime(runtime)
     for path, value in changes.items():
         _set(config, path, value)
+    # 同步到已创建的 LLM 服务提示词缓存
     return public_settings(config)
 
 
@@ -137,4 +200,6 @@ def reset_settings(config: dict[str, Any]) -> dict[str, Any]:
     defaults = load_config()
     for path in SETTING_SPECS:
         _set(config, path, _get(defaults, path))
+    for path in PROMPT_SETTING_SPECS:
+        _set(config, path, _get(defaults, path) or "")
     return public_settings(config)

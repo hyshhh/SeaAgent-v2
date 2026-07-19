@@ -25,6 +25,11 @@ function settingsStatus(message, type = '') {
 }
 
 function updateSettingInput(input, value, spec = {}) {
+  if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
+    input.value = value ?? '';
+    if (spec.max_chars) input.maxLength = spec.max_chars;
+    return;
+  }
   if (spec.min !== undefined) input.min = spec.min;
   if (spec.max !== undefined) input.max = spec.max;
   if (spec.step !== undefined) input.step = spec.step;
@@ -59,8 +64,18 @@ function collectSystemSettings() {
   for (const input of document.querySelectorAll('[data-setting]')) {
     const path = input.dataset.setting;
     const spec = systemSettingSpecs[path] || {};
-    if (input.value.trim() === '') throw new Error(`参数“${path}”不能为空`);
-    const value = spec.type === 'int' ? Number.parseInt(input.value, 10) : Number.parseFloat(input.value);
+    const raw = input.value;
+    if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
+      const text = String(raw || '').trim();
+      if (!text) throw new Error(`提示词“${spec.label || path}”不能为空`);
+      if (spec.max_chars && text.length > spec.max_chars) {
+        throw new Error(`提示词“${spec.label || path}”过长，最多 ${spec.max_chars} 字符`);
+      }
+      setSettingValue(values, path, text);
+      continue;
+    }
+    if (String(raw).trim() === '') throw new Error(`参数“${path}”不能为空`);
+    const value = spec.type === 'int' ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
     if (!Number.isFinite(value)) throw new Error(`参数“${path}”必须是数字`);
     setSettingValue(values, path, value);
   }
@@ -95,8 +110,8 @@ async function saveSystemSettings() {
       body: JSON.stringify({settings}),
     });
     fillSystemSettings(response.data || response);
-    settingsStatus('已保存，新任务生效', 'success');
-    showToast('设置已保存，新监控任务将使用新参数');
+    settingsStatus('已保存，新任务与问答生效', 'success');
+    showToast('设置已保存，下一轮问答将使用最新提示词与阈值');
   } catch (error) {
     settingsStatus('保存失败', 'error');
     showToast(error.message, 'error');
@@ -109,7 +124,7 @@ async function saveSystemSettings() {
 }
 
 async function resetSystemSettings() {
-  if (!window.confirm('确定恢复全部运行参数的默认值吗？')) return;
+  if (!window.confirm('确定恢复全部运行参数和提示词的默认值吗？')) return;
   const button = document.getElementById('saveSettingsButton');
   try {
     if (button) button.disabled = true;
@@ -117,7 +132,7 @@ async function resetSystemSettings() {
     const response = await apiFetch(`${SETTINGS_API}/reset`, {method: 'POST'});
     fillSystemSettings(response.data || response);
     settingsStatus('已恢复默认值', 'success');
-    showToast('运行参数已恢复默认值');
+    showToast('运行参数与提示词已恢复默认值');
   } catch (error) {
     settingsStatus('恢复失败', 'error');
     showToast(error.message, 'error');
