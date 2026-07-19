@@ -16,7 +16,22 @@ function stateLabel(state) {
 }
 
 function questionTypeLabel(type) {
-  return ({hull: '舷号查询', description: '描述目标查询', out_of_registry: '未在库船查询', in_registry: '在库船查询', count: '数量统计'})[type] || valueText(type);
+  return ({
+    hull: '舷号查询',
+    registry_hull: '先验库舷号查询',
+    description: '描述目标查询',
+    registry_description: '先验库描述查询',
+    cross_reference: '跨记忆对应查询',
+    track_list: '轨迹列表查询',
+    registry_list: '先验库列表查询',
+    relation_description: '描述+库关系查询',
+    out_of_registry: '未在库船查询',
+    in_registry: '在库船查询',
+    count: '数量统计',
+    description_count: '描述数量统计',
+    registry_count: '先验库数量统计',
+    registry_description_count: '先验库描述数量统计'
+  })[type] || valueText(type);
 }
 
 async function loadAgentMemorySummary(showNotice = false) {

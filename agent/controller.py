@@ -1,4 +1,4 @@
-"""五类海域监控问答的闭环控制器。"""
+"""面向轨迹记忆的闭环智能体控制器。"""
 from __future__ import annotations
 import uuid
 from pathlib import Path
@@ -46,34 +46,451 @@ class AgentController:
     def answer(self, question: str) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = question.strip()
-        self._emit("status", "创建问答会话", "正在解析问题类型与查询范围")
+        self._emit("status", "创建问答会话", "正在解析用户意图与查询范围")
         self.meta = self.planner.classify(self.question)
         scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
-        self._emit("classification", "完成任务识别", "已确定问题类型与检索范围", questionType=self.meta.get("questionType"), queryScope=scope)
+        self._emit(
+            "classification",
+            "完成任务识别",
+            "已确定目标范围、操作类型与检索策略",
+            questionType=self.meta.get("questionType"),
+            strategy=self.meta.get("strategy"),
+            operation=self.meta.get("operation"),
+            targetScope=self.meta.get("targetScope"),
+            queryScope=scope,
+        )
         self.rounds, self.tool_chain = [], []
         self.display_record, self.display_groups = None, []
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
         try:
-            handlers = {"hull": self._answer_hull, "description": self._answer_description, "registry_description": self._answer_registry_description, "out_of_registry": lambda: self._answer_registry(False), "in_registry": lambda: self._answer_registry(True), "count": self._answer_count}
-            result = handlers[self.meta["questionType"]]()
+            handlers = {
+                "hull": self._answer_hull,
+                "registry_hull": self._answer_registry_hull,
+                "description": self._answer_description,
+                "registry_description": self._answer_registry_description,
+                "cross_reference": self._answer_cross_reference,
+                "track_list": self._answer_track_list,
+                "registry_list": self._answer_registry_list,
+                "relation_description": self._answer_relation_description,
+                "out_of_registry": lambda: self._answer_registry(False),
+                "in_registry": lambda: self._answer_registry(True),
+                "count": self._answer_count,
+                "description_count": self._answer_description_count,
+                "registry_count": self._answer_registry_count,
+                "registry_description_count": self._answer_registry_description_count,
+            }
+            question_type = self.meta.get("questionType")
+            if question_type not in handlers:
+                raise ValueError(f"未知问题策略：{question_type}")
+            result = handlers[question_type]()
+            result = self._finalize_answer(result)
         except Exception as error:
             result = self._finish("执行失败", [], f"工具链执行失败：{error}", "uncertain", extra={"error": str(error)})
         self.repository.finish_session(self.session_id, self._session_audit_result(result))
+        return result
+
+
+    def _answer_registry_hull(self) -> dict[str, Any]:
+        hull = self.meta.get("hullNumber")
+        if not hull:
+            return self._finish("无法确认", [], "问题中没有明确舷号", "uncertain")
+        round_result = self._round("按舷号查询先验库库项", [{"id": "registryHull", "tool": "getRegistry", "arguments": {"hullNumber": hull}}], "sufficient", "返回全部匹配库项及其参考图")
+        result = self._result(round_result, "registryHull")
+        items = result.get("registryItems", [])
+        refs = result.get("registryReferenceIds", [])
+        if not items:
+            return self._finish("先验库中未找到", [], f"没有找到舷号 {hull} 对应的库项", "sufficient", extra={"registryItems": [], "registryReferenceIds": []})
+        return self._finish("先验库中找到匹配库项", [], f"舷号 {hull} 匹配到 {len(items)} 个库项", "sufficient", extra={"registryItems": items, "registryReferenceIds": refs})
+
+    def _answer_registry_list(self) -> dict[str, Any]:
+        round_result = self._round("读取先验库并列出库项", [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}], "sufficient", "返回先验库全部库项")
+        result = self._result(round_result, "registryCatalog")
+        items = result.get("registryItems", [])
+        return self._finish("先验库查询完成", [], f"当前先验库共有 {len(items)} 个库项", "sufficient", extra={"registryItems": items, "registryReferenceIds": result.get("registryReferenceIds", [])})
+
+    def _answer_track_list(self) -> dict[str, Any]:
+        time_range = self.meta.get("timeRange")
+        round_result = self._round("按时间范围读取视频轨迹列表", [{"id": "trackList", "tool": "getTrack", "arguments": {"timeRange": time_range}}], "sufficient", "列出符合时间和轨迹条件的船舶")
+        result = self._result(round_result, "trackList")
+        tracks = result.get("tracks", [])
+        return self._finish("轨迹查询完成", tracks, f"查询到 {len(tracks)} 条轨迹", "sufficient", extra={"totalTrackCount": result.get("totalTrackCount", len(tracks))}, display={"tracks": tracks, "includeClips": True})
+
+    def _answer_description_count(self) -> dict[str, Any]:
+        """按描述筛选轨迹，再对命中轨迹做跨轨迹去重统计。"""
+        description = self.meta.get("description") or self._description_target()
+        page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+        offset, has_more = 0, True
+        track_map: dict[str, dict[str, Any]] = {}
+        confirmed_map: dict[str, dict[str, Any]] = {}
+        uncertain_map: dict[str, dict[str, Any]] = {}
+        missing_track_ids: set[str] = set()
+        searched_count = 0
+        while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
+            page_number = offset // page_size + 1
+            track_call = f"countDescTracks{page_number}"
+            frame_call = f"countDescFrames{page_number}"
+            match_call = f"countDescMatch{page_number}"
+            current = self._round(
+                f"读取第 {page_number} 页轨迹并按描述筛选",
+                [
+                    {"id": track_call, "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange"), "offset": offset, "limit": page_size}},
+                    {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
+                    {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 20}},
+                ],
+                "replan",
+                "当前页筛选完成后，若 hasMore=true 则继续读取下一页",
+            )
+            tracks_result = self._result(current, track_call)
+            frames_result = self._result(current, frame_call)
+            matches = self._result(current, match_call).get("matches", [])
+            page_tracks = tracks_result.get("tracks", [])
+            searched_count += len(page_tracks)
+            track_map.update({str(item["trackId"]): item for item in page_tracks})
+            missing_track_ids.update(str(value) for value in frames_result.get("unsearchableTrackIds", []))
+            for item in matches:
+                track_id = str(item.get("matchedTrackId") or "")
+                if track_id not in track_map:
+                    continue
+                band = item.get("scoreBand")
+                if band == "match":
+                    previous = confirmed_map.get(track_id)
+                    if previous is None or float(item.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                        confirmed_map[track_id] = self._with_match(track_map[track_id], item)
+                elif band == "uncertain":
+                    previous = uncertain_map.get(track_id)
+                    if previous is None or float(item.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                        uncertain_map[track_id] = item
+            has_more = bool(tracks_result.get("hasMore"))
+            next_offset = tracks_result.get("nextOffset")
+            if not has_more or next_offset is None:
+                break
+            offset = int(next_offset)
+
+        confirmed = list(confirmed_map.values())
+        uncertain_count = len(uncertain_map)
+        if not confirmed:
+            state = "uncertain" if uncertain_count or missing_track_ids or has_more else "sufficient"
+            reason = f"目标描述：{description}；未找到达到匹配阈值的轨迹"
+            if uncertain_count:
+                reason += f"；另有 {uncertain_count} 条灰区轨迹"
+            if has_more:
+                reason += "；仍有轨迹未读取"
+            return self._finish(
+                "符合描述的船舶数量为 0",
+                [],
+                reason,
+                state,
+                extra={
+                    "description": description,
+                    "trackCount": 0,
+                    "dedupShipCount": 0,
+                    "uncertainMatchCount": uncertain_count,
+                    "searchedTrackCount": searched_count,
+                    "hasMore": has_more,
+                    "unsearchableTrackIds": sorted(missing_track_ids),
+                },
+            )
+
+        if len(self.rounds) >= self.max_rounds:
+            return self._finish(
+                f"符合描述的轨迹数量为 {len(confirmed)}",
+                confirmed,
+                f"目标描述：{description}；已找到 {len(confirmed)} 条轨迹，但没有剩余轮次完成去重",
+                "uncertain",
+                extra={
+                    "description": description,
+                    "trackCount": len(confirmed),
+                    "dedupShipCount": None,
+                    "uncertainMatchCount": uncertain_count,
+                    "searchedTrackCount": searched_count,
+                    "hasMore": has_more,
+                    "unsearchableTrackIds": sorted(missing_track_ids),
+                },
+                display={"tracks": confirmed, "includeClips": True},
+            )
+
+        dedup_round = self._round(
+            "对描述命中轨迹执行跨轨迹去重",
+            [
+                {"id": "countDescConfirmedFrames", "tool": "getFrames", "arguments": {"trackIds": [item["trackId"] for item in confirmed]}},
+                {"id": "countDescDedup", "tool": "dedupTracks", "arguments": {"tracks": confirmed, "keyframesByTrack": {"$ref": "countDescConfirmedFrames.keyframesByTrack"}}},
+            ],
+            "sufficient",
+            "高阈值分组对应保守船舶数，低阈值分组对应敏感船舶数",
+        )
+        frames_result = self._result(dedup_round, "countDescConfirmedFrames")
+        dedup = self._result(dedup_round, "countDescDedup")
+        high_count = int(dedup.get("highThresholdShipCount", len(confirmed)))
+        low_count = int(dedup.get("lowThresholdShipCount", len(confirmed)))
+        stability = dedup.get("countStability", "unknown")
+        state = "sufficient" if stability == "stable" and not uncertain_count and not missing_track_ids and not has_more else "uncertain"
+        reason = (
+            f"目标描述：{description}；匹配轨迹 {len(confirmed)} 条；"
+            f"去重后高阈值船舶数 {high_count}、低阈值船舶数 {low_count}；"
+            f"计数状态 {stability}"
+        )
+        if uncertain_count:
+            reason += f"；另有 {uncertain_count} 条灰区轨迹未计入"
+        representatives = []
+        frame_groups = frames_result.get("keyframesByTrack", {})
+        for group in dedup.get("highGroups", [])[: self.display_limit]:
+            if not group:
+                continue
+            track_id = str(group[0])
+            frames = frame_groups.get(track_id, {}).get("keyframes", [])
+            best = max(frames, key=lambda item: item.get("retentionScore", 0), default=None)
+            track = next((item for item in confirmed if str(item["trackId"]) == track_id), None)
+            if track:
+                representatives.append(dict(track, matchedKeyframeIds=[best["keyframeId"]] if best else []))
+        return self._finish(
+            f"符合描述的船舶数量约为 {high_count}",
+            confirmed,
+            reason,
+            state,
+            extra={
+                "description": description,
+                "trackCount": len(confirmed),
+                "dedupShipCount": high_count,
+                "lowThresholdShipCount": low_count,
+                "uncertainMatchCount": uncertain_count,
+                "searchedTrackCount": searched_count,
+                "hasMore": has_more,
+                "unsearchableTrackIds": sorted(missing_track_ids),
+                "statistics": dedup,
+            },
+            display={"tracks": representatives or confirmed, "includeClips": True},
+        )
+
+    def _answer_registry_count(self) -> dict[str, Any]:
+        round_result = self._round("统计先验库库项数量", [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}], "sufficient", "按库项而不是参考图数量统计")
+        result = self._result(round_result, "registryCatalog")
+        items = result.get("registryItems", [])
+        return self._finish(f"先验库共有 {len(items)} 个库项", [], "按库项编号去重统计", "sufficient", extra={"registryItems": items, "registryReferenceIds": result.get("registryReferenceIds", [])})
+
+    def _answer_registry_description_count(self) -> dict[str, Any]:
+        description = self.meta.get("description") or self._description_target()
+        first = self._round("按描述检索先验库并统计库项", [
+            {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
+            {"id": "registryDescriptionMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "registryCatalog.registryReferences"}, "topK": 20}},
+        ], "sufficient", "按库项编号去重，不能把同一库项的多张参考图重复计数")
+        catalog = self._result(first, "registryCatalog")
+        matches = self._result(first, "registryDescriptionMatch").get("matches", [])
+        confirmed = [item for item in matches if item.get("scoreBand") == "match"]
+        uncertain = [item for item in matches if item.get("scoreBand") == "uncertain"]
+        return self._finish(
+            f"符合描述的先验库库项数量为 {len(confirmed)}",
+            [],
+            f"目标描述：{description}；按库项去重后确定匹配 {len(confirmed)} 个",
+            "sufficient" if not uncertain else "uncertain",
+            extra={"description": description, "registryMatches": confirmed, "uncertainRegistryMatches": uncertain, "registryReferenceIds": catalog.get("registryReferenceIds", [])},
+        )
+
+    def _answer_cross_reference(self) -> dict[str, Any]:
+        """跨记忆问题：先按自然语言条件筛轨迹，再与先验库建立对应关系。"""
+        description = (self.meta.get("description") or "").strip()
+        time_range = self.meta.get("timeRange")
+        if description:
+            page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+            offset, has_more = 0, True
+            track_map: dict[str, dict[str, Any]] = {}
+            confirmed_map: dict[str, dict[str, Any]] = {}
+            while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
+                page_number = offset // page_size + 1
+                track_call = f"crossTracks{page_number}"
+                frame_call = f"crossFrames{page_number}"
+                match_call = f"crossTextMatch{page_number}"
+                current = self._round(
+                    f"按描述筛选第 {page_number} 页轨迹",
+                    [
+                        {"id": track_call, "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": offset, "limit": page_size}},
+                        {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
+                        {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 10}},
+                    ],
+                    "replan",
+                    "先得到描述命中轨迹，再与先验库建立对应关系",
+                )
+                tracks_result = self._result(current, track_call)
+                matches = self._result(current, match_call).get("matches", [])
+                page_tracks = tracks_result.get("tracks", [])
+                track_map.update({str(item["trackId"]): item for item in page_tracks})
+                for item in matches:
+                    track_id = str(item.get("matchedTrackId") or "")
+                    if track_id not in track_map or item.get("scoreBand") != "match":
+                        continue
+                    previous = confirmed_map.get(track_id)
+                    if previous is None or float(item.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                        confirmed_map[track_id] = self._with_match(track_map[track_id], item)
+                has_more = bool(tracks_result.get("hasMore"))
+                next_offset = tracks_result.get("nextOffset")
+                if not has_more or next_offset is None:
+                    break
+                offset = int(next_offset)
+            candidate_tracks = list(confirmed_map.values())
+            if not candidate_tracks:
+                return self._finish("未建立可靠对应关系", [], f"描述“{description}”未命中可检索轨迹", "sufficient")
+        else:
+            first = self._round(
+                "读取视频轨迹作为跨记忆候选",
+                [{"id": "crossTracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "limit": 60}}],
+                "replan",
+                "先取时间范围内轨迹，再匹配先验库",
+            )
+            candidate_tracks = self._result(first, "crossTracks").get("tracks", [])
+            if not candidate_tracks:
+                return self._finish("证据不足", [], "查询范围内没有可比较的轨迹", "uncertain")
+
+        if len(self.rounds) >= self.max_rounds:
+            return self._finish("无法确认", candidate_tracks, "已筛出候选轨迹，但没有剩余轮次完成先验库对应", "uncertain", display={"tracks": candidate_tracks, "includeClips": True})
+
+        second = self._round(
+            "将候选轨迹与先验库参考图建立对应关系",
+            [
+                {"id": "crossCandidateFrames", "tool": "getFrames", "arguments": {"trackIds": [item["trackId"] for item in candidate_tracks]}},
+                {"id": "crossRegistry", "tool": "listRegistry", "arguments": {}},
+                {"id": "crossImageMatch", "tool": "matchImage", "arguments": {"queryImages": {"$ref": "crossCandidateFrames.keyframes"}, "galleryImages": {"$ref": "crossRegistry.registryReferences"}, "topK": 3}},
+            ],
+            "sufficient",
+            "返回可解释的轨迹-库项对应关系",
+        )
+        registry = self._result(second, "crossRegistry")
+        if not registry.get("registryReferences"):
+            return self._finish("证据不足", candidate_tracks, "先验库缺少可检索参考图", "uncertain", display={"tracks": candidate_tracks, "includeClips": True})
+        matches = self._result(second, "crossImageMatch").get("matches", [])
+        track_map = {str(item["trackId"]): item for item in candidate_tracks}
+        linked = []
+        for item in matches:
+            track_id = str(item.get("matchedTrackId") or item.get("queryTrackId") or "")
+            if track_id not in track_map:
+                track_id = str(item.get("queryTrackId") or item.get("matchedTrackId") or "")
+            if track_id not in track_map:
+                continue
+            if item.get("scoreBand") not in {"match", "uncertain"}:
+                continue
+            linked.append(self._with_match(track_map[track_id], item))
+        best: dict[str, dict[str, Any]] = {}
+        for track in linked:
+            track_id = str(track["trackId"])
+            previous = best.get(track_id)
+            if previous is None or float(track.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                best[track_id] = track
+        linked = list(best.values())
+        if linked:
+            certain = all(item.get("scoreBand") == "match" for item in linked)
+            return self._finish(
+                "已建立跨记忆对应关系",
+                linked,
+                f"返回 {len(linked)} 条轨迹与先验库的对应候选" + (f"；筛选条件：{description}" if description else ""),
+                "sufficient" if certain else "uncertain",
+                extra={"description": description or None},
+                display={"tracks": linked, "includeClips": True, "includeRegistry": True},
+            )
+        return self._finish(
+            "未建立可靠对应关系",
+            candidate_tracks[: self.display_limit],
+            "候选轨迹与先验库参考图均未达到匹配阈值",
+            "sufficient",
+            extra={"description": description or None},
+            display={"tracks": candidate_tracks[: self.display_limit], "includeClips": True},
+        )
+
+    def _answer_relation_description(self) -> dict[str, Any]:
+        """描述 + 在库/库外：先按描述筛轨迹，再执行库关系认证。"""
+        description = (self.meta.get("description") or self._description_target()).strip()
+        want_in_registry = self.meta.get("registryRelation") != "out"
+        page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+        offset, has_more = 0, True
+        track_map: dict[str, dict[str, Any]] = {}
+        confirmed_map: dict[str, dict[str, Any]] = {}
+        while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
+            page_number = offset // page_size + 1
+            track_call = f"relationTracks{page_number}"
+            frame_call = f"relationFrames{page_number}"
+            match_call = f"relationTextMatch{page_number}"
+            current = self._round(
+                f"按描述筛选第 {page_number} 页轨迹",
+                [
+                    {"id": track_call, "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange"), "offset": offset, "limit": page_size}},
+                    {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
+                    {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 20}},
+                ],
+                "replan",
+                "先得到描述命中轨迹，再执行在库/库外认证",
+            )
+            tracks_result = self._result(current, track_call)
+            matches = self._result(current, match_call).get("matches", [])
+            page_tracks = tracks_result.get("tracks", [])
+            track_map.update({str(item["trackId"]): item for item in page_tracks})
+            for item in matches:
+                track_id = str(item.get("matchedTrackId") or "")
+                if track_id not in track_map or item.get("scoreBand") != "match":
+                    continue
+                previous = confirmed_map.get(track_id)
+                if previous is None or float(item.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                    confirmed_map[track_id] = self._with_match(track_map[track_id], item)
+            has_more = bool(tracks_result.get("hasMore"))
+            next_offset = tracks_result.get("nextOffset")
+            if not has_more or next_offset is None:
+                break
+            offset = int(next_offset)
+
+        candidate_tracks = list(confirmed_map.values())
+        if not candidate_tracks:
+            relation = "在库" if want_in_registry else "库外"
+            return self._finish(
+                f"未发现符合描述的{relation}船舶",
+                [],
+                f"描述“{description}”未命中可检索轨迹",
+                "sufficient",
+                extra={"relationDescription": description, "registryRelation": "in" if want_in_registry else "out"},
+            )
+
+        original_get_track = self.tools.getTrack
+
+        def limited_get_track(timeRange=None, hullNumber=None, finalMatchType=None, offset=0, limit=0):
+            selected = candidate_tracks
+            if hullNumber:
+                selected = [item for item in selected if str(item.get("finalHullNumber") or "").upper() == str(hullNumber).upper()]
+            start = max(0, int(offset or 0))
+            page = max(0, min(200, int(limit or 0)))
+            page_items = selected[start:start + page] if page else selected[start:]
+            next_offset = start + len(page_items)
+            return {
+                "ok": True,
+                "queryScope": list(timeRange) if timeRange else None,
+                "trackIds": [item["trackId"] for item in page_items],
+                "tracks": page_items,
+                "totalTrackCount": len(selected),
+                "returnedTrackCount": len(page_items),
+                "offset": start,
+                "limit": page,
+                "hasMore": next_offset < len(selected),
+                "nextOffset": next_offset if next_offset < len(selected) else None,
+            }
+
+        self.tools.getTrack = limited_get_track  # type: ignore[method-assign]
+        try:
+            result = self._answer_registry(want_in_registry)
+        finally:
+            self.tools.getTrack = original_get_track  # type: ignore[method-assign]
+        result["relationDescription"] = description
+        result["description"] = description
+        if result.get("answerText"):
+            result["answerText"] = f"{result['answerText']}；筛选条件：{description}"
         return result
 
     def _answer_hull(self) -> dict[str, Any]:
         hull = self.meta.get("hullNumber")
         if not hull:
             return self._finish("无法确认", [], "问题中未解析到舷号", "uncertain")
-        first = self._round("查询轨迹记忆中的聚合舷号", [{"id": "directTracks", "tool": "getTrack", "arguments": {"hullNumber": hull}}], "replan", "先检查轨迹级舷号是否稳定命中")
+        first = self._round("查询轨迹记忆中的聚合舷号", [{"id": "directTracks", "tool": "getTrack", "arguments": {"hullNumber": hull, "timeRange": self.meta.get("timeRange")}}], "replan", "先检查轨迹级舷号是否稳定命中")
         direct = self._result(first, "directTracks")
         confirmed = [track for track in direct.get("tracks", []) if track["finalMatchType"] == "confirmed"]
         if confirmed:
-            return self._finish("确认出现", confirmed, "轨迹级舷号聚合状态为 confirmed", "sufficient", display={"tracks": confirmed, "includeClips": True})
+            return self._finish("确认出现", confirmed, "轨迹级舷号聚合状态为 confirmed", "sufficient", display={"tracks": confirmed, "includeClips": True, "includeRegistry": self.meta.get("operation") in {"explain", "time"}})
         direct_candidates = [track for track in direct.get("tracks", []) if track["finalMatchType"] in {"candidate", "conflict"}]
         second = self._round("读取目标库项并匹配全视频正式关键帧", [
             {"id": "hullRegistry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
-            {"id": "allTracks", "tool": "getTrack", "condition": {"ref": "hullRegistry.searchable", "equals": True}, "arguments": {}},
+            {"id": "allTracks", "tool": "getTrack", "condition": {"ref": "hullRegistry.searchable", "equals": True}, "arguments": {"timeRange": self.meta.get("timeRange")}},
             {"id": "allFrames", "tool": "getFrames", "condition": {"ref": "hullRegistry.searchable", "equals": True}, "arguments": {"trackIds": {"$ref": "allTracks.trackIds"}}},
             {"id": "hullImageMatch", "tool": "matchImage", "condition": {"ref": "hullRegistry.searchable", "equals": True}, "arguments": {"queryImages": {"$ref": "hullRegistry.registryReferences"}, "galleryImages": {"$ref": "allFrames.keyframes"}, "topK": 3}},
         ], "sufficient", "库项可检索时返回图像匹配的前三条候选轨迹")
@@ -91,7 +508,7 @@ class AgentController:
         return self._finish("无法确认" if unsearchable else "未找到可靠证据", [], "存在不可检索轨迹" if unsearchable else "库参考图未召回候选轨迹", "uncertain" if unsearchable else "sufficient")
 
     def _answer_description(self) -> dict[str, Any]:
-        description = self._description_target()
+        description = self.meta.get("description") or self._description_target()
         page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
         offset, has_more = 0, True
         track_map: dict[str, dict[str, Any]] = {}
@@ -102,7 +519,7 @@ class AgentController:
             page_number = offset // page_size + 1
             track_call, frame_call, match_call = f"descriptionTracks{page_number}", f"descriptionFrames{page_number}", f"textMatch{page_number}"
             current = self._round(f"读取第 {page_number} 页轨迹并执行描述检索", [
-                {"id": track_call, "tool": "getTrack", "arguments": {"offset": offset, "limit": page_size}},
+                {"id": track_call, "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange"), "offset": offset, "limit": page_size}},
                 {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
                 {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 6}},
             ], "replan", "当前页无充分证据且 hasMore=true 时继续读取下一页")
@@ -167,7 +584,7 @@ class AgentController:
         return self._finish("未发现", [], "全部分页候选经视觉核验均不符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count})
 
     def _answer_registry_description(self) -> dict[str, Any]:
-        description = self._description_target()
+        description = self.meta.get("description") or self._description_target()
         first = self._round("判断先验库中是否存在符合描述的库项", [
             {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
             {"id": "registryTextMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "registryCatalog.registryReferences"}, "topK": 3}},
@@ -474,8 +891,87 @@ class AgentController:
         result["registryDecision"] = "exact"
         return result
 
+
+    def _finalize_answer(self, result: dict[str, Any]) -> dict[str, Any]:
+        """根据 operation 重组答案文本，保留原有证据与结论。"""
+        operation = self.meta.get("operation") or "existence"
+        tracks = result.get("tracks") or []
+        description = self.meta.get("description") or result.get("description") or result.get("relationDescription")
+        hull = self.meta.get("hullNumber")
+        if operation == "time":
+            windows = self._track_time_windows(tracks)
+            if windows:
+                text = "；".join(windows[: self.display_limit])
+                more = f" 等共 {len(windows)} 段" if len(windows) > self.display_limit else ""
+                result["conclusion"] = "时间定位完成"
+                result["answerText"] = f"目标出现时间：{text}{more}。"
+                result["timeWindows"] = windows
+            elif result.get("uncertainty") == "sufficient":
+                result["conclusion"] = "未定位到出现时间"
+                result["answerText"] = "查询范围内没有可用于时间定位的轨迹。"
+            else:
+                result["conclusion"] = result.get("conclusion") or "无法确认出现时间"
+                result["answerText"] = f"{result.get('conclusion')}。当前证据不足以完成时间定位。"
+        elif operation == "explain":
+            evidence = result.get("evidence") or {}
+            parts = [result.get("conclusion") or "证据解释"]
+            if hull:
+                parts.append(f"目标舷号 {hull}")
+            if description:
+                parts.append(f"目标描述“{description}”")
+            if tracks:
+                sample = tracks[0]
+                hull_value = sample.get("finalHullNumber") or sample.get("hullNumber") or "无稳定舷号"
+                match_type = sample.get("finalMatchType") or sample.get("scoreBand") or "unknown"
+                score = sample.get("embeddingScore")
+                score_text = f"，相似度 {float(score):.3f}" if isinstance(score, (int, float)) else ""
+                parts.append(f"主要依据轨迹 {sample.get('trackId')}（舷号 {hull_value}，状态 {match_type}{score_text}）")
+            key_count = len(evidence.get("keyframeIds") or [])
+            clip_count = len(evidence.get("shipSegmentIds") or [])
+            ref_count = len(evidence.get("registryReferenceIds") or [])
+            parts.append(f"已整理关键帧 {key_count} 张、视频片段 {clip_count} 段、库参考图 {ref_count} 张")
+            result["conclusion"] = "证据解释完成"
+            result["answerText"] = "。".join(parts) + "。"
+        elif operation == "list" and tracks:
+            if "查询完成" in str(result.get("conclusion", "")) or "找到" in str(result.get("conclusion", "")):
+                result["answerText"] = f"共列出 {len(tracks)} 条相关结果。{result.get('answerText', '')}"
+        result["operation"] = operation
+        result["strategy"] = self.meta.get("strategy")
+        result["targetScope"] = self.meta.get("targetScope")
+        result["registryRelation"] = self.meta.get("registryRelation")
+        if description and "description" not in result:
+            result["description"] = description
+        if hull and "hullNumber" not in result:
+            result["hullNumber"] = hull
+        return result
+
+    @staticmethod
+    def _format_monitor_time(value: Any) -> str:
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            return "未知时间"
+        from datetime import datetime
+        return datetime.fromtimestamp(timestamp).astimezone().strftime("%H:%M:%S")
+
+    def _track_time_windows(self, tracks: list[dict[str, Any]]) -> list[str]:
+        windows = []
+        for track in tracks:
+            start = track.get("startTime", track.get("start_time"))
+            end = track.get("endTime", track.get("end_time"))
+            if start is None or end is None:
+                continue
+            windows.append(f"{self._format_monitor_time(start)}—{self._format_monitor_time(end)}")
+        return windows
+
     def _description_target(self) -> str:
+        if self.meta.get("description"):
+            return str(self.meta["description"]).strip()
         question = self.question
-        for prefix in ("数据库中有没有出现", "数据库中是否出现", "先验库中有没有出现", "先验库中是否出现", "视频中有没有出现", "视频中是否出现", "有没有出现", "找一下", "查找一下"):
+        for prefix in (
+            "数据库中有没有出现", "数据库中是否出现", "先验库中有没有出现", "先验库中是否出现",
+            "视频中有没有出现", "视频中是否出现", "监控里有没有", "监控中是否出现",
+            "有没有出现", "找一下", "查找一下", "帮我找", "请查找",
+        ):
             question = question.replace(prefix, "")
         return question.strip("？?。 ") or self.question
