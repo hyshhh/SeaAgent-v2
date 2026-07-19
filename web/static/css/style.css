@@ -66,3 +66,7 @@
 .intent-agent-meta{display:flex;flex-wrap:wrap;gap:10px 14px;color:#6f93a8;font-size:10px}
 .intent-agent-meta time{margin-left:auto;color:#5f8498}
 .intent-agent-body p{margin:0;color:#9eb8c7;font-size:12px;line-height:1.55}
+
+
+.answer-tracks.range-list{max-height:280px;overflow:auto;padding-right:4px}
+.track-summary-more{margin-top:6px;color:#6f93a8;font-size:10px}

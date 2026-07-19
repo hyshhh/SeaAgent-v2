@@ -91,9 +91,24 @@ async function loadAgentMemorySummary(showNotice = false) {
   }
 }
 
-function renderTracks(tracks) {
+function isRangeListQuestion(type) {
+  return [
+    'in_registry',
+    'out_of_registry',
+    'track_list',
+    'relation_description',
+    'count',
+    'description_count',
+    'cross_reference',
+  ].includes(type);
+}
+
+function renderTracks(tracks, questionType = '') {
   if (!tracks?.length) return '';
-  const rows = tracks.slice(0, 3).map((track) => {
+  const rangeList = isRangeListQuestion(questionType);
+  // topk/display_limit 只限制“单点检索展示”；范围枚举类问题有多少命中展示多少
+  const visible = rangeList ? tracks : tracks.slice(0, 3);
+  const rows = visible.map((track) => {
     const hull = track.finalHullNumber || track.hullNumber || '无稳定舷号';
     const start = Number(track.startTime ?? track.start_time);
     const end = Number(track.endTime ?? track.end_time);
@@ -101,7 +116,10 @@ function renderTracks(tracks) {
     const score = Number(track.embeddingScore);
     return `<div class="track-summary"><strong>${escapeHtml(track.trackId || '未知轨迹')}</strong><span>${escapeHtml(hull)} · ${time}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
   }).join('');
-  return `<div class="answer-tracks">${rows}</div>`;
+  const more = (!rangeList && tracks.length > 3)
+    ? `<div class="track-summary-more">仅展示前 3 条单点匹配，其余 ${tracks.length - 3} 条见证据区</div>`
+    : (rangeList ? `<div class="track-summary-more">范围匹配共 ${tracks.length} 条</div>` : '');
+  return `<div class="answer-tracks ${rangeList ? 'range-list' : ''}">${rows}${more}</div>`;
 }
 
 
@@ -126,9 +144,9 @@ function renderAgentAnswer(result) {
   document.getElementById('agentAnswer').innerHTML = `
     <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
     <p>${escapeHtml(result.answerText || '未生成回答')}</p>
-    <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span></div>
+    <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>命中数量：${Number((result.tracks || []).length)}</span></div>
     ${renderRegistryHits(result)}
-    ${renderTracks(result.tracks)}
+    ${renderTracks(result.tracks, result.questionType)}
     ${chain ? `<div class="tool-tags">${chain}</div>` : ''}`;
 }
 

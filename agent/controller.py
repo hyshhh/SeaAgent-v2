@@ -849,14 +849,40 @@ class AgentController:
                     unresolved.append(pair[0])
         in_tracks = exact_tracks + [self._with_match(track, match) for track, match in image_in]
         out_tracks = [self._with_match(track, match) for track, match in image_out]
+        # 范围查询返回全部命中，不被 topk/display_limit 截断；topk 只用于单轨迹的库项候选数
         result_tracks = in_tracks if want_in_registry else out_tracks
+        hit_count = len(result_tracks)
+        unresolved_count = len(unresolved)
         if result_tracks:
-            conclusion = "部分确认" if unresolved else "查询完成"
+            conclusion = f"{'在库' if want_in_registry else '未在库'}船舶 {hit_count} 条"
+            if unresolved_count:
+                conclusion = f"部分确认：{conclusion}"
         else:
-            conclusion = "无法确认" if unresolved else "未发现"
-        reason = "先执行舷号精确查库，再对剩余轨迹执行库参考图匹配和灰区核验"
-        extra = {"unresolvedTracks": unresolved, "unsearchableTrackIds": frame_result.get("unsearchableTrackIds", []), "exactInRegistryTrackIds": [item["trackId"] for item in exact_tracks]}
-        return self._finish(conclusion, result_tracks, reason, "uncertain" if unresolved else "sufficient", extra=extra, display={"tracks": result_tracks, "includeClips": True, "includeRegistry": True})
+            conclusion = "无法确认" if unresolved_count else f"未发现{'在库' if want_in_registry else '未在库'}船舶"
+        reason = (
+            f"范围内轨迹 {len(tracks)} 条；舷号精确在库 {len(exact_tracks)} 条；"
+            f"图像确认在库 {len(image_in)} 条、未在库 {len(image_out)} 条；"
+            f"仍不确定 {unresolved_count} 条。"
+            "topk 仅限制单条轨迹匹配的库项候选数，不限制范围命中返回数量。"
+        )
+        extra = {
+            "unresolvedTracks": unresolved,
+            "unsearchableTrackIds": frame_result.get("unsearchableTrackIds", []),
+            "exactInRegistryTrackIds": [item["trackId"] for item in exact_tracks],
+            "inRegistryCount": len(in_tracks),
+            "outOfRegistryCount": len(out_tracks),
+            "hitCount": hit_count,
+            "totalTrackCount": len(tracks),
+        }
+        # 证据区仍只预览前 display_limit 条，避免一次性弹出过多 clip
+        return self._finish(
+            conclusion,
+            result_tracks,
+            reason,
+            "uncertain" if unresolved_count else "sufficient",
+            extra=extra,
+            display={"tracks": result_tracks, "includeClips": True, "includeRegistry": True},
+        )
 
     def _answer_count(self) -> dict[str, Any]:
         time_range = self.meta.get("timeRange")
