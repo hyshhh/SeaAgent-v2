@@ -62,15 +62,10 @@ class AgentLLMService:
         }
         if stream:
             payload["stream"] = True
-        # Qwen3 / vLLM：关闭思考链，避免流式输出冗长 reasoning
+        # Qwen3 / vLLM / SGLang：默认关闭思考链，避免前端流式刷长推理
         enable_thinking = self._thinking_enabled()
         payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
         payload["enable_thinking"] = enable_thinking
-        # 部分网关把自定义字段放在 extra_body
-        payload["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": enable_thinking},
-            "enable_thinking": enable_thinking,
-        }
         return payload
 
     @staticmethod
