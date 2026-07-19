@@ -78,6 +78,29 @@ class TrackMemoryBuilder:
         except Exception as error:
             logger.warning("池状态事件发送失败：%s", error)
 
+    def _emit_track_status(self, state: ActiveTrack, timestamp: float, force: bool = False, remove: bool = False) -> None:
+        """发送活跃轨迹快照，供监控页独立展示当前追踪状态。"""
+        record_id = f"track-{state.track_id}"
+        if remove:
+            self._emit_pool_event("track", "remove", recordId=record_id)
+            return
+        last_emitted = getattr(state, "status_emitted_at", -1.0)
+        if not force and timestamp - last_emitted < 0.5:
+            return
+        state.status_emitted_at = timestamp
+        limit = int(self.settings.get("keyframe_pool_size", 6))
+        latest = state.keyframe_pool[0] if state.keyframe_pool else {}
+        status = f"暂时丢失（{state.missed_frames} 帧）" if state.missed_frames else "正在追踪"
+        self._emit_pool_event(
+            "track", "upsert",
+            recordId=record_id,
+            trackId=state.track_id,
+            hullNumber=state.final_hull_number or latest.get("vlmHullNumber"),
+            description=state.final_description or latest.get("description") or "等待识别结果",
+            status=status,
+            memoryInfo=f"临时帧 {len(state.candidate_frames)} · 正式帧 {len(state.keyframe_pool)}/{limit}",
+        )
+
     def reset_persistent_memory(self) -> None:
         self.memory_manager.clear_all()
         self.trace.clear()
@@ -107,6 +130,8 @@ class TrackMemoryBuilder:
             self._drain_completed()
             self._prune_expired(timestamp)
             self._finalize_stale()
+            for state in self.active.values():
+                self._emit_track_status(state, timestamp)
 
     def _submit_candidate(self, state: ActiveTrack, crop: np.ndarray, bbox: tuple[int, int, int, int], frame_shape: tuple[int, ...], timestamp: float) -> None:
         min_width, min_height = int(self.settings.get("min_crop_width", 80)), int(self.settings.get("min_crop_height", 80))
@@ -123,6 +148,7 @@ class TrackMemoryBuilder:
         candidate.future = self._executor.submit(self.llm.recognize, crop)
         state.candidate_frames[candidate_id] = candidate
         self.trace.append({"event": "candidate_submitted", "trackId": state.track_id, "timestamp": timestamp, "qualityScore": quality})
+        self._emit_track_status(state, timestamp, force=True)
 
     def _reserve_candidate_slot(self, state: ActiveTrack, quality_score: float) -> bool:
         limit = int(self.settings.get("candidate_pool_size", 12))
@@ -173,6 +199,7 @@ class TrackMemoryBuilder:
                 self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description=str(error), status="识别失败")
             finally:
                 state.candidate_frames.pop(candidate_id, None)
+                self._emit_track_status(state, candidate.timestamp, force=True)
 
     def _promote_candidate(self, state: ActiveTrack, candidate: CandidateFrame, result: dict[str, Any]) -> None:
         readable = result.get("has_readable_hull_number") == "yes"
@@ -209,6 +236,7 @@ class TrackMemoryBuilder:
         self.trace.append({"event": "keyframe_committed", "trackId": state.track_id, "keyframeId": committed["keyframeId"], "isEmbedded": committed["isEmbedded"]})
         self._emit_pool_event("candidate", "upsert", **candidate_event, status="已进入正式池")
         self._emit_pool_event("keyframe", "upsert", recordId=committed["keyframeId"], trackId=committed["trackId"], hullNumber=committed["vlmHullNumber"], description=committed["description"], status="正式帧")
+        self._emit_track_status(state, candidate.timestamp, force=True)
 
     def _select_replacement(self, state: ActiveTrack, record: dict[str, Any], limit: int) -> dict[str, Any] | None:
         if len(state.keyframe_pool) < limit:
@@ -332,6 +360,7 @@ class TrackMemoryBuilder:
                     for candidate in state.candidate_frames.values():
                         if candidate.future:
                             candidate.future.cancel()
+                    self._emit_track_status(state, timestamp, remove=True)
             self.trace.append({"event": "memory_expired", "trackIds": expired, "timestamp": timestamp})
             logger.info("轨迹记忆自动清理：%s", ", ".join(expired))
 
@@ -350,6 +379,7 @@ class TrackMemoryBuilder:
         path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         self._aggregate_if_changed(state)
         self._write_track(state, str(path))
+        self._emit_track_status(state, state.last_time, remove=True)
         self.trace.append({"event": "track_finalized", "trackId": state.track_id, "trajectoryPath": str(path)})
 
     def finalize_all(self) -> None:

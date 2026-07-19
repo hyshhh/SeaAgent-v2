@@ -116,18 +116,18 @@ def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> N
 
 def _init_pool_rows(task_id: str) -> None:
     with _pool_rows_lock:
-        _pool_rows[task_id] = {"candidate": [], "keyframe": []}
+        _pool_rows[task_id] = {"candidate": [], "keyframe": [], "track": []}
 
 
 def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
     pool = str(event.get("pool") or "")
-    if pool not in {"candidate", "keyframe"}:
+    if pool not in {"candidate", "keyframe", "track"}:
         return
     record_id = str(event.get("recordId") or "")
     if not record_id:
         return
     with _pool_rows_lock:
-        rows = _pool_rows.setdefault(task_id, {"candidate": [], "keyframe": []})[pool]
+        rows = _pool_rows.setdefault(task_id, {"candidate": [], "keyframe": [], "track": []})[pool]
         rows[:] = [row for row in rows if row["recordId"] != record_id]
         if event.get("action") == "remove":
             return
@@ -138,6 +138,7 @@ def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
             "hullNumber": event.get("hullNumber"),
             "description": str(event.get("description") or "-"),
             "status": str(event.get("status") or "-"),
+            "memoryInfo": str(event.get("memoryInfo") or "-"),
         })
         del rows[_MAX_POOL_ROWS:]
 
@@ -980,10 +981,11 @@ async def get_pipeline_logs(task_id: str, since: int = 0):
 async def get_pool_status(task_id: str):
     """返回临时池最近状态和正式池当前有效关键帧。"""
     with _pool_rows_lock:
-        pools = _pool_rows.get(task_id, {"candidate": [], "keyframe": []})
+        pools = _pool_rows.get(task_id, {"candidate": [], "keyframe": [], "track": []})
         return {
             "candidate": [dict(row) for row in pools["candidate"]],
             "keyframe": [dict(row) for row in pools["keyframe"]],
+            "track": [dict(row) for row in pools["track"]],
             "maxRows": _MAX_POOL_ROWS,
         }
 

@@ -663,6 +663,7 @@ async function pollPoolStatus(targetTaskId = null) {
     const data = await resp.json();
     renderPoolRows('candidatePoolRows', data.candidate || [], '等待候选帧');
     renderPoolRows('keyframePoolRows', data.keyframe || [], '等待正式关键帧');
+    renderTrackRows(data.track || []);
   } catch (e) {}
 }
 
@@ -683,9 +684,28 @@ function renderPoolRows(elementId, rows, emptyText) {
   }).join('');
 }
 
+function renderTrackRows(rows) {
+  const box = document.getElementById('trackStatusRows');
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = '<div class="pool-empty">等待活跃轨迹</div>';
+    return;
+  }
+  box.innerHTML = rows.slice(0, 40).map(row => {
+    const hull = row.hullNumber || '无可读舷号';
+    const description = row.description || '-';
+    return `<div class="pool-table-row track-status-row">
+      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>最近观测 · ${escHtml(row.time || '-')}</span></div>
+      <div class="pool-track-state">${escHtml(row.status || '-')}</div>
+      <div class="pool-track-memory"><strong>${escHtml(row.memoryInfo || '-')}</strong><span title="${safeAttr(`${hull} · ${description}`)}">${escHtml(hull)} · ${escHtml(description)}</span></div>
+    </div>`;
+  }).join('');
+}
+
 function clearPoolTables() {
   renderPoolRows('candidatePoolRows', [], '等待候选帧');
   renderPoolRows('keyframePoolRows', [], '等待正式关键帧');
+  renderTrackRows([]);
 }
 
 function updatePipelineStatus(status, text) {

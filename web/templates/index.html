@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=11">
+<link rel="stylesheet" href="/static/css/style.css?v=12">
 </head>
 <body>
 <header class="app-header">
@@ -47,6 +47,11 @@
               <div class="log-head"><span>正式池状态</span><em>最多 40 行</em></div>
               <div class="pool-table-head"><span>轨迹编号</span><span>舷号</span><span>描述</span></div>
               <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">等待正式关键帧</div></div>
+            </section>
+            <section class="pool-status-panel track-status-panel">
+              <div class="log-head"><span>轨迹状态</span><em>最多 40 条活跃轨迹</em></div>
+              <div class="pool-table-head track-table-head"><span>轨迹编号</span><span>当前状态</span><span>轨迹记忆</span></div>
+              <div id="trackStatusRows" class="pool-table-body"><div class="pool-empty">等待活跃轨迹</div></div>
             </section>
           </div>
         </div>
@@ -264,7 +269,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=5"></script>
-<script src="/static/js/pipeline.js?v=9"></script>
+<script src="/static/js/pipeline.js?v=10"></script>
   <script src="/static/js/memory.js?v=3"></script>
 <script src="/static/js/agent.js?v=9"></script>
 <script src="/static/js/settings.js?v=1"></script>
