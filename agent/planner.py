@@ -38,6 +38,9 @@ class Planner:
             "intentConfidence": None,
             "intentSource": "heuristic",
             "explicitScope": False,
+            "expectedOutcome": None,
+            "successCriteria": None,
+            "nextAgentFocus": None,
         }
         model_spec = self._model_intent(text)
         if model_spec:
@@ -52,6 +55,7 @@ class Planner:
         if base.get("timeRange") is None:
             base["timeRange"] = self._time_range(text)
         base = self._validate_spec(text, base)
+        base = self._fill_acceptance(text, base)
         base["strategy"] = self._strategy(base)
         base["questionType"] = self._question_type(base)
         return base
@@ -106,6 +110,10 @@ class Planner:
             # 非舷号问题不强制保留模型给的 hull，除非问题本身含舷号
             hull = hull if self._extract_hull(question) else None
 
+        expected_outcome = str(inferred.get("expectedOutcome") or inferred.get("expected_outcome") or "").strip() or None
+        success_criteria = str(inferred.get("successCriteria") or inferred.get("success_criteria") or "").strip() or None
+        next_focus = str(inferred.get("nextAgentFocus") or inferred.get("next_agent_focus") or "").strip() or None
+
         return {
             "targetScope": scope,
             "targetKind": kind,
@@ -116,20 +124,34 @@ class Planner:
             "selectedRules": selected,
             "intentConfidence": confidence,
             "explicitScope": True,
+            "expectedOutcome": expected_outcome,
+            "successCriteria": success_criteria,
+            "nextAgentFocus": next_focus,
         }
 
     def _fallback_intent(self, question: str) -> dict[str, Any]:
-        """模型不可用时的轻量兜底，只覆盖高频句式。"""
+        """模型不可用时的规则兜底，只覆盖高频句式。"""
         hull = self._extract_hull(question)
-        relation = "out" if any(token in question for token in ("未在库", "不在库", "库外", "未入库")) else "in" if any(token in question for token in ("在库", "属于先验库", "属于库", "库内", "已入库")) else "any"
-        registry = any(token in question for token in ("数据库", "先验库", "库中", "库里", "注册库", "库项"))
-        tracks = any(token in question for token in ("视频", "监控", "画面", "视野", "轨迹", "拍到", "看到"))
-        # “出现”单独出现不足以判定视频层，避免“先验库有没有出现...”被判 both
+        out_tokens = ("未在库", "不在库", "库外", "未入库", "非在库")
+        in_tokens = ("在库", "属于数据库", "属于库", "库内", "登记在库", "在数据库", "入库船")
+        relation = "out" if any(token in question for token in out_tokens) else "in" if any(token in question for token in in_tokens) else "any"
+
+        registry_only = any(token in question for token in ("数据库里", "库里", "先验库", "注册库", "船库中", "库中有没有", "库中有哪些"))
+        registry = registry_only or any(token in question for token in ("数据库", "先验库", "库中", "库里", "注册库"))
+        tracks = any(token in question for token in ("视频", "监控", "画面", "视野", "轨迹", "镜头", "录像", "出现"))
+
+        # 视频侧在库/未在库：永远优先 track_memory，避免误成 both/registry
         if relation in {"in", "out"}:
             scope = "track_memory"
-        elif registry and tracks:
-            scope = "both"
-        elif registry:
+        elif tracks and registry and not registry_only:
+            # “视频+数据库”但无明确在库关系时，若像对应核验才 both，否则视频
+            if any(token in question for token in ("对应", "是否一致", "能不能匹配", "库中的", "库里的")):
+                scope = "both"
+            else:
+                scope = "track_memory"
+                if "数据库" in question or "先验库" in question:
+                    relation = "in"
+        elif registry_only or (registry and not tracks):
             scope = "registry"
         else:
             scope = "track_memory"
@@ -141,13 +163,13 @@ class Planner:
             description = self._soft_description(question)
             kind = "description" if description else "all"
 
-        if any(token in question for token in ("多少", "数量", "几艘", "几只")):
+        if any(token in question for token in ("多少", "几艘", "数量", "几只")):
             operation = "count"
-        elif any(token in question for token in ("什么时候", "何时", "何时出现")):
+        elif any(token in question for token in ("什么时候", "何时", "出现时间")):
             operation = "time"
         elif any(token in question for token in ("为什么", "依据", "证据", "怎么判断")):
             operation = "explain"
-        elif any(token in question for token in ("有没有", "是否有", "是否出现", "有无", "存在吗")) and "哪些" not in question:
+        elif any(token in question for token in ("有没有", "是否有", "是否出现", "出现过", "存在吗")) and "哪些" not in question:
             operation = "existence"
         else:
             operation = "list"
@@ -163,6 +185,7 @@ class Planner:
             "intentConfidence": 0.0,
             "explicitScope": registry or tracks or relation != "any",
         }
+
 
     def _validate_spec(self, question: str, spec: dict[str, Any]) -> dict[str, Any]:
         """只做合法性约束，不重新发明用户意图。"""
@@ -284,6 +307,67 @@ class Planner:
             "track_relation_description": "relation_description",
         }[spec["strategy"]]
 
+    def _fill_acceptance(self, question: str, spec: dict[str, Any]) -> dict[str, Any]:
+        """为后续 Plan/Observe/Reflect 补齐验收标准；模型未给时按策略生成简版。"""
+        if not spec.get("expectedOutcome") or not spec.get("successCriteria") or not spec.get("nextAgentFocus"):
+            scope = spec.get("targetScope")
+            kind = spec.get("targetKind")
+            operation = spec.get("operation")
+            relation = spec.get("registryRelation")
+            hull = spec.get("hullNumber") or ""
+            desc = spec.get("description") or ""
+            if kind == "hull" and hull:
+                target = f"舷号 {hull}"
+            elif kind == "description" and desc:
+                target = f"描述“{desc}”"
+            elif relation == "in":
+                target = "在库船舶"
+            elif relation == "out":
+                target = "未在库船舶"
+            else:
+                target = "相关船舶"
+
+            if not spec.get("expectedOutcome"):
+                if operation == "count":
+                    spec["expectedOutcome"] = f"统计范围内{target}的数量（必要时去重）"
+                elif operation == "time":
+                    spec["expectedOutcome"] = f"给出{target}的出现时间范围"
+                elif operation == "explain":
+                    spec["expectedOutcome"] = f"解释判定{target}的关键证据"
+                elif operation == "existence":
+                    spec["expectedOutcome"] = f"确认{target}是否出现/存在"
+                else:
+                    prefix = "列出先验库中" if scope == "registry" else "列出视频中"
+                    spec["expectedOutcome"] = f"{prefix}{target}"
+
+            if not spec.get("successCriteria"):
+                if scope == "registry":
+                    spec["successCriteria"] = "已读取先验库目标条目或明确库中无匹配"
+                elif kind == "description":
+                    spec["successCriteria"] = "已获得描述匹配结果（含分数/灰区核验）或明确无匹配"
+                elif relation in {"in", "out"}:
+                    spec["successCriteria"] = "已完成在库/未在库判定并得到轨迹列表"
+                elif operation == "count":
+                    spec["successCriteria"] = "已得到可审计的去重数量"
+                else:
+                    spec["successCriteria"] = "已获得直接轨迹命中或匹配证据，可回答用户问题"
+
+            if not spec.get("nextAgentFocus"):
+                if scope == "registry":
+                    spec["nextAgentFocus"] = "先查先验库条目与参考图"
+                elif kind == "hull":
+                    spec["nextAgentFocus"] = "先查轨迹舷号与库项，不足时用库图匹配关键帧"
+                elif kind == "description":
+                    spec["nextAgentFocus"] = "先取正式关键帧做文本匹配，灰区再核验"
+                elif relation in {"in", "out"}:
+                    spec["nextAgentFocus"] = "先按时段取轨迹，再精确匹配舷号并做库图匹配"
+                elif operation == "count":
+                    spec["nextAgentFocus"] = "先取全量轨迹与关键帧，再跨轨迹去重"
+                else:
+                    spec["nextAgentFocus"] = "先按条件筛选轨迹并收集关键帧证据"
+        return spec
+
+
     def decide_tools(
         self,
         question: str,
@@ -308,6 +392,9 @@ class Planner:
                 "description": intent.get("description"),
                 "timeRange": list(intent["timeRange"]) if intent.get("timeRange") else None,
                 "selectedRules": intent.get("selectedRules") or [],
+                "expectedOutcome": intent.get("expectedOutcome"),
+                "successCriteria": intent.get("successCriteria"),
+                "nextAgentFocus": intent.get("nextAgentFocus"),
             },
             "round": len(history) + 1,
             "maxRounds": intent.get("maxRounds"),

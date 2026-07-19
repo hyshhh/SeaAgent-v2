@@ -343,6 +343,11 @@ function renderIntentAgentCard(event) {
     `策略 ${questionTypeLabel(event.questionType)}`,
     `来源 ${intentSourceLabel(event.intentSource)}`,
   ];
+  const acceptance = [
+    event.expectedOutcome ? `验收 ${event.expectedOutcome}` : '',
+    event.successCriteria ? `成功标准 ${event.successCriteria}` : '',
+    event.nextAgentFocus ? `下一跳 ${event.nextAgentFocus}` : '',
+  ].filter(Boolean);
   let card = stream.querySelector('.intent-agent-card');
   if (!card) {
     card = document.createElement('section');
@@ -361,8 +366,11 @@ function renderIntentAgentCard(event) {
       <p><strong>编译策略：</strong>${escapeHtml(questionTypeLabel(event.questionType))}（${escapeHtml(valueText(event.strategy))}）</p>
       <p><strong>查询目标：</strong>${escapeHtml(String(targetText))}</p>
       <p><strong>时间范围：</strong>${escapeHtml(timeScope)}</p>
+      ${event.expectedOutcome ? `<p><strong>后续验收：</strong>${escapeHtml(String(event.expectedOutcome))}</p>` : ''}
+      ${event.successCriteria ? `<p><strong>成功标准：</strong>${escapeHtml(String(event.successCriteria))}</p>` : ''}
+      ${event.nextAgentFocus ? `<p><strong>下一跳重点：</strong>${escapeHtml(String(event.nextAgentFocus))}</p>` : ''}
     </div>
-    <div class="intent-agent-chips">${chips.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>
+    <div class="intent-agent-chips">${[...chips, ...acceptance].map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>
     <div class="intent-agent-meta">
       <span>置信度 ${escapeHtml(confidenceText)}</span>
       <span>${escapeHtml(event.message || '已选择规则并编译检索策略')}</span>

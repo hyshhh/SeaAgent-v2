@@ -70,6 +70,9 @@ class AgentController:
             selectedRules=self.meta.get("selectedRules") or [],
             intentSource=self.meta.get("intentSource"),
             intentConfidence=self.meta.get("intentConfidence"),
+            expectedOutcome=self.meta.get("expectedOutcome"),
+            successCriteria=self.meta.get("successCriteria"),
+            nextAgentFocus=self.meta.get("nextAgentFocus"),
             queryScope=scope,
         )
         self.rounds, self.tool_chain = [], []
@@ -1199,7 +1202,10 @@ class AgentController:
             raise RuntimeError("达到最大推理轮次")
         round_number = len(self.rounds) + 1
         self._emit("agent_start", "PlanAgent", "正在分析目标并组织工具计划", round=round_number, role="planner")
-        plan = self.planner.build(goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
+        guided_goal = goal
+        if self.meta.get("expectedOutcome") and self.meta.get("expectedOutcome") not in guided_goal:
+            guided_goal = f"{goal}｜验收：{self.meta.get('expectedOutcome')}"
+        plan = self.planner.build(guided_goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
         public_plan = self._public_plan(plan, calls)
         self._emit("agent_end", "PlanAgent", "规划完成", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"))
 
