@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=14">
+<link rel="stylesheet" href="/static/css/style.css?v=15">
 </head>
 <body>
 <header class="app-header">
@@ -162,7 +162,7 @@
           <div><span class="eyebrow">实时推理轨迹</span><h2>三智能体逐段推理</h2></div>
           <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
         </div>
-        <div class="thought-notice">每轮分别展示 PlanAgent、ObserveAgent 和 ReflectAgent 的模型生成文本，并同步标记工具调用与证据状态。</div>
+        <div class="thought-notice">顶部展示 IntentAgent 的规则选择与意图编译结果；每轮再展示 PlanAgent、ObserveAgent、ReflectAgent 的推理文本与工具状态。</div>
         <div id="agentThoughtStream" class="thought-stream" aria-live="polite">
           <div class="thought-empty"><span>⌁</span><strong>推理轨迹将在这里逐步展开</strong><p>问题解析 → 工具规划 → 轨迹观察 → 证据反思 → 回答生成</p></div>
         </div>
@@ -320,7 +320,7 @@
 <script src="/static/js/app.js?v=6"></script>
 <script src="/static/js/pipeline.js?v=11"></script>
   <script src="/static/js/memory.js?v=4"></script>
-<script src="/static/js/agent.js?v=13"></script>
+<script src="/static/js/agent.js?v=14"></script>
 <script src="/static/js/settings.js?v=3"></script>
 </body>
 </html>

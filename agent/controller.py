@@ -46,18 +46,25 @@ class AgentController:
     def answer(self, question: str) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = question.strip()
-        self._emit("status", "创建问答会话", "正在解析用户意图与查询范围")
+        self._emit("status", "IntentAgent", "正在按规则表解析用户意图")
         self.meta = self.planner.classify(self.question)
         self.meta = self._guard_meta(self.meta)
         scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
         self._emit(
             "classification",
-            "完成任务识别",
-            "已确定目标范围、操作类型与检索策略",
+            "IntentAgent 意图识别完成",
+            "已选择规则并编译检索策略",
             questionType=self.meta.get("questionType"),
             strategy=self.meta.get("strategy"),
             operation=self.meta.get("operation"),
             targetScope=self.meta.get("targetScope"),
+            targetKind=self.meta.get("targetKind"),
+            registryRelation=self.meta.get("registryRelation"),
+            description=self.meta.get("description"),
+            hullNumber=self.meta.get("hullNumber"),
+            selectedRules=self.meta.get("selectedRules") or [],
+            intentSource=self.meta.get("intentSource"),
+            intentConfidence=self.meta.get("intentConfidence"),
             queryScope=scope,
         )
         self.rounds, self.tool_chain = [], []

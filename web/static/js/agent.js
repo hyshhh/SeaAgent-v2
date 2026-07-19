@@ -15,6 +15,27 @@ function stateLabel(state) {
   return ({sufficient: '证据充分', replan: '继续规划', conflict: '证据冲突', uncertain: '无法确认'})[state] || valueText(state);
 }
 
+
+function scopeLabel(scope) {
+  return ({track_memory: '视频轨迹记忆', registry: '先验库', both: '跨记忆对照'})[scope] || valueText(scope);
+}
+
+function targetKindLabel(kind) {
+  return ({hull: '舷号目标', description: '外观描述目标', all: '全部目标'})[kind] || valueText(kind);
+}
+
+function operationLabel(op) {
+  return ({existence: '存在判断', list: '列表查询', time: '时间定位', count: '数量统计', explain: '证据解释'})[op] || valueText(op);
+}
+
+function relationLabel(rel) {
+  return ({any: '不限库关系', in: '在库', out: '未在库'})[rel] || valueText(rel);
+}
+
+function intentSourceLabel(source) {
+  return ({model: '规则表+模型', heuristic: '规则兜底'})[source] || valueText(source);
+}
+
 function questionTypeLabel(type) {
   return ({
     hull: '舷号查询',
@@ -225,18 +246,82 @@ function agentTags(event) {
 function appendSystemThought(event) {
   const stream = document.getElementById('agentThoughtStream');
   if (!stream) return;
+  if (event.type === 'classification') {
+    renderIntentAgentCard(event);
+    return;
+  }
+  if (event.type === 'status' && /IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`)) {
+    let card = stream.querySelector('.intent-agent-card.pending, .intent-agent-card');
+    if (!card || card.classList.contains('ready')) {
+      card = document.createElement('section');
+      card.className = 'intent-agent-card pending';
+      stream.prepend(card);
+    }
+    card.className = 'intent-agent-card pending';
+    card.innerHTML = `
+      <div class="intent-agent-head">
+        <div><span class="eyebrow">IntentAgent</span><strong>意图识别</strong></div>
+        <em>解析中</em>
+      </div>
+      <div class="intent-agent-body"><p>${escapeHtml(event.message || '正在按规则表解析用户意图')}</p></div>
+      <div class="intent-agent-meta"><time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time></div>`;
+    stream.scrollTop = 0;
+    return;
+  }
   const item = document.createElement('div');
   item.className = `thought-system-card ${event.type}`;
   let detail = '';
-  if (event.type === 'classification') {
-    const scope = event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
-    detail = `${questionTypeLabel(event.questionType)} · ${scope}`;
-  } else if (event.type === 'synthesis') {
+  if (event.type === 'synthesis') {
     detail = `${stateLabel(event.state)} · 候选轨迹 ${Number(event.trackCount || 0)}`;
   }
   item.innerHTML = `<strong>${escapeHtml(event.title || '系统事件')}</strong><span>${escapeHtml(detail || event.message || '')}</span><time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time>`;
   stream.appendChild(item);
   stream.scrollTop = stream.scrollHeight;
+}
+
+function renderIntentAgentCard(event) {
+  const stream = document.getElementById('agentThoughtStream');
+  if (!stream) return;
+  const timeScope = event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
+  const rules = Array.isArray(event.selectedRules) && event.selectedRules.length ? event.selectedRules.join(' / ') : '未返回规则编号';
+  const targetText = event.hullNumber || event.description || '无具体目标文本';
+  const confidence = Number(event.intentConfidence);
+  const confidenceText = Number.isFinite(confidence) ? confidence.toFixed(2) : '—';
+  const chips = [
+    `规则 ${rules}`,
+    `范围 ${scopeLabel(event.targetScope)}`,
+    `目标 ${targetKindLabel(event.targetKind)}`,
+    `操作 ${operationLabel(event.operation)}`,
+    `库关系 ${relationLabel(event.registryRelation)}`,
+    `策略 ${questionTypeLabel(event.questionType)}`,
+    `来源 ${intentSourceLabel(event.intentSource)}`,
+  ];
+  let card = stream.querySelector('.intent-agent-card');
+  if (!card) {
+    card = document.createElement('section');
+    card.className = 'intent-agent-card';
+    stream.prepend(card);
+  }
+  card.classList.remove('pending');
+  card.classList.add('ready');
+  card.innerHTML = `
+    <div class="intent-agent-head">
+      <div><span class="eyebrow">IntentAgent</span><strong>意图识别结果</strong></div>
+      <em>完成</em>
+    </div>
+    <div class="intent-agent-summary">
+      <p><strong>选定规则：</strong>${escapeHtml(rules)}</p>
+      <p><strong>编译策略：</strong>${escapeHtml(questionTypeLabel(event.questionType))}（${escapeHtml(valueText(event.strategy))}）</p>
+      <p><strong>查询目标：</strong>${escapeHtml(String(targetText))}</p>
+      <p><strong>时间范围：</strong>${escapeHtml(timeScope)}</p>
+    </div>
+    <div class="intent-agent-chips">${chips.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>
+    <div class="intent-agent-meta">
+      <span>置信度 ${escapeHtml(confidenceText)}</span>
+      <span>${escapeHtml(event.message || '已选择规则并编译检索策略')}</span>
+      <time>${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</time>
+    </div>`;
+  stream.scrollTop = 0;
 }
 
 function appendThoughtEvent(event) {
