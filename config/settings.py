@@ -86,6 +86,12 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "label": "PlanAgent 规划模式",
         "help": "guided=控制器硬编码工具链，Plan 只解释；autonomous=Plan 自主决定工具调用。",
     },
+    "llm.enable_thinking": {
+        "type": "enum",
+        "choices": ["false", "true"],
+        "label": "模型思考模式",
+        "help": "默认 false 关闭 Qwen3 思考链；true 时允许模型输出长链推理。",
+    },
 }
 
 
@@ -175,7 +181,13 @@ def _validate_relations(config: dict[str, Any]) -> None:
 def public_settings(config: dict[str, Any]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for path in SETTING_SPECS:
-        _set(values, path, _get(config, path))
+        value = _get(config, path)
+        if path == "llm.enable_thinking":
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            else:
+                value = "true" if str(value).strip().lower() in {"1", "true", "yes", "on"} else "false"
+        _set(values, path, value)
     for path in PROMPT_SETTING_SPECS:
         _set(values, path, _get(config, path) or "")
     specs = deepcopy(SETTING_SPECS)

@@ -275,6 +275,13 @@
             </select>
             <small>硬编码辅助：控制器固定工具链，Plan 只解释。完全自主：Plan 根据工具说明自行规划调用。</small>
           </label>
+          <label class="settings-toggle">模型思考模式
+            <select data-setting="llm.enable_thinking">
+              <option value="false">关闭（推荐）</option>
+              <option value="true">开启</option>
+            </select>
+            <small>默认关闭 Qwen3 思考链，避免前端刷长推理；仅调试时可开启。</small>
+          </label>
         </div>
       </section>
 
@@ -331,7 +338,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=17"></script>
-<script src="/static/js/settings.js?v=4"></script>
+<script src="/static/js/agent.js?v=18"></script>
+<script src="/static/js/settings.js?v=5"></script>
 </body>
 </html>

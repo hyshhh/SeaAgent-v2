@@ -9,6 +9,8 @@ llm:
   api_key: "abc123"
   base_url: "http://localhost:7890/v1"
   temperature: 0.0
+  # Qwen3 思考模式：默认关闭，避免智能体流式输出长链思考
+  enable_thinking: false
   timeout_seconds: 60
   max_context_tokens: 32768
 embedding:
