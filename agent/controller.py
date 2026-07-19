@@ -972,12 +972,13 @@ class AgentController:
         self._emit(
             "agent_end",
             "PlanAgent",
-            "自主规划完成",
+            f"计划已修正：{plan['planRepair']}" if plan.get("planRepair") else "自主规划完成",
             round=round_number,
             role="planner",
             calls=public_plan["calls"],
             modelSummary=plan.get("modelPlan"),
             fallback=plan.get("modelFallback"),
+            planRepair=plan.get("planRepair"),
             planMode="autonomous",
         )
 
@@ -1038,7 +1039,6 @@ class AgentController:
             "answerHint": plan.get("answerHint") or "",
         }
         self.rounds.append(record)
-        self._append_tool_chain(calls)
         return record
 
     def _autonomous_history(self) -> list[dict[str, Any]]:

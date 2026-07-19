@@ -408,8 +408,12 @@ function appendThoughtEvent(event) {
     const content = card.querySelector('.agent-stream-text');
     const streamedText = content.textContent.trim();
     const fallbackText = modelSummaryText(event.modelSummary);
-    if (!streamedText && fallbackText) content.textContent = fallbackText;
-    if (!content.textContent.trim()) content.textContent = event.fallback || '模型未返回可展示内容';
+    if (event.planRepair) {
+      content.textContent = `计划已修正：${event.planRepair}`;
+    } else if (!streamedText && fallbackText) {
+      content.textContent = fallbackText;
+    }
+    if (!content.textContent.trim()) content.textContent = event.fallback || '模型未返回可展示文本';
     card.querySelector('.agent-stream-cursor')?.remove();
     card.classList.remove('active');
     card.classList.toggle('failed', Boolean(event.fallback));

@@ -167,6 +167,7 @@ prompts:
     6. 若上一轮 hasMore=true 或证据不足，本轮继续取下一页或补 getFrames/getClip/verifyTarget。
     7. 证据足够时 proposedState=sufficient；需继续=replan；冲突=conflict；仍不确定=uncertain。
     8. 禁止编造 trackId/keyframeId/registryId；只能使用用户问题、意图字段或已观察结果中的编号。
+    9. 不得把 trackIds、galleryImages、queryImages 写成空数组。描述目标的首轮若尚无轨迹结果，必须先 getTrack，再以 $ref 依次 getFrames 和 matchText；空候选只能由工具真实返回，不能在计划中预填。
 
     输出 JSON 模式：
     {

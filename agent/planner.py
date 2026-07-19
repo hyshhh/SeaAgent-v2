@@ -415,8 +415,16 @@ class Planner:
                 on_delta(f"\n[兜底规划] {model_plan['goal']}")
 
         calls = self._sanitize_calls(model_plan.get("calls") or [])
-        if not calls:
-            calls = self._sanitize_calls(self._fallback_autonomous_plan(intent).get("calls") or [])
+        plan_repair: str | None = None
+        executable, issue = self._calls_are_executable(calls, memory_scope)
+        if not calls or not executable:
+            fallback = self._fallback_autonomous_plan(intent)
+            calls = self._sanitize_calls(fallback.get("calls") or [])
+            plan_repair = issue or "自主计划未生成有效工具调用，已使用受控兜底计划"
+            # 修复后的计划必须与实际执行工具一致，避免前端展示与执行脱节。
+            for key in ("goal", "proposedState", "reason", "evidenceGap", "answerHint"):
+                if key in fallback:
+                    model_plan[key] = fallback[key]
         state = str(model_plan.get("proposedState") or "replan").lower()
         if state not in {"sufficient", "replan", "conflict", "uncertain"}:
             state = "replan"
@@ -435,10 +443,9 @@ class Planner:
             "proposedState": state,
             "reason": reason,
             "answerHint": answer_hint,
-            "planMode": "guided",
-            "stopCondition": "证据足够、冲突、已读完全部候选或达到轮次上限",
+            "stopCondition": "证据足够、证据冲突、已读完全部候选或达到轮次上限",
             "modelPlan": {
-                "summary": raw.strip()[:500] if raw else goal,
+                "summary": (f"计划已修正：{plan_repair}。{goal}" if plan_repair else (raw.strip()[:500] if raw else goal)),
                 "goal": goal,
                 "proposedState": state,
                 "reason": reason,
@@ -446,6 +453,8 @@ class Planner:
             },
             "planMode": "autonomous",
         }
+        if plan_repair:
+            plan["planRepair"] = plan_repair
         if model_plan.get("modelFallback"):
             plan["modelFallback"] = model_plan["modelFallback"]
         return plan
@@ -474,6 +483,50 @@ class Planner:
                 call["condition"] = condition
             cleaned.append(call)
         return cleaned
+
+    def _calls_are_executable(self, calls: list[dict[str, Any]], memory_scope: dict[str, Any]) -> tuple[bool, str | None]:
+        """校验自主计划的工具依赖，阻止空候选直接进入匹配工具。"""
+        if not calls:
+            return False, "自主计划没有合法工具调用"
+        available = set(memory_scope)
+        for call in calls:
+            tool = call["tool"]
+            arguments = call.get("arguments") or {}
+            requirements: tuple[tuple[str, str], ...] = ()
+            if tool == "getFrames":
+                requirements = (("trackIds", "轨迹编号"),)
+            elif tool == "getClip":
+                requirements = (("trackId", "轨迹编号"),)
+            elif tool == "getRegistry":
+                requirements = (("hullNumber", "舷号"),)
+            elif tool == "matchHull":
+                requirements = (("hullNumberArray", "舷号数组"),)
+            elif tool == "matchText":
+                requirements = (("description", "描述"), ("galleryImages", "候选图像"))
+            elif tool == "matchImage":
+                requirements = (("queryImages", "查询图像"), ("galleryImages", "候选图像"))
+            elif tool == "dedupTracks":
+                requirements = (("tracks", "轨迹列表"), ("keyframesByTrack", "关键帧集合"))
+            elif tool == "verifyTarget":
+                sources = ("description", "registryReferenceIds", "keyframeIds", "shipSegmentIds")
+                if not any(self._has_call_value(arguments.get(name), available, memory_scope) for name in sources):
+                    return False, "verifyTarget 缺少可核验的文字、参考图、关键帧或片段"
+
+            for field, label in requirements:
+                if not self._has_call_value(arguments.get(field), available, memory_scope):
+                    return False, f"{tool} 缺少有效{label}"
+            available.add(call["id"])
+        return True, None
+
+    @staticmethod
+    def _has_call_value(value: Any, available: set[str], memory_scope: dict[str, Any]) -> bool:
+        if isinstance(value, dict) and "$ref" in value:
+            reference = str(value.get("$ref") or "").strip()
+            root = reference.split(".", 1)[0]
+            return bool(root) and (root in available or root in memory_scope)
+        if isinstance(value, (list, tuple, set, dict)):
+            return bool(value)
+        return value not in (None, "")
 
     def _sanitize_arguments(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
