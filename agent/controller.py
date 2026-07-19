@@ -605,6 +605,18 @@ class AgentController:
         catalog = self._result(first, "registryCatalog")
         match_result = self._result(first, "registryTextMatch")
         matches = self._enrich_registry_matches(match_result.get("matches", []), catalog)
+        # 文本-图像匹配的中分段不可过度信任：分数刚过阈值或与第二名接近时，降为灰区走视觉核验
+        text_match = float(self.config["pipeline"]["retrieval"].get("text_match", 0.62))
+        for item in matches:
+            score = float(item.get("embeddingScore") or 0)
+            rank_gap = item.get("rankGap")
+            weak_match = item.get("scoreBand") == "match" and (
+                score < text_match + 0.05
+                or (isinstance(rank_gap, (int, float)) and float(rank_gap) < 0.03 and score < text_match + 0.10)
+            )
+            if weak_match:
+                item["scoreBand"] = "uncertain"
+                item["weakMatch"] = True
         confirmed = [item for item in matches if item.get("scoreBand") == "match"]
         uncertain = [item for item in matches if item.get("scoreBand") == "uncertain"]
         rejected = [item for item in matches if item.get("scoreBand") == "mismatch"]

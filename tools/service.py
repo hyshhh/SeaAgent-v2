@@ -163,10 +163,28 @@ class ToolService:
                     grouped.setdefault(str(image["registryId"]), []).append((float(np.dot(query, vector)), image))
             matches = []
             for registry_id, scored in grouped.items():
-                top = sorted(scored, key=lambda item: item[0], reverse=True)[:3]
-                score = float(np.mean([item[0] for item in top]))
-                matches.append({"matchedRegistryId": registry_id, "embeddingScore": round(score, 6), "scoreBand": self._band(score, "text"), "matchedRegistryReferenceIds": [item[1]["referenceId"] for item in top]})
+                ranked = sorted(scored, key=lambda item: item[0], reverse=True)
+                if not ranked:
+                    continue
+                # 先验库多视角：以最高相似参考图为准，避免弱视角把强匹配平均稀释
+                best_score = float(ranked[0][0])
+                support = ranked[:3]
+                mean_top3 = float(np.mean([item[0] for item in support]))
+                matches.append({
+                    "matchedRegistryId": registry_id,
+                    "embeddingScore": round(best_score, 6),
+                    "maxEmbeddingScore": round(best_score, 6),
+                    "meanTop3Score": round(mean_top3, 6),
+                    "scoreBand": self._band(best_score, "text"),
+                    "matchedRegistryReferenceIds": [item[1]["referenceId"] for item in support],
+                    "supportReferenceCount": len(support),
+                })
             matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
+            # 附加 rank gap，便于后续灰区判断
+            if len(matches) >= 2:
+                matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]) - float(matches[1]["embeddingScore"]), 6)
+            elif matches:
+                matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]), 6)
             return {"ok": True, "matchMode": "text_to_registry", "matches": matches[:topK] if topK else matches}
         images = [item for item in galleryImages if item.get("isEmbedded") and item.get("keyframeVectorId") is not None]
         if not images:
@@ -181,9 +199,21 @@ class ToolService:
                 grouped.setdefault(str(image["trackId"]), []).append((float(np.dot(query, vector)), image))
         matches = []
         for track_id, scored in grouped.items():
-            top = sorted(scored, key=lambda item: item[0], reverse=True)[:2]
-            score = float(np.mean([item[0] for item in top]))
-            matches.append({"matchedTrackId": track_id, "embeddingScore": round(score, 6), "scoreBand": self._band(score, "text"), "matchedKeyframeIds": [item[1]["keyframeId"] for item in top]})
+            ranked = sorted(scored, key=lambda item: item[0], reverse=True)
+            if not ranked:
+                continue
+            top = ranked[:2]
+            best_score = float(top[0][0])
+            mean_top2 = float(np.mean([item[0] for item in top]))
+            # 轨迹描述检索：主分用最高关键帧，避免次优帧把分数拉低
+            matches.append({
+                "matchedTrackId": track_id,
+                "embeddingScore": round(best_score, 6),
+                "maxEmbeddingScore": round(best_score, 6),
+                "meanTop2Score": round(mean_top2, 6),
+                "scoreBand": self._band(best_score, "text"),
+                "matchedKeyframeIds": [item[1]["keyframeId"] for item in top],
+            })
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
         return {"ok": True, "matchMode": "text_to_image", "matches": matches[:topK] if topK else matches, "missingKeyframeIds": missing}
 

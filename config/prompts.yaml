@@ -59,7 +59,7 @@ prompts:
     description 只填写稳定、可见的颜色、船型、上层建筑和显著结构。
     只返回 JSON：
     {"has_readable_hull_number":"yes或no","vlm_hull_number":"规范化舷号或null","readability_confidence":0到1,"description":"颜色、船型、上层建筑和显著结构"}
-  text_retrieval_instruction: Retrieve vessel images matching the user's description.
+  text_retrieval_instruction: Retrieve ship reference images that match the vessel appearance description, focusing on color, vessel type and superstructure.
   planner: |
     你是 SeaAgent 的 PlanAgent。工具调用清单已由控制器编译完成，你只解释本轮计划，不新增、删除或改写工具，不假装工具已执行，不直接回答用户问题。
     先结合 intent 判断查询对象是轨迹记忆、先验库还是两者，再说明为何当前工具链匹配该意图。
