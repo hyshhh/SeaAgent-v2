@@ -63,7 +63,7 @@ _POOL_EVENT_PREFIX = "__POOL_EVENT__:"
 _MAX_POOL_ROWS = 40
 _pool_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
 _pool_rows_lock = threading.Lock()
-_VIDEO_LIST_CACHE_TTL = 15.0
+_VIDEO_LIST_CACHE_TTL = 300.0
 _video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
 _video_list_lock = asyncio.Lock()
 
@@ -460,24 +460,15 @@ def _get_video_path(video_filename: str) -> Path | None:
 # ── 视频管理 ──
 
 def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]:
-    """在线程中扫描挂载目录，每个文件只读取一次状态。"""
-    videos = []
-    with os.scandir(demo_dir) as entries:
-        for entry in entries:
-            if Path(entry.name).suffix.lower() not in allowed:
-                continue
-            try:
-                if not entry.is_file():
-                    continue
-                stat = entry.stat()
-            except OSError as error:
-                logger.warning("读取视频文件状态失败 %s: %s", entry.name, error)
-                continue
-            videos.append({
-                "filename": entry.name,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "modified": stat.st_mtime,
-            })
+    """快速扫描挂载目录，只读取文件名，避免逐文件状态查询。"""
+    started = time.perf_counter()
+    videos = [
+        {"filename": name, "size_mb": None, "modified": None}
+        for name in os.listdir(demo_dir)
+        if Path(name).suffix.lower() in allowed
+    ]
+    elapsed = time.perf_counter() - started
+    logger.info("视频目录扫描完成: path=%s count=%d elapsed=%.3fs", demo_dir, len(videos), elapsed)
     return sorted(videos, key=lambda item: item["filename"].lower())
 
 

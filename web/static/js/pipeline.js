@@ -56,6 +56,7 @@ let _h264MediaSource = null; // MediaSource
 let _h264SourceBuffer = null;// SourceBuffer
 let _h264ObjectUrl = null;   // MediaSource 对象地址
 let _h264Queue = [];         // 积压的 segment 队列
+let videoListLoading = false;
 
 // ── 视频上传 ──
 const videoUploadZone = document.getElementById('videoUploadZone');
@@ -150,8 +151,11 @@ async function handleVideoUpload(file) {
 async function loadVideoList() {
   const container = document.getElementById('videoList');
   if (!container) return;
+  if (videoListLoading) return;
+  videoListLoading = true;
+  container.innerHTML = '<div class="empty-msg">正在读取视频目录…</div>';
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const resp = await fetch(`${PIPE_API}/videos`, { signal: controller.signal });
     if (!resp.ok) throw new Error(`请求失败 (${resp.status})`);
@@ -166,7 +170,7 @@ async function loadVideoList() {
         <div class="video-item-icon">🎬</div>
         <div class="video-item-info">
           <div class="video-item-name">${escHtml(v.filename)}</div>
-          <div class="video-item-meta">${v.size_mb} MB</div>
+          <div class="video-item-meta">${v.size_mb == null ? '视频文件' : `${v.size_mb} MB`}</div>
         </div>
         <div class="video-item-actions">
           <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteVideo(this.dataset.name)" data-name="${safeAttr(v.filename)}">🗑️</button>
@@ -174,10 +178,11 @@ async function loadVideoList() {
       </div>
     `).join('');
   } catch (e) {
-    const message = e.name === 'AbortError' ? '目录响应超时' : e.message;
+    const message = e.name === 'AbortError' ? '目录响应超时，请检查视频盘是否已挂载' : e.message;
     container.innerHTML = `<div class="empty-msg">加载失败：${escHtml(message)}<br><button class="btn btn-sm" onclick="loadVideoList()">重新加载</button></div>`;
   } finally {
     clearTimeout(timeout);
+    videoListLoading = false;
   }
 }
 
