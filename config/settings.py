@@ -44,7 +44,7 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
             "reflector": "审计证据是否充分，决定停止或继续。",
             "single_frame_recognition": "单帧舷号可读性与外观描述识别。",
             "verify_description": "灰区时核验轨迹图像是否符合文字描述。",
-            "verify_registry": "灰区时核验轨迹图像是否与库参考图同船。",
+            "verify_registry": "灰区时比较库参考图与轨迹图像，判断是否为同一艘船。",
             "text_retrieval_instruction": "文本向量检索时使用的英文指令。",
         }.get(key, ""),
     }
