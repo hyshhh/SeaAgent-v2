@@ -23,9 +23,13 @@ class ToolService:
         self.vectors = vectors or VectorCatalog(self.config)
         self.settings = self.config["pipeline"]["retrieval"]
 
-    def getTrack(self, timeRange: tuple[float, float] | None = None, hullNumber: str | None = None, finalMatchType: str | None = None) -> dict[str, Any]:
+    def getTrack(self, timeRange: tuple[float, float] | None = None, hullNumber: str | None = None, finalMatchType: str | None = None, offset: int = 0, limit: int = 0) -> dict[str, Any]:
         tracks = self.repository.find_tracks(timeRange, hullNumber, finalMatchType)
-        return {"ok": True, "queryScope": list(timeRange) if timeRange else None, "trackIds": [item["trackId"] for item in tracks], "tracks": tracks}
+        start = max(0, int(offset or 0))
+        page_size = max(0, min(200, int(limit or 0)))
+        selected = tracks[start:start + page_size] if page_size else tracks[start:]
+        next_offset = start + len(selected)
+        return {"ok": True, "queryScope": list(timeRange) if timeRange else None, "trackIds": [item["trackId"] for item in selected], "tracks": selected, "totalTrackCount": len(tracks), "returnedTrackCount": len(selected), "offset": start, "limit": page_size, "hasMore": next_offset < len(tracks), "nextOffset": next_offset if next_offset < len(tracks) else None}
 
     def getFrames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
         ids = [str(value) for value in dict.fromkeys(trackIds)]

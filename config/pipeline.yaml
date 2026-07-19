@@ -37,5 +37,6 @@ pipeline:
     dedup_high: 0.82
     dedup_low: 0.72
   agent:
-    max_rounds: 3
+    max_rounds: 5
     display_limit: 3
+    retrieval_page_size: 60

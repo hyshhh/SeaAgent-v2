@@ -92,23 +92,52 @@ class AgentController:
 
     def _answer_description(self) -> dict[str, Any]:
         description = self._description_target()
-        first = self._round("按用户描述检索全视频正式关键帧", [
-            {"id": "descriptionTracks", "tool": "getTrack", "arguments": {}},
-            {"id": "descriptionFrames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "descriptionTracks.trackIds"}}},
-            {"id": "textMatch", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "descriptionFrames.keyframes"}}},
-        ], "replan", "高分直接回答，灰区进入视觉核验")
-        tracks_result = self._result(first, "descriptionTracks")
-        frame_result = self._result(first, "descriptionFrames")
-        matches = self._result(first, "textMatch").get("matches", [])
-        track_map = {item["trackId"]: item for item in tracks_result.get("tracks", [])}
-        matched = [item for item in matches if item["scoreBand"] == "match"]
-        if matched:
-            tracks = [self._with_match(track_map[item["matchedTrackId"]], item) for item in matched[:self.display_limit] if item["matchedTrackId"] in track_map]
-            return self._finish("确认出现", tracks, "描述与正式关键帧的统一特征分数达到匹配阈值", "sufficient", display={"tracks": tracks, "includeClips": True})
-        uncertain = [item for item in matches if item["scoreBand"] == "uncertain"][:self.display_limit]
+        page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+        offset, has_more = 0, True
+        track_map: dict[str, dict[str, Any]] = {}
+        uncertain_by_track: dict[str, dict[str, Any]] = {}
+        missing_track_ids: set[str] = set()
+        searched_count = 0
+        while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
+            page_number = offset // page_size + 1
+            track_call, frame_call, match_call = f"descriptionTracks{page_number}", f"descriptionFrames{page_number}", f"textMatch{page_number}"
+            current = self._round(f"读取第 {page_number} 页轨迹并执行描述检索", [
+                {"id": track_call, "tool": "getTrack", "arguments": {"offset": offset, "limit": page_size}},
+                {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
+                {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 6}},
+            ], "replan", "当前页无充分证据且 hasMore=true 时继续读取下一页")
+            tracks_result = self._result(current, track_call)
+            frame_result = self._result(current, frame_call)
+            matches = self._result(current, match_call).get("matches", [])
+            page_tracks = tracks_result.get("tracks", [])
+            searched_count += len(page_tracks)
+            track_map.update({str(item["trackId"]): item for item in page_tracks})
+            missing_track_ids.update(str(value) for value in frame_result.get("unsearchableTrackIds", []))
+            matched = [item for item in matches if item.get("scoreBand") == "match"]
+            if matched:
+                tracks = [self._with_match(track_map[str(item["matchedTrackId"])], item) for item in matched[:self.display_limit] if str(item["matchedTrackId"]) in track_map]
+                return self._finish("确认出现", tracks, f"分页读取 {searched_count} 条轨迹后找到达到匹配阈值的证据", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": tracks, "includeClips": True})
+            for item in matches:
+                if item.get("scoreBand") != "uncertain":
+                    continue
+                track_id = str(item.get("matchedTrackId"))
+                previous = uncertain_by_track.get(track_id)
+                if previous is None or float(item.get("embeddingScore") or 0) > float(previous.get("embeddingScore") or 0):
+                    uncertain_by_track[track_id] = item
+            has_more = bool(tracks_result.get("hasMore"))
+            next_offset = tracks_result.get("nextOffset")
+            if not has_more or next_offset is None:
+                break
+            offset = int(next_offset)
+
+        uncertain = sorted(uncertain_by_track.values(), key=lambda item: float(item.get("embeddingScore") or 0), reverse=True)[:self.display_limit]
         if not uncertain:
-            missing = frame_result.get("unsearchableTrackIds", [])
-            return self._finish("无法确认" if missing else "未发现", [], "存在不可检索轨迹" if missing else "全部可检索轨迹均低于排除阈值", "uncertain" if missing else "sufficient")
+            if has_more:
+                return self._finish("无法确认", [], "达到检索轮次上限但仍有轨迹尚未读取", "uncertain", extra={"searchedTrackCount": searched_count, "hasMore": True})
+            return self._finish("无法确认" if missing_track_ids else "未发现", [], "存在不可检索轨迹" if missing_track_ids else "全部已读取轨迹均低于排除阈值", "uncertain" if missing_track_ids else "sufficient", extra={"searchedTrackCount": searched_count})
+        if len(self.rounds) >= self.max_rounds:
+            candidates = [self._with_match(track_map[str(item["matchedTrackId"])], item) for item in uncertain if str(item["matchedTrackId"]) in track_map]
+            return self._finish("无法确认", candidates, "已完成分页检索，但没有剩余轮次核验灰区证据", "uncertain", extra={"searchedTrackCount": searched_count, "hasMore": has_more}, display={"tracks": candidates, "includeClips": True})
         calls = []
         for index, item in enumerate(uncertain):
             calls.extend([
@@ -122,7 +151,8 @@ class AgentController:
             frame_decision = self._result(second, f"verifyDescription{index}").get("decision", "uncertain")
             clip_result = self._result(second, f"descriptionClip{index}")
             final_decision = self._result(second, f"verifyDescriptionClip{index}").get("decision", frame_decision)
-            track = self._with_match(track_map[item["matchedTrackId"]], item) if item["matchedTrackId"] in track_map else None
+            track_id = str(item["matchedTrackId"])
+            track = self._with_match(track_map[track_id], item) if track_id in track_map else None
             if track and clip_result.get("shipSegmentId"):
                 track["shipSegmentIds"] = [clip_result["shipSegmentId"]]
             if track and final_decision == "match":
@@ -131,11 +161,10 @@ class AgentController:
             elif track and final_decision == "uncertain":
                 unresolved.append(track)
         if verified:
-            return self._finish("确认出现", verified, "灰区视觉证据经模型核验后符合目标描述", "sufficient", display={"tracks": verified, "includeClips": True})
-        missing = frame_result.get("unsearchableTrackIds", [])
-        if unresolved or missing:
-            return self._finish("无法确认", unresolved, "灰区证据或不可检索轨迹未形成稳定结论", "uncertain", display={"tracks": unresolved, "includeClips": True})
-        return self._finish("未发现", [], "灰区候选经视觉核验均不符合目标描述", "sufficient")
+            return self._finish("确认出现", verified, "分页检索后的灰区视觉证据经模型核验后符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": verified, "includeClips": True})
+        if unresolved or missing_track_ids or has_more:
+            return self._finish("无法确认", unresolved, "灰区证据、不可检索轨迹或未读取页面仍存在不确定性", "uncertain", extra={"searchedTrackCount": searched_count, "hasMore": has_more}, display={"tracks": unresolved, "includeClips": True})
+        return self._finish("未发现", [], "全部分页候选经视觉核验均不符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count})
 
     def _answer_registry_description(self) -> dict[str, Any]:
         description = self._description_target()
