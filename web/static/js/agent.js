@@ -104,6 +104,21 @@ function renderTracks(tracks) {
   return `<div class="answer-tracks">${rows}</div>`;
 }
 
+
+function renderRegistryHits(result) {
+  const items = result?.registryItems || result?.registryMatches || [];
+  if (!items.length) return '';
+  const rows = items.slice(0, 5).map((item, index) => {
+    const hull = item.hullNumber || item.hull || '未知舷号';
+    const registryId = item.registryId || item.matchedRegistryId || '未知库项';
+    const score = Number(item.embeddingScore);
+    const band = item.scoreBand || item.verifyDecision || '';
+    const desc = item.description || '';
+    return `<div class="track-summary"><strong>${escapeHtml(hull)}</strong><span>库项 ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}${band ? ` · ${escapeHtml(band)}` : ''}${desc ? ` · ${escapeHtml(desc)}` : ''}</span></div>`;
+  }).join('');
+  return `<div class="answer-tracks">${rows}</div>`;
+}
+
 function renderAgentAnswer(result) {
     const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
   const chain = (result.toolChain || []).map((item) => `<span class="tool-tag">${escapeHtml(item)}</span>`).join('');
@@ -112,6 +127,7 @@ function renderAgentAnswer(result) {
     <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
     <p>${escapeHtml(result.answerText || '未生成回答')}</p>
     <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span></div>
+    ${renderRegistryHits(result)}
     ${renderTracks(result.tracks)}
     ${chain ? `<div class="tool-tags">${chain}</div>` : ''}`;
 }

@@ -602,8 +602,9 @@ class AgentController:
             "replan",
             "先做文本-库图特征匹配；高分直接确认，灰区再对库参考图做视觉核验",
         )
+        catalog = self._result(first, "registryCatalog")
         match_result = self._result(first, "registryTextMatch")
-        matches = match_result.get("matches", [])
+        matches = self._enrich_registry_matches(match_result.get("matches", []), catalog)
         confirmed = [item for item in matches if item.get("scoreBand") == "match"]
         uncertain = [item for item in matches if item.get("scoreBand") == "uncertain"]
         rejected = [item for item in matches if item.get("scoreBand") == "mismatch"]
@@ -611,7 +612,7 @@ class AgentController:
         if confirmed:
             refs = []
             for item in confirmed:
-                refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                refs.extend(item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or [])
             if refs and len(self.rounds) < self.max_rounds:
                 self._round(
                     "展示命中的先验库参考图证据",
@@ -619,18 +620,32 @@ class AgentController:
                     "sufficient",
                     "返回已确认库项及参考图",
                 )
+            hit_text = self._format_registry_hits(confirmed)
             return self._finish(
                 "先验库中存在符合描述的库项",
                 [],
-                f"目标描述：{description}；特征匹配达到确定阈值",
+                f"目标描述：{description}；命中 {len(confirmed)} 个库项：{hit_text}",
                 "sufficient",
-                extra={"registryMatches": confirmed, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs))},
+                extra={
+                    "registryMatches": confirmed,
+                    "registryItems": [{
+                        "registryId": item.get("registryId"),
+                        "hullNumber": item.get("hullNumber"),
+                        "description": item.get("description"),
+                        "embeddingScore": item.get("embeddingScore"),
+                        "scoreBand": item.get("scoreBand"),
+                        "registryReferenceIds": item.get("registryReferenceIds") or [],
+                    } for item in confirmed],
+                    "registryDescription": description,
+                    "registryReferenceIds": list(dict.fromkeys(refs)),
+                    "hitHullNumbers": [item.get("hullNumber") for item in confirmed if item.get("hullNumber")],
+                },
             )
 
         if uncertain and len(self.rounds) < self.max_rounds:
             calls = []
             for index, item in enumerate(uncertain[: self.display_limit]):
-                ref_ids = item.get("matchedRegistryReferenceIds") or []
+                ref_ids = item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or []
                 if not ref_ids:
                     continue
                 calls.append({
@@ -647,7 +662,8 @@ class AgentController:
                 )
                 verified, still_uncertain = [], []
                 for index, item in enumerate(uncertain[: self.display_limit]):
-                    if not item.get("matchedRegistryReferenceIds"):
+                    ref_ids = item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or []
+                    if not ref_ids:
                         still_uncertain.append(item)
                         continue
                     decision = self._result(second, f"verifyRegistryDesc{index}").get("decision", "uncertain")
@@ -663,7 +679,7 @@ class AgentController:
                 if verified:
                     refs = []
                     for item in verified:
-                        refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                        refs.extend(item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or [])
                     if refs and len(self.rounds) < self.max_rounds:
                         self._round(
                             "展示核验通过的先验库参考图",
@@ -671,42 +687,86 @@ class AgentController:
                             "sufficient",
                             "返回视觉核验通过的库项",
                         )
+                    hit_text = self._format_registry_hits(verified)
                     return self._finish(
                         "先验库中存在符合描述的库项",
                         [],
-                        f"目标描述：{description}；灰区库项经视觉核验确认",
+                        f"目标描述：{description}；灰区库项经视觉核验确认：{hit_text}",
                         "sufficient",
-                        extra={"registryMatches": verified, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs)), "rejectedRegistryMatches": rejected},
+                        extra={
+                            "registryMatches": verified,
+                            "registryItems": [{
+                                "registryId": item.get("registryId"),
+                                "hullNumber": item.get("hullNumber"),
+                                "description": item.get("description"),
+                                "embeddingScore": item.get("embeddingScore"),
+                                "scoreBand": item.get("scoreBand"),
+                                "registryReferenceIds": item.get("registryReferenceIds") or [],
+                            } for item in verified],
+                            "registryDescription": description,
+                            "registryReferenceIds": list(dict.fromkeys(refs)),
+                            "hitHullNumbers": [item.get("hullNumber") for item in verified if item.get("hullNumber")],
+                            "rejectedRegistryMatches": rejected,
+                        },
                     )
                 if still_uncertain:
                     refs = []
                     for item in still_uncertain:
-                        refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                        refs.extend(item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or [])
+                    hit_text = self._format_registry_hits(still_uncertain)
                     return self._finish(
                         "无法确认",
                         [],
-                        f"目标描述：{description}；存在相似库项但视觉核验仍无法确认",
+                        f"目标描述：{description}；相似库项仍无法确认：{hit_text}",
                         "uncertain",
-                        extra={"registryMatches": still_uncertain, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs)), "rejectedRegistryMatches": rejected},
+                        extra={
+                            "registryMatches": still_uncertain,
+                            "registryItems": [{
+                                "registryId": item.get("registryId"),
+                                "hullNumber": item.get("hullNumber"),
+                                "description": item.get("description"),
+                                "embeddingScore": item.get("embeddingScore"),
+                                "scoreBand": item.get("scoreBand"),
+                                "registryReferenceIds": item.get("registryReferenceIds") or [],
+                            } for item in still_uncertain],
+                            "registryDescription": description,
+                            "registryReferenceIds": list(dict.fromkeys(refs)),
+                            "hitHullNumbers": [item.get("hullNumber") for item in still_uncertain if item.get("hullNumber")],
+                            "rejectedRegistryMatches": rejected,
+                        },
                     )
 
         if uncertain:
             refs = []
             for item in uncertain:
-                refs.extend(item.get("matchedRegistryReferenceIds") or [])
+                refs.extend(item.get("registryReferenceIds") or item.get("matchedRegistryReferenceIds") or [])
+            hit_text = self._format_registry_hits(uncertain)
             return self._finish(
                 "无法确认",
                 [],
-                f"目标描述：{description}；存在灰区匹配但没有剩余轮次完成视觉核验",
+                f"目标描述：{description}；存在灰区匹配但没有剩余轮次完成视觉核验：{hit_text}",
                 "uncertain",
-                extra={"registryMatches": uncertain, "registryDescription": description, "registryReferenceIds": list(dict.fromkeys(refs))},
+                extra={
+                    "registryMatches": uncertain,
+                    "registryItems": [{
+                        "registryId": item.get("registryId"),
+                        "hullNumber": item.get("hullNumber"),
+                        "description": item.get("description"),
+                        "embeddingScore": item.get("embeddingScore"),
+                        "scoreBand": item.get("scoreBand"),
+                        "registryReferenceIds": item.get("registryReferenceIds") or [],
+                    } for item in uncertain],
+                    "registryDescription": description,
+                    "registryReferenceIds": list(dict.fromkeys(refs)),
+                    "hitHullNumbers": [item.get("hullNumber") for item in uncertain if item.get("hullNumber")],
+                },
             )
         return self._finish(
             "先验库中未找到符合描述的库项",
             [],
             f"目标描述：{description}；特征匹配均未达到接受阈值",
             "sufficient",
-            extra={"registryMatches": [], "registryDescription": description, "rejectedRegistryMatches": rejected},
+            extra={"registryMatches": [], "registryItems": [], "registryDescription": description, "rejectedRegistryMatches": rejected, "hitHullNumbers": []},
         )
 
     def _answer_registry(self, want_in_registry: bool) -> dict[str, Any]:
@@ -1002,6 +1062,40 @@ class AgentController:
         return result
 
 
+
+
+    def _registry_item_map(self, catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        items = catalog.get("registryItems") or []
+        return {str(item.get("registryId")): item for item in items if item.get("registryId") is not None}
+
+    def _enrich_registry_matches(self, matches: list[dict[str, Any]], catalog: dict[str, Any]) -> list[dict[str, Any]]:
+        item_map = self._registry_item_map(catalog)
+        enriched = []
+        for match in matches or []:
+            item = dict(match)
+            registry_id = str(item.get("matchedRegistryId") or item.get("registryId") or "")
+            record = item_map.get(registry_id) or {}
+            item["registryId"] = registry_id or record.get("registryId")
+            item["hullNumber"] = record.get("hullNumber") or record.get("hull_number") or item.get("hullNumber")
+            item["description"] = record.get("description") or item.get("description")
+            item["registryReferenceIds"] = item.get("matchedRegistryReferenceIds") or item.get("registryReferenceIds") or []
+            # 兼容 references 字段
+            if not item["registryReferenceIds"] and record.get("references"):
+                item["registryReferenceIds"] = [ref.get("referenceId") for ref in record.get("references", []) if ref.get("referenceId")]
+            enriched.append(item)
+        return enriched
+
+    def _format_registry_hits(self, matches: list[dict[str, Any]], limit: int | None = None) -> str:
+        rows = []
+        for item in (matches or [])[: (limit or self.display_limit)]:
+            hull = item.get("hullNumber") or "未知舷号"
+            registry_id = item.get("registryId") or item.get("matchedRegistryId") or "未知库项"
+            score = item.get("embeddingScore")
+            score_text = f"，相似度 {float(score):.3f}" if isinstance(score, (int, float)) else ""
+            band = item.get("scoreBand") or item.get("verifyDecision") or ""
+            band_text = f"，状态 {band}" if band else ""
+            rows.append(f"{hull}（库项 {registry_id}{score_text}{band_text}）")
+        return "；".join(rows)
 
     def _guard_meta(self, meta: dict[str, Any]) -> dict[str, Any]:
         """最小结构校验：防止无效 description 触发错误工具链。意图本身由规则表+模型决定。"""
