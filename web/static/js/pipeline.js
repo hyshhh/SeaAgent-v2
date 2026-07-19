@@ -37,6 +37,8 @@ function switchTab(tabName) {
     onCameraSourceChange();
   } else if (tabName === 'database') {
     if (typeof loadShips === 'function') loadShips();
+  } else if (tabName === 'settings') {
+    if (typeof loadSystemSettings === 'function') loadSystemSettings();
   }
 }
 

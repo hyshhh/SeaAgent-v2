@@ -17,6 +17,17 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function formatVideoTime(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return '时间未知';
+  const tenths = Math.max(0, Math.round(value * 10));
+  const hours = Math.floor(tenths / 36000);
+  const minutes = Math.floor((tenths % 36000) / 600);
+  const wholeSeconds = Math.floor((tenths % 600) / 10);
+  const fraction = tenths % 10;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(wholeSeconds).padStart(2, '0')}.${fraction}`;
+}
+
 function showToast(message, type = 'success') {
   const toast = document.getElementById('toast');
   if (!toast) return;

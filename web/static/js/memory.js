@@ -2,10 +2,7 @@ let memoryRefreshTimer = null;
 let memorySettingsLoaded = false;
 
 function formatMemoryTime(seconds) {
-  const value = Number(seconds || 0);
-  const minutes = Math.floor(value / 60);
-  const remain = value - minutes * 60;
-  return minutes > 0 ? `${minutes}分${remain.toFixed(1)}秒` : `${value.toFixed(1)}秒`;
+  return formatVideoTime(seconds);
 }
 
 function escapeMemoryText(value) {
@@ -22,7 +19,8 @@ function renderTrackMemory(payload) {
   document.getElementById('memoryKeyframeCount').textContent = payload.keyframeCount ?? 0;
   document.getElementById('memoryEmbeddedCount').textContent = payload.embeddedKeyframeCount ?? 0;
   if (!memorySettingsLoaded) {
-    document.getElementById('memoryRetentionSeconds').value = payload.settings?.retentionSeconds ?? 0;
+    const retentionSeconds = Number(payload.settings?.retentionSeconds ?? 0);
+    document.getElementById('memoryRetentionHours').value = Math.round(retentionSeconds / 3600 * 10) / 10;
     memorySettingsLoaded = true;
   }
   const body = document.getElementById('trackMemoryTable');
@@ -71,17 +69,18 @@ function stopMemoryAutoRefresh() {
 }
 
 async function saveMemorySettings() {
-  const input = document.getElementById('memoryRetentionSeconds');
-  const value = Number(input.value);
-  if (!Number.isFinite(value) || value < 0 || value > 86400) {
-    showToast('请输入 0 至 86400 秒之间的维护时间', 'error');
+  const input = document.getElementById('memoryRetentionHours');
+  const hours = Number(input.value);
+  if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
+    showToast('请输入 0 至 24 小时之间的维护时间', 'error');
     return;
   }
+  const retentionSeconds = Math.round(hours * 3600);
   try {
     const response = await apiFetch('/api/memory/settings', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({retention_seconds: value})
+      body: JSON.stringify({retention_seconds: retentionSeconds})
     });
     memorySettingsLoaded = false;
     showToast(response.message || '记忆维护时间已更新');

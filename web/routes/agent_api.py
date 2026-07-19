@@ -60,11 +60,19 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-@router.get("/api/memory/tracks")
-async def list_tracks(request: Request, start: float | None = None, end: float | None = None):
-    time_range = (start, end) if start is not None and end is not None else None
-    tracks = request.app.state.repository.find_tracks(time_range)
-    return {"total": len(tracks), "tracks": tracks}
+@router.get("/api/agent/memory-summary")
+async def memory_summary(request: Request):
+    snapshot = request.app.state.memory_manager.snapshot()
+    registry = request.app.state.ship_service.list_ships()
+    config = request.app.state.config
+    return {
+        "trackCount": snapshot.get("trackCount", len(snapshot.get("tracks", []))),
+        "keyframeCount": snapshot.get("keyframeCount", 0),
+        "embeddedKeyframeCount": snapshot.get("embeddedKeyframeCount", 0),
+        "registryCount": len(registry),
+        "recognitionModel": config["llm"]["model"],
+        "maxRounds": config["pipeline"]["agent"]["max_rounds"],
+    }
 
 @router.get("/api/memory/tracks/{track_id}/frames")
 async def track_frames(track_id: str, request: Request):

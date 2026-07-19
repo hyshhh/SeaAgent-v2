@@ -11,7 +11,7 @@ from memory import MemoryRepository, TrackMemoryManager
 from services import AgentLLMService, QwenMultimodalEmbedder
 from tools import ToolService
 from vector_store import VectorCatalog
-from web.routes import agent_router, api_router, memory_router, pages_router, pipeline_router
+from web.routes import agent_router, api_router, config_router, memory_router, pages_router, pipeline_router
 from web.services import ShipService
 
 @asynccontextmanager
@@ -40,6 +40,7 @@ if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 app.include_router(pages_router)
 app.include_router(api_router)
+app.include_router(config_router)
 app.include_router(memory_router)
 app.include_router(agent_router)
 app.include_router(pipeline_router)

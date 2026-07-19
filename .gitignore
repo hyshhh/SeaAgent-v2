@@ -22,6 +22,7 @@ _transcoded/
 data/indexes/
 data/videos/
 data/memory/*.csv
+config/runtime.yaml
 data/memory/keyframes/
 data/memory/trajectories/
 data/memory/clips/

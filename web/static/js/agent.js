@@ -19,25 +19,39 @@ function questionTypeLabel(type) {
   return ({hull: '舷号查询', description: '描述目标查询', out_of_registry: '未在库船查询', in_registry: '在库船查询', count: '数量统计'})[type] || valueText(type);
 }
 
-async function loadAgentMemorySummary() {
+async function loadAgentMemorySummary(showNotice = false) {
   const trackCount = document.getElementById('agentTrackCount');
   const registryStatus = document.getElementById('agentRegistryStatus');
   const modelName = document.getElementById('agentModelName');
+  const refreshButton = document.getElementById('agentMemoryRefreshButton');
+  const refreshStatus = document.getElementById('agentMemoryRefreshStatus');
+  if (refreshButton) {
+    refreshButton.disabled = true;
+    refreshButton.textContent = '刷新中…';
+  }
+  if (refreshStatus) refreshStatus.textContent = '正在读取记忆状态…';
   try {
-    const [tracks, registry, config] = await Promise.all([
-      apiFetch('/api/memory/tracks'),
-      apiFetch('/api/ships'),
-      apiFetch('/api/config'),
-    ]);
-    if (trackCount) trackCount.textContent = `${tracks.total || 0} 条轨迹`;
-    if (registryStatus) registryStatus.textContent = `${registry.total || 0} 个库项`;
-    if (modelName) modelName.textContent = config.models?.recognition || '模型已连接';
+    const summary = await apiFetch('/api/agent/memory-summary');
+    const numberOfTracks = summary.trackCount ?? summary.total ?? summary.tracks?.length ?? 0;
+    const numberOfRegistryItems = summary.registryCount ?? summary.registryTotal ?? 0;
+    if (trackCount) trackCount.textContent = `${numberOfTracks} 条轨迹`;
+    if (registryStatus) registryStatus.textContent = `${numberOfRegistryItems} 个库项`;
+    if (modelName) modelName.textContent = summary.recognitionModel || '模型已连接';
     const limit = document.getElementById('agentRoundLimit');
-    if (limit) limit.textContent = `最多 ${config.pipeline?.maxRounds || 3} 轮`;
+    if (limit) limit.textContent = `最多 ${summary.maxRounds || 3} 轮`;
+    if (refreshStatus) {
+      const updateTime = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      refreshStatus.textContent = `已更新 ${updateTime}`;
+    }
+    if (showNotice && typeof showToast === 'function') showToast('记忆状态已刷新');
   } catch (error) {
-    if (trackCount) trackCount.textContent = '读取失败';
-    if (registryStatus) registryStatus.textContent = '读取失败';
-    if (modelName) modelName.textContent = '服务未连接';
+    if (refreshStatus) refreshStatus.textContent = `刷新失败：${error.message || '服务不可用'}`;
+    if (showNotice && typeof showToast === 'function') showToast(`记忆状态刷新失败：${error.message || '服务不可用'}`, 'error');
+  } finally {
+    if (refreshButton) {
+      refreshButton.disabled = false;
+      refreshButton.textContent = '刷新记忆状态';
+    }
   }
 }
 
@@ -47,7 +61,7 @@ function renderTracks(tracks) {
     const hull = track.finalHullNumber || track.hullNumber || '无稳定舷号';
     const start = Number(track.startTime ?? track.start_time);
     const end = Number(track.endTime ?? track.end_time);
-    const time = Number.isFinite(start) && Number.isFinite(end) ? `${start.toFixed(1)}秒—${end.toFixed(1)}秒` : '时间未知';
+    const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatVideoTime(start)}—${formatVideoTime(end)}` : '时间未知';
     const score = Number(track.embeddingScore);
     return `<div class="track-summary"><strong>${escapeHtml(track.trackId || '未知轨迹')}</strong><span>${escapeHtml(hull)} · ${time}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
   }).join('');
@@ -55,7 +69,7 @@ function renderTracks(tracks) {
 }
 
 function renderAgentAnswer(result) {
-  const scope = Array.isArray(result.queryScope) ? `${result.queryScope[0]}秒—${result.queryScope[1]}秒` : '全视频';
+  const scope = Array.isArray(result.queryScope) ? `${formatVideoTime(result.queryScope[0])}—${formatVideoTime(result.queryScope[1])}` : '全视频';
   const chain = (result.toolChain || []).map((item) => `<span class="tool-tag">${escapeHtml(item)}</span>`).join('');
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
@@ -197,7 +211,7 @@ function appendSystemThought(event) {
   item.className = `thought-system-card ${event.type}`;
   let detail = '';
   if (event.type === 'classification') {
-    const scope = event.queryScope ? `${event.queryScope[0]}秒—${event.queryScope[1]}秒` : '全视频';
+    const scope = event.queryScope ? `${formatVideoTime(event.queryScope[0])}—${formatVideoTime(event.queryScope[1])}` : '全视频';
     detail = `${questionTypeLabel(event.questionType)} · ${scope}`;
   } else if (event.type === 'synthesis') {
     detail = `${stateLabel(event.state)} · 候选轨迹 ${Number(event.trackCount || 0)}`;

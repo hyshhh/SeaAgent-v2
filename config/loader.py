@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 import yaml
 
-_CONFIG_FILES = ("app.yaml", "yolo.yaml", "pipeline.yaml", "prompts.yaml")
+_CONFIG_FILES = ("app.yaml", "yolo.yaml", "pipeline.yaml", "prompts.yaml", "runtime.yaml")
 _ROOT = Path(__file__).resolve().parent.parent
 
 def project_root() -> Path:
