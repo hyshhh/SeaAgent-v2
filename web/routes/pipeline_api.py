@@ -375,36 +375,6 @@ def _probe_video_size(video_path: str) -> tuple[int, int] | None:
     return None
 
 
-def _probe_video_fps(video_path: str) -> float | None:
-    """用 ffprobe 检测视频平均帧率，避免按固定帧率播放导致速度异常。"""
-    _ensure_ffmpeg()
-    if not _FFPROBE:
-        return None
-    try:
-        ret = subprocess.run(
-            [_FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        if ret.returncode != 0:
-            return None
-        for value in ret.stdout.strip().splitlines():
-            value = value.strip()
-            if not value or value in {"0/0", "N/A"}:
-                continue
-            if "/" in value:
-                numerator, denominator = value.split("/", 1)
-                fps = float(numerator) / float(denominator)
-            else:
-                fps = float(value)
-            if 1.0 <= fps <= 120.0:
-                return fps
-    except Exception as e:
-        logger.warning("ffprobe 帧率检测失败: %s → %s", video_path, e)
-    return None
-
-
 def _is_browser_compatible(video_path: str) -> bool:
     """检测视频是否被浏览器原生兼容。"""
     codec = _probe_codec(video_path)
@@ -758,9 +728,8 @@ async def start_pipeline(req: PipelineStartRequest):
             raise HTTPException(status_code=404, detail=f"视频不存在: {req.video_filename}")
         video_source = str(video_path)
 
-    # 探测视频分辨率和帧率（H.264 编码需要与实际 raw 帧一致）
+    # 探测视频分辨率（H.264 编码需要知道帧尺寸）
     video_w, video_h = 640, 480  # 默认值
-    source_fps = float(req.capture_fps or 15)
     if is_camera:
         # 摄像头/RTSP：提前探测分辨率
         cam_source = video_source if not video_source.startswith("__camera__") else video_source.replace("__camera__", "")
@@ -775,10 +744,6 @@ async def start_pipeline(req: PipelineStartRequest):
         if detected:
             video_w, video_h = detected
             logger.info("视频分辨率: %dx%d", video_w, video_h)
-        detected_fps = _probe_video_fps(str(video_path))
-        if detected_fps:
-            source_fps = detected_fps
-            logger.info("视频帧率: %.3f FPS", source_fps)
 
     # 构建 pipeline 命令
     config = load_config()
@@ -830,8 +795,8 @@ async def start_pipeline(req: PipelineStartRequest):
     else:
         # 文件模式：raw stdout 输出（H.264 编码用），不写磁盘
         cmd.append("--raw-stdout")
-        # 只输出推流尺寸，确保 ffmpeg 读取的帧大小与 pipeline 输出一致
-        cmd.extend(["--output-size", f"{pipe_w}x{pipe_h}"])
+        # 统一输出尺寸，确保 ffmpeg 读取的帧大小与 pipeline 输出一致
+        cmd.extend(["--output-size", f"{video_w}x{video_h}"])
         if req.display:
             cmd.append("--display")
     cmd.append("--demo")
@@ -868,7 +833,7 @@ async def start_pipeline(req: PipelineStartRequest):
             _running_processes[task_id] = process
 
         # 启动 H.264 编码器（从 pipeline stdout 读 raw 帧 → ffmpeg → fMP4）
-        h264_fps = max(1, round(req.target_fps if req.target_fps > 0 else source_fps))
+        h264_fps = int(req.target_fps) if req.target_fps > 0 else 15
         asyncio.create_task(_start_h264_reader(task_id, process, pipe_w, pipe_h, fps=h264_fps))
 
         asyncio.create_task(_wait_pipeline(task_id, process, sem))
@@ -1487,8 +1452,7 @@ async def ws_h264_stream(websocket: WebSocket, task_id: str):
             return
         stream["viewers"].add(websocket)
         # 初始化段必须先于后续媒体分片进入观众队列
-        # 只允许约两秒的分片积压；实时预览宁可重连，也不追赶历史画面
-        q: asyncio.Queue = asyncio.Queue(maxsize=8)
+        q: asyncio.Queue = asyncio.Queue(maxsize=16)
         init_seg = stream.get("init_segment")
         if init_seg:
             q.put_nowait(b"\x01" + len(init_seg).to_bytes(4, "big") + init_seg)

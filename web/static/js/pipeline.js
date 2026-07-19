@@ -458,7 +458,7 @@ function connectStreamWs(taskId) {
 
           if (sb.updating) {
             // 中间分片不可跳过；积压过多时完整重连并等待下一个关键帧
-            if (_h264Queue.length >= 8) {
+            if (_h264Queue.length >= 24) {
               ws.close(1013, '解码队列积压');
               return;
             }
@@ -1511,7 +1511,7 @@ function connectCameraH264(taskId) {
           const sb = _camH264SourceBuffer;
           if (!sb) return;
           if (sb.updating) {
-            if (_camH264Queue.length >= 8) {
+            if (_camH264Queue.length >= 24) {
               ws.close(1013, '解码队列积压');
               return;
             }
