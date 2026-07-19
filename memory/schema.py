@@ -1,6 +1,6 @@
 """三层记忆的 CSV 字段定义。"""
 TRACK_FIELDS = (
-    "track_id", "start_time", "end_time", "final_hull_number",
+    "track_id", "start_time", "end_time", "video_start_time", "video_end_time", "final_hull_number",
     "final_description", "final_match_type", "trajectory_path",
 )
 KEYFRAME_FIELDS = (

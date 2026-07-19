@@ -95,7 +95,9 @@ class TrackMemoryManager:
         protected = {str(value) for value in protected_track_ids}
         expired = [
             item["trackId"] for item in self.repository.find_tracks()
-            if str(item["trackId"]) not in protected and reference_time - float(item["endTime"]) > retention
+            if str(item["trackId"]) not in protected
+            and float(item["endTime"]) >= 946684800
+            and reference_time - float(item["endTime"]) > retention
         ]
         if not expired:
             return []

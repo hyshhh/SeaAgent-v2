@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -38,6 +39,8 @@ class ActiveTrack:
     track_id: str
     start_time: float
     last_time: float
+    video_start_time: float
+    video_last_time: float
     latest_bbox: tuple[int, int, int, int]
     missed_frames: int = 0
     candidate_frames: dict[str, CandidateFrame] = field(default_factory=dict)
@@ -67,6 +70,16 @@ class TrackMemoryBuilder:
         self._last_maintenance_time = -1.0
         self.trace: list[dict[str, Any]] = []
         self._pool_event_callback = pool_event_callback
+        self._next_track_id_value = self._load_next_track_id()
+
+    def _load_next_track_id(self) -> int:
+        values = [int(row["track_id"]) for row in self.repository.tracks.rows() if str(row.get("track_id") or "").isdigit()]
+        return max(values, default=0) + 1
+
+    def _allocate_track_id(self) -> str:
+        track_id = str(self._next_track_id_value)
+        self._next_track_id_value += 1
+        return track_id
 
     def _emit_pool_event(self, pool: str, action: str, **data: Any) -> None:
         event = {"pool": pool, "action": action, **data}
@@ -104,34 +117,36 @@ class TrackMemoryBuilder:
     def reset_persistent_memory(self) -> None:
         self.memory_manager.clear_all()
         self.trace.clear()
+        self._next_track_id_value = 1
 
     def observe(self, frame: np.ndarray, detections: list[Any], frame_index: int, timestamp: float, source_path: str = "", source_fps: float = 25.0) -> None:
         self._source_path, self._source_fps = source_path, float(source_fps or 25)
         self._frame_size = [int(frame.shape[1]), int(frame.shape[0])]
+        observed_at = time.time()
         seen = set()
         interval = max(1, int(self.settings.get("candidate_every_n_frames", 10)))
         with self._lock:
             self._drain_completed()
             for detection in detections:
-                track_id = str(detection.track_id)
-                seen.add(track_id)
-                state = self.active.get(track_id)
+                source_track_id = str(detection.track_id)
+                seen.add(source_track_id)
+                state = self.active.get(source_track_id)
                 if state is None:
-                    state = ActiveTrack(track_id, timestamp, timestamp, tuple(detection.bbox))
-                    self.active[track_id] = state
+                    state = ActiveTrack(self._allocate_track_id(), observed_at, observed_at, timestamp, timestamp, tuple(detection.bbox))
+                    self.active[source_track_id] = state
                     self._write_track(state)
-                state.last_time, state.latest_bbox, state.missed_frames = timestamp, tuple(detection.bbox), 0
-                state.bbox_history.append({"frameIndex": frame_index, "timestamp": round(timestamp, 6), "bbox": list(detection.bbox)})
+                state.last_time, state.video_last_time, state.latest_bbox, state.missed_frames = observed_at, timestamp, tuple(detection.bbox), 0
+                state.bbox_history.append({"frameIndex": frame_index, "timestamp": round(timestamp, 6), "observedAt": round(observed_at, 6), "bbox": list(detection.bbox)})
                 if frame_index % interval == 0 and detection.crop is not None:
                     self._submit_candidate(state, detection.crop.copy(), tuple(detection.bbox), frame.shape, timestamp)
-            for track_id, state in list(self.active.items()):
-                if track_id not in seen:
+            for source_track_id, state in list(self.active.items()):
+                if source_track_id not in seen:
                     state.missed_frames += 1
             self._drain_completed()
-            self._prune_expired(timestamp)
+            self._prune_expired(observed_at)
             self._finalize_stale()
             for state in self.active.values():
-                self._emit_track_status(state, timestamp)
+                self._emit_track_status(state, observed_at)
 
     def _submit_candidate(self, state: ActiveTrack, crop: np.ndarray, bbox: tuple[int, int, int, int], frame_shape: tuple[int, ...], timestamp: float) -> None:
         min_width, min_height = int(self.settings.get("min_crop_width", 80)), int(self.settings.get("min_crop_height", 80))
@@ -148,7 +163,7 @@ class TrackMemoryBuilder:
         candidate.future = self._executor.submit(self.llm.recognize, crop)
         state.candidate_frames[candidate_id] = candidate
         self.trace.append({"event": "candidate_submitted", "trackId": state.track_id, "timestamp": timestamp, "qualityScore": quality})
-        self._emit_track_status(state, timestamp, force=True)
+        self._emit_track_status(state, state.last_time, force=True)
 
     def _reserve_candidate_slot(self, state: ActiveTrack, quality_score: float) -> bool:
         limit = int(self.settings.get("candidate_pool_size", 12))
@@ -199,7 +214,7 @@ class TrackMemoryBuilder:
                 self._emit_pool_event("candidate", "upsert", recordId=candidate_id, trackId=state.track_id, hullNumber=None, description=str(error), status="识别失败")
             finally:
                 state.candidate_frames.pop(candidate_id, None)
-                self._emit_track_status(state, candidate.timestamp, force=True)
+                self._emit_track_status(state, state.last_time, force=True)
 
     def _promote_candidate(self, state: ActiveTrack, candidate: CandidateFrame, result: dict[str, Any]) -> None:
         readable = result.get("has_readable_hull_number") == "yes"
@@ -236,7 +251,7 @@ class TrackMemoryBuilder:
         self.trace.append({"event": "keyframe_committed", "trackId": state.track_id, "keyframeId": committed["keyframeId"], "isEmbedded": committed["isEmbedded"]})
         self._emit_pool_event("candidate", "upsert", **candidate_event, status="已进入正式池")
         self._emit_pool_event("keyframe", "upsert", recordId=committed["keyframeId"], trackId=committed["trackId"], hullNumber=committed["vlmHullNumber"], description=committed["description"], status="正式帧")
-        self._emit_track_status(state, candidate.timestamp, force=True)
+        self._emit_track_status(state, state.last_time, force=True)
 
     def _select_replacement(self, state: ActiveTrack, record: dict[str, Any], limit: int) -> dict[str, Any] | None:
         if len(state.keyframe_pool) < limit:
@@ -342,7 +357,7 @@ class TrackMemoryBuilder:
     def _write_track(self, state: ActiveTrack, trajectory_path: str = "") -> None:
         current = self.repository.get_track(state.track_id)
         saved_path = current.get("trajectoryPath", "") if current else ""
-        self.repository.upsert_track({"track_id": state.track_id, "start_time": state.start_time, "end_time": state.last_time, "final_hull_number": state.final_hull_number, "final_description": state.final_description, "final_match_type": state.final_match_type, "trajectory_path": trajectory_path or saved_path})
+        self.repository.upsert_track({"track_id": state.track_id, "start_time": state.start_time, "end_time": state.last_time, "video_start_time": state.video_start_time, "video_end_time": state.video_last_time, "final_hull_number": state.final_hull_number, "final_description": state.final_description, "final_match_type": state.final_match_type, "trajectory_path": trajectory_path or saved_path})
 
     def _prune_expired(self, timestamp: float) -> None:
         if self._last_maintenance_time >= 0 and timestamp - self._last_maintenance_time < 1.0:
@@ -351,12 +366,13 @@ class TrackMemoryBuilder:
         for state in self.active.values():
             self._write_track(state)
         retention = self.memory_manager.settings.read()["retentionSeconds"]
-        protected = [track_id for track_id, state in self.active.items() if retention <= 0 or timestamp - state.last_time <= retention]
+        protected = [state.track_id for state in self.active.values() if retention <= 0 or timestamp - state.last_time <= retention]
         expired = self.memory_manager.prune_expired(timestamp, protected)
         if expired:
-            for track_id in expired:
-                state = self.active.pop(str(track_id), None)
-                if state:
+            expired_ids = {str(track_id) for track_id in expired}
+            for source_track_id, state in list(self.active.items()):
+                if state.track_id in expired_ids:
+                    self.active.pop(source_track_id, None)
                     for candidate in state.candidate_frames.values():
                         if candidate.future:
                             candidate.future.cancel()
@@ -375,7 +391,7 @@ class TrackMemoryBuilder:
     def _finalize_track(self, state: ActiveTrack) -> None:
         path = Path(self.config["paths"]["trajectory_dir"]) / f"{state.track_id}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"trackId": state.track_id, "sourceVideoPath": self._source_path, "sourceFps": self._source_fps, "frameSize": self._frame_size, "boxes": sorted(state.bbox_history, key=lambda item: item["timestamp"])}
+        payload = {"trackId": state.track_id, "sourceVideoPath": self._source_path, "sourceFps": self._source_fps, "monitorStartTime": state.start_time, "monitorEndTime": state.last_time, "frameSize": self._frame_size, "boxes": sorted(state.bbox_history, key=lambda item: item["timestamp"])}
         path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         self._aggregate_if_changed(state)
         self._write_track(state, str(path))
@@ -392,6 +408,6 @@ class TrackMemoryBuilder:
 
     def display_tracks(self) -> dict[int, Any]:
         result = {}
-        for state in self.active.values():
-            result[int(state.track_id)] = SimpleNamespace(track_id=int(state.track_id), hull_number=state.final_hull_number or "", description=state.final_description, recognized=bool(state.keyframe_pool), pending=bool(state.candidate_frames), final_match_type=state.final_match_type)
+        for source_track_id, state in self.active.items():
+            result[int(source_track_id)] = SimpleNamespace(track_id=state.track_id, hull_number=state.final_hull_number or "", description=state.final_description, recognized=bool(state.keyframe_pool), pending=bool(state.candidate_frames), final_match_type=state.final_match_type)
         return result

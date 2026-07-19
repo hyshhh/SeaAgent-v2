@@ -48,8 +48,8 @@ class ToolService:
         if not track:
             return {"ok": False, "error": "track_not_found", "trackId": str(trackId)}
         start, end = track["startTime"], track["endTime"]
-        scope = (max(start, timeRange[0]), min(end, timeRange[1])) if timeRange else (start, end)
-        if scope[0] > scope[1]:
+        monitor_scope = (max(start, timeRange[0]), min(end, timeRange[1])) if timeRange else (start, end)
+        if monitor_scope[0] > monitor_scope[1]:
             return {"ok": True, "found": False, "trackId": str(trackId)}
         trajectory_value = track.get("trajectoryPath")
         if not trajectory_value:
@@ -60,7 +60,14 @@ class ToolService:
         trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
         source_value = trajectory.get("sourceVideoPath")
         source_path = Path(source_value) if source_value else None
-        boxes = [item for item in trajectory.get("boxes", []) if scope[0] <= float(item["timestamp"]) <= scope[1]]
+        all_boxes = trajectory.get("boxes", [])
+        if timeRange and any("observedAt" in item for item in all_boxes):
+            boxes = [item for item in all_boxes if monitor_scope[0] <= float(item.get("observedAt") or 0) <= monitor_scope[1]]
+        elif timeRange:
+            video_start, video_end = track.get("videoStartTime", start), track.get("videoEndTime", end)
+            boxes = [item for item in all_boxes if video_start <= float(item["timestamp"]) <= video_end]
+        else:
+            boxes = all_boxes
         if source_path is None or not source_path.is_file() or not boxes:
             return {"ok": False, "error": "source_evidence_unavailable", "trackId": str(trackId)}
         box_map = {int(item["frameIndex"]): item["bbox"] for item in boxes}
@@ -69,11 +76,13 @@ class ToolService:
         canvas_size = (self._even_size(max(widths)), self._even_size(max(heights)))
         output_dir = Path(self.config["paths"]["clip_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        cache_key = f"{trackId}|{scope[0]:.3f}|{scope[1]:.3f}|{trajectory_path.stat().st_mtime_ns}"
+        video_start_time = min(float(item["timestamp"]) for item in boxes)
+        video_end_time = max(float(item["timestamp"]) for item in boxes)
+        cache_key = f"{trackId}|{video_start_time:.3f}|{video_end_time:.3f}|{trajectory_path.stat().st_mtime_ns}"
         segment_id = f"segment-{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:12]}"
         output_path = output_dir / f"{segment_id}.mp4"
         if output_path.is_file() and output_path.stat().st_size > 0:
-            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": "cached", "startTime": scope[0], "endTime": scope[1]}
+            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": "cached", "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
         fps = max(1.0, float(trajectory.get("sourceFps") or 25))
         writer, codec = self._open_video_writer(output_path, fps, canvas_size)
         capture = cv2.VideoCapture(str(source_path))
@@ -110,7 +119,7 @@ class ToolService:
             output_path.unlink(missing_ok=True)
             return {"ok": False, "error": "empty_target_segment", "trackId": str(trackId)}
         codec = self._ensure_browser_clip(output_path, codec)
-        return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": codec, "startTime": scope[0], "endTime": scope[1]}
+        return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": codec, "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
 
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
         items = self.repository.registry_by_hull(hullNumber)

@@ -1,8 +1,8 @@
 let memoryRefreshTimer = null;
 let memorySettingsLoaded = false;
 
-function formatMemoryTime(seconds) {
-  return formatVideoTime(seconds);
+function formatMemoryTime(timestamp) {
+  return formatMonitorTime(timestamp);
 }
 
 function escapeMemoryText(value) {

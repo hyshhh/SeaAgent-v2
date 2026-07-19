@@ -61,7 +61,7 @@ function renderTracks(tracks) {
     const hull = track.finalHullNumber || track.hullNumber || '无稳定舷号';
     const start = Number(track.startTime ?? track.start_time);
     const end = Number(track.endTime ?? track.end_time);
-    const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatVideoTime(start)}—${formatVideoTime(end)}` : '时间未知';
+    const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : '时间未知';
     const score = Number(track.embeddingScore);
     return `<div class="track-summary"><strong>${escapeHtml(track.trackId || '未知轨迹')}</strong><span>${escapeHtml(hull)} · ${time}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
   }).join('');
@@ -69,7 +69,7 @@ function renderTracks(tracks) {
 }
 
 function renderAgentAnswer(result) {
-  const scope = Array.isArray(result.queryScope) ? `${formatVideoTime(result.queryScope[0])}—${formatVideoTime(result.queryScope[1])}` : '全视频';
+    const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
   const chain = (result.toolChain || []).map((item) => `<span class="tool-tag">${escapeHtml(item)}</span>`).join('');
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
@@ -211,7 +211,7 @@ function appendSystemThought(event) {
   item.className = `thought-system-card ${event.type}`;
   let detail = '';
   if (event.type === 'classification') {
-    const scope = event.queryScope ? `${formatVideoTime(event.queryScope[0])}—${formatVideoTime(event.queryScope[1])}` : '全视频';
+    const scope = event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
     detail = `${questionTypeLabel(event.questionType)} · ${scope}`;
   } else if (event.type === 'synthesis') {
     detail = `${stateLabel(event.state)} · 候选轨迹 ${Number(event.trackCount || 0)}`;

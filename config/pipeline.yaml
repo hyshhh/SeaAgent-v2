@@ -1,5 +1,4 @@
 pipeline:
-  reset_memory_on_start: true
   max_parallel_pipelines: 1
   candidate_every_n_frames: 10
   candidate_pool_size: 12

@@ -28,6 +28,15 @@ function formatVideoTime(seconds) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(wholeSeconds).padStart(2, '0')}.${fraction}`;
 }
 
+function formatMonitorTime(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value)) return '时间未知';
+  if (value < 946684800) return `历史视频 ${formatVideoTime(value)}`;
+  const date = new Date(value * 1000);
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function showToast(message, type = 'success') {
   const toast = document.getElementById('toast');
   if (!toast) return;

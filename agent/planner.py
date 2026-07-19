@@ -1,6 +1,7 @@
 """生成受控的最短工具计划。"""
 from __future__ import annotations
 import re
+from datetime import datetime, timedelta
 from typing import Any, Callable
 from services import AgentLLMService
 
@@ -38,8 +39,16 @@ class Planner:
 
     @staticmethod
     def _time_range(question: str) -> tuple[float, float] | None:
-        match = re.search(r"(\d+(?:\.\d+)?)\s*分(?:钟)?\s*(?:到|至|-|—|~)\s*(\d+(?:\.\d+)?)\s*分", question)
-        if match:
-            return float(match.group(1)) * 60, float(match.group(2)) * 60
-        match = re.search(r"(\d+(?:\.\d+)?)\s*秒\s*(?:到|至|-|—|~)\s*(\d+(?:\.\d+)?)\s*秒", question)
-        return (float(match.group(1)), float(match.group(2))) if match else None
+        relative_match = re.search(r"最近\s*(\d+(?:\.\d+)?)\s*分(?:钟)?", question)
+        if relative_match:
+            end = datetime.now().astimezone().timestamp()
+            return end - float(relative_match.group(1)) * 60, end
+        clock_match = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:到|至|-|—|~)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?", question)
+        if clock_match:
+            now = datetime.now().astimezone()
+            start = now.replace(hour=int(clock_match.group(1)), minute=int(clock_match.group(2)), second=int(clock_match.group(3) or 0), microsecond=0)
+            end = now.replace(hour=int(clock_match.group(4)), minute=int(clock_match.group(5)), second=int(clock_match.group(6) or 0), microsecond=0)
+            if end < start:
+                end += timedelta(days=1)
+            return start.timestamp(), end.timestamp()
+        return None

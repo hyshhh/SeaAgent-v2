@@ -45,8 +45,6 @@ class ShipPipeline:
         stream_path = Path(stream_dir) if stream_dir else None
         if stream_path:
             stream_path.mkdir(parents=True, exist_ok=True)
-        if self._config["pipeline"].get("reset_memory_on_start", True):
-            self._memory.reset_persistent_memory()
         if self._save_output_video and not output_path and not self._no_output:
             output_dir = Path(self._config["demo_video"]["output_dir"])
             output_dir.mkdir(parents=True, exist_ok=True)

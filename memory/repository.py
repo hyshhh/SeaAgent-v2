@@ -175,7 +175,11 @@ class MemoryRepository:
 
     @staticmethod
     def _track_record(row: dict[str, str]) -> dict[str, Any]:
-        return {"trackId": row["track_id"], "startTime": float(row.get("start_time") or 0), "endTime": float(row.get("end_time") or row.get("start_time") or 0), "finalHullNumber": row.get("final_hull_number") or None, "finalDescription": row.get("final_description", ""), "finalMatchType": row.get("final_match_type") or "unknown", "trajectoryPath": row.get("trajectory_path", "")}
+        start_time = float(row.get("start_time") or 0)
+        end_time = float(row.get("end_time") or start_time)
+        video_start_time = float(row.get("video_start_time") or start_time)
+        video_end_time = float(row.get("video_end_time") or video_start_time)
+        return {"trackId": row["track_id"], "startTime": start_time, "endTime": end_time, "videoStartTime": video_start_time, "videoEndTime": video_end_time, "finalHullNumber": row.get("final_hull_number") or None, "finalDescription": row.get("final_description", ""), "finalMatchType": row.get("final_match_type") or "unknown", "trajectoryPath": row.get("trajectory_path", "")}
 
     @staticmethod
     def _keyframe_record(row: dict[str, str]) -> dict[str, Any]:
