@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
 
+# 问答审计字段可能包含较多轨迹和关键帧摘要；默认 128KB 上限过小。
+csv.field_size_limit(16 * 1024 * 1024)
+
+
 class CsvTable:
     def __init__(self, path: str | Path, fields: Iterable[str]):
         self.path = Path(path)

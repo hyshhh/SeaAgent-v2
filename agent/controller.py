@@ -58,7 +58,7 @@ class AgentController:
             result = handlers[self.meta["questionType"]]()
         except Exception as error:
             result = self._finish("执行失败", [], f"工具链执行失败：{error}", "uncertain", extra={"error": str(error)})
-        self.repository.finish_session(self.session_id, result)
+        self.repository.finish_session(self.session_id, self._session_audit_result(result))
         return result
 
     def _answer_hull(self) -> dict[str, Any]:
@@ -334,8 +334,31 @@ class AgentController:
             if observation.get("skipped"):
                 continue
             evidence_id = f"evidence-{uuid.uuid4().hex[:12]}"
-            self.repository.add_evidence(evidence_id, record_id, observation["result"], {"tool": observation["tool"], "callId": observation["id"]})
+            audit_result = Observer._summarize_observation(observation)
+            self.repository.add_evidence(evidence_id, record_id, audit_result, {"tool": observation["tool"], "callId": observation["id"]})
             self.tool_chain.append(f"{observation['tool']}({observation['id']})")
+
+    @staticmethod
+    def _session_audit_result(result: dict[str, Any]) -> dict[str, Any]:
+        tracks = result.get("tracks", [])
+        compact_tracks = [
+            {key: item.get(key) for key in ("trackId", "startTime", "endTime", "finalHullNumber", "finalMatchType", "embeddingScore", "scoreBand") if item.get(key) not in (None, "")}
+            for item in tracks[:10]
+        ]
+        return {
+            "sessionId": result.get("sessionId"),
+            "question": result.get("question"),
+            "questionType": result.get("questionType"),
+            "conclusion": result.get("conclusion"),
+            "answerText": result.get("answerText"),
+            "queryScope": result.get("queryScope"),
+            "uncertainty": result.get("uncertainty"),
+            "trackCount": len(tracks),
+            "tracks": compact_tracks,
+            "toolChain": result.get("toolChain", [])[:30],
+            "evidence": result.get("evidence", {}),
+            "roundCount": len(result.get("rounds", [])),
+        }
 
     def _append_tool_chain(self, observed: dict[str, Any]) -> None:
         for observation in observed["observations"]:
