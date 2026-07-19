@@ -89,7 +89,7 @@ class AgentController:
         self.meta["maxRounds"] = self.max_rounds
         self.meta["retrievalPageSize"] = self.retrieval_page_size
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
-        self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '完全自主'}", planMode=self.plan_mode)
+        self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（仅接口安全约束）'}", planMode=self.plan_mode)
         try:
             if self.plan_mode == "autonomous":
                 result = self._answer_autonomous()
@@ -938,7 +938,7 @@ class AgentController:
         return self._finish(conclusion, tracks, reason, uncertainty, extra=extra, display={"tracks": representatives})
 
     def _answer_autonomous(self) -> dict[str, Any]:
-        """完全自主模式：每轮由 PlanAgent 决定工具，观察后由 Reflect 决定是否继续。"""
+        """自主规划模式：PlanAgent 决定工具，ReflectAgent 根据证据决定是否继续。"""
         final_state = "uncertain"
         final_reason = "自主规划未形成充分证据"
         last_round: dict[str, Any] | None = None
@@ -952,6 +952,9 @@ class AgentController:
             if state == "replan":
                 continue
             break
+        if final_state == "replan" and len(self.rounds) >= self.max_rounds:
+            final_state = "uncertain"
+            final_reason = f"已达到最大推理轮次 {self.max_rounds}，仍未满足验收标准"
         return self._finish_autonomous(last_round, final_state, final_reason)
 
     def _round_autonomous(self, history: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1011,9 +1014,14 @@ class AgentController:
             observed["summary"],
             evidence_gap,
             lambda delta: self._emit("agent_delta", "ReflectAgent", "", round=round_number, role="reflector", delta=delta),
+            autonomous=True,
+            expected_outcome=self.meta.get("expectedOutcome"),
+            success_criteria=self.meta.get("successCriteria"),
+            next_agent_focus=self.meta.get("nextAgentFocus"),
+            previous_rounds=history,
         )
-        # 若模型希望 sufficient 但本轮无任何成功工具结果，降为 uncertain
-        if reflection.get("state") == "sufficient" and not self._has_successful_observation(observed):
+        # 首轮无有效观察时不能确认；后续空调用可基于历史证据正常结束。
+        if reflection.get("state") == "sufficient" and not history and not self._has_successful_observation(observed):
             reflection["state"] = "uncertain"
             reflection["reason"] = "本轮未获得有效工具结果，暂不能确认"
         self._emit(
@@ -1083,14 +1091,29 @@ class AgentController:
             answer_hint = answer_hint or str(plan.get("answerHint") or "").strip()
 
         if matches:
-            conclusion = "找到匹配目标" if any(item.get("scoreBand") == "match" for item in matches) else "得到候选结果"
-            if not answer_hint:
-                answer_hint = f"共得到 {len(matches)} 条匹配候选"
-            display_tracks = tracks[: max(self.display_limit, len(tracks))]
-            extra = {"matches": matches, "planMode": "autonomous"}
+            supported_matches = [item for item in matches if item.get("scoreBand") != "mismatch"]
+            matching_tracks = self._tracks_for_matches(supported_matches, tracks)
+            extra = {
+                "matches": matches,
+                "matchedCount": len(supported_matches),
+                "rejectedCount": len(matches) - len(supported_matches),
+                "planMode": "autonomous",
+            }
             if registry_items:
                 extra["registryItems"] = registry_items
-            return self._finish(conclusion, tracks or self._tracks_from_matches(matches), answer_hint or reason, state, extra=extra, display={"tracks": display_tracks or tracks, "includeClips": True, "includeRegistry": bool(registry_items)})
+            if supported_matches:
+                conclusion = "找到匹配目标" if any(item.get("scoreBand") == "match" for item in supported_matches) else "得到待核验候选"
+                if not answer_hint:
+                    answer_hint = f"共得到 {len(supported_matches)} 条匹配或待核验候选"
+                return self._finish(
+                    conclusion,
+                    matching_tracks,
+                    answer_hint or reason,
+                    state,
+                    extra=extra,
+                    display={"tracks": matching_tracks, "includeClips": True, "includeRegistry": bool(registry_items)},
+                )
+            return self._finish("未找到匹配目标", [], answer_hint or reason, state, extra=extra)
 
         if count_value is not None:
             conclusion = f"统计结果为 {count_value}"
@@ -1121,7 +1144,7 @@ class AgentController:
                 if not isinstance(match, dict):
                     continue
                 track = match.get("track") or {}
-                track_id = match.get("trackId") or track.get("trackId")
+                track_id = match.get("matchedTrackId") or match.get("trackId") or track.get("trackId")
                 if track_id is not None:
                     item = dict(track) if isinstance(track, dict) else {"trackId": track_id}
                     item.setdefault("trackId", track_id)
@@ -1141,7 +1164,17 @@ class AgentController:
             for match in value.get("matches") or []:
                 if not isinstance(match, dict):
                     continue
-                key = str(match.get("trackId") or match.get("registryId") or match.get("keyframeId") or len(matches))
+                track_id = match.get("matchedTrackId") or match.get("trackId")
+                registry_id = match.get("matchedRegistryId") or match.get("registryId")
+                key = "|".join(
+                    part
+                    for part in (
+                        f"track:{track_id}" if track_id is not None else "",
+                        f"registry:{registry_id}" if registry_id is not None else "",
+                        f"frame:{match.get('keyframeId')}" if match.get("keyframeId") is not None else "",
+                    )
+                    if part
+                ) or str(len(matches))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1183,7 +1216,7 @@ class AgentController:
     def _tracks_from_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tracks = []
         for match in matches:
-            track_id = match.get("trackId")
+            track_id = match.get("matchedTrackId") or match.get("trackId")
             if track_id is None:
                 continue
             item = {"trackId": track_id}
@@ -1195,6 +1228,39 @@ class AgentController:
                 item["finalHullNumber"] = match.get("hullNumber")
             tracks.append(item)
         return tracks
+
+    def _tracks_for_matches(
+        self,
+        matches: list[dict[str, Any]],
+        known_tracks: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """只为实际命中的轨迹补齐摘要，避免把 getTrack 的全量候选当作结果返回。"""
+        track_map = {
+            str(item.get("trackId")): item
+            for item in known_tracks
+            if isinstance(item, dict) and item.get("trackId") is not None
+        }
+        selected: dict[str, dict[str, Any]] = {}
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            track_id = match.get("matchedTrackId") or match.get("trackId")
+            if track_id is None:
+                continue
+            key = str(track_id)
+            base = track_map.get(key)
+            if base is None and isinstance(match.get("track"), dict):
+                base = match["track"]
+            if base is None:
+                try:
+                    base = self.repository.get_track(track_id)
+                except Exception:
+                    base = None
+            enriched = self._with_match(base or {"trackId": track_id}, match)
+            existing = selected.get(key)
+            if existing is None or float(enriched.get("embeddingScore") or -1) > float(existing.get("embeddingScore") or -1):
+                selected[key] = enriched
+        return sorted(selected.values(), key=lambda item: float(item.get("embeddingScore") or 0), reverse=True)
 
 
     def _round(self, goal: str, calls: list[dict[str, Any]], default_state: str, reason: str, evidence_gap: str | None = None) -> dict[str, Any]:
@@ -1373,7 +1439,7 @@ class AgentController:
     @staticmethod
     def _with_match(track: dict[str, Any], match: dict[str, Any]) -> dict[str, Any]:
         result = dict(track)
-        for key in ("matchedRegistryId", "embeddingScore", "scoreBand", "queryKeyframeIds", "queryRegistryReferenceIds", "matchedKeyframeIds", "matchedRegistryReferenceIds", "shipSegmentIds"):
+        for key in ("matchedTrackId", "matchedRegistryId", "embeddingScore", "scoreBand", "queryKeyframeIds", "queryRegistryReferenceIds", "matchedKeyframeIds", "matchedRegistryReferenceIds", "shipSegmentIds"):
             if key in match:
                 result[key] = match[key]
         return result

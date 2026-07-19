@@ -1,18 +1,155 @@
 """检查证据充分性并控制循环退出。"""
 from __future__ import annotations
+
+import json
+import re
 from typing import Any, Callable
+
 from services import AgentLLMService
+
 
 class Reflector:
     ALLOWED = {"sufficient", "replan", "conflict", "uncertain"}
+
     def __init__(self, llm: AgentLLMService):
         self.llm = llm
 
-    def review(self, default_state: str, reason: str, observation_summary: dict[str, Any], evidence_gap: str | None = None, on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
+    def review(
+        self,
+        default_state: str,
+        reason: str,
+        observation_summary: dict[str, Any],
+        evidence_gap: str | None = None,
+        on_delta: Callable[[str], None] | None = None,
+        *,
+        autonomous: bool = False,
+        expected_outcome: str | None = None,
+        success_criteria: str | None = None,
+        next_agent_focus: str | None = None,
+        previous_rounds: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if autonomous:
+            return self._review_autonomous(
+                default_state,
+                reason,
+                observation_summary,
+                evidence_gap,
+                on_delta,
+                expected_outcome,
+                success_criteria,
+                next_agent_focus,
+                previous_rounds,
+            )
+        return self._review_guided(default_state, reason, observation_summary, evidence_gap, on_delta)
+
+    def _review_guided(
+        self,
+        default_state: str,
+        reason: str,
+        observation_summary: dict[str, Any],
+        evidence_gap: str | None,
+        on_delta: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
+        """硬编码辅助模式只审计，循环状态仍由控制器的固定链路决定。"""
         state = default_state if default_state in self.ALLOWED else "uncertain"
         reflection = {"state": state, "reason": reason, "evidenceGap": evidence_gap}
         try:
-            reflection["modelReflection"] = self.llm.role("reflector", {"proposedState": state, "reason": reason, "observation": observation_summary, "evidenceGap": evidence_gap}, on_delta)
+            reflection["modelReflection"] = self.llm.role(
+                "reflector",
+                {
+                    "controlledState": state,
+                    "reason": reason,
+                    "observation": observation_summary,
+                    "evidenceGap": evidence_gap,
+                },
+                on_delta,
+            )
         except Exception as error:
             reflection["modelFallback"] = str(error)
         return reflection
+
+    def _review_autonomous(
+        self,
+        proposed_state: str,
+        planner_reason: str,
+        observation_summary: dict[str, Any],
+        evidence_gap: str | None,
+        on_delta: Callable[[str], None] | None,
+        expected_outcome: str | None,
+        success_criteria: str | None,
+        next_agent_focus: str | None,
+        previous_rounds: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """自主规划模式由 ReflectAgent 读取观察事实并实际决定下一轮状态。"""
+        payload = {
+            "plannerProposal": proposed_state if proposed_state in self.ALLOWED else "replan",
+            "plannerReason": planner_reason,
+            "expectedOutcome": expected_outcome,
+            "successCriteria": success_criteria,
+            "nextAgentFocus": next_agent_focus,
+            "observation": observation_summary,
+            "previousRounds": previous_rounds or [],
+            "evidenceGap": evidence_gap,
+        }
+        reflection = {"state": "uncertain", "reason": planner_reason, "evidenceGap": evidence_gap}
+        try:
+            prompt = self.llm._prompt("reflector_autonomous")
+            request = prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False)
+            if on_delta and hasattr(self.llm, "complete_text_stream"):
+                raw = self.llm.complete_text_stream(request, on_delta)
+            else:
+                raw = self.llm.complete_text(request)
+            parsed = self._parse_autonomous_review(raw)
+            reflection.update(parsed)
+            reflection["modelReflection"] = {"summary": raw.strip()}
+        except Exception as error:
+            reflection["reason"] = "ReflectAgent 未返回有效审计结果"
+            reflection["evidenceGap"] = evidence_gap or "缺少可用的反思结论"
+            reflection["modelFallback"] = str(error)
+        return reflection
+
+    @classmethod
+    def _parse_autonomous_review(cls, text: str) -> dict[str, Any]:
+        """解析固定四行输出；格式错误时保守返回 uncertain。"""
+        content = str(text or "").strip()
+
+        try:
+            value = json.loads(content)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict):
+            state = str(value.get("state") or value.get("状态") or "uncertain").lower()
+            basis = str(value.get("reason") or value.get("依据") or value.get("action") or value.get("动作") or "").strip()
+            gap = str(value.get("evidenceGap") or value.get("缺口") or "").strip()
+            action = str(value.get("action") or value.get("动作") or "").strip()
+            if gap.lower() in {"无", "none", "null", "没有", "无缺口"}:
+                gap = ""
+            return {
+                "state": state if state in cls.ALLOWED else "uncertain",
+                "reason": basis or "ReflectAgent 未给出明确依据",
+                "evidenceGap": gap or None,
+                "nextAction": action or None,
+            }
+
+        def field(*names: str) -> str:
+            for name in names:
+                match = re.search(rf"(?im)^\s*{name}\s*[：:]\s*(.+?)\s*$", content)
+                if match:
+                    return match.group(1).strip()
+            return ""
+
+        state_text = field("状态", "state").lower()
+        state_match = re.search(r"\b(sufficient|replan|conflict|uncertain)\b", state_text, re.IGNORECASE)
+        state = state_match.group(1).lower() if state_match else "uncertain"
+        basis = field("依据", "reason")
+        gap = field("缺口", "evidenceGap")
+        action = field("动作", "action")
+        if gap.lower() in {"无", "none", "null", "没有", "无缺口"}:
+            gap = ""
+        reason = basis or action or "ReflectAgent 未给出明确依据"
+        return {
+            "state": state if state in cls.ALLOWED else "uncertain",
+            "reason": reason,
+            "evidenceGap": gap or None,
+            "nextAction": action or None,
+        }

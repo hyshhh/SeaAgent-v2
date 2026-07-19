@@ -271,9 +271,9 @@
           <label class="settings-toggle">PlanAgent 规划模式
             <select data-setting="pipeline.agent.plan_mode">
               <option value="guided">硬编码辅助（稳定）</option>
-              <option value="autonomous">完全自主（Plan 决策工具）</option>
+              <option value="autonomous">自主规划（仅接口安全约束）</option>
             </select>
-            <small>硬编码辅助：控制器固定工具链，Plan 只解释。完全自主：Plan 根据工具说明自行规划调用。</small>
+            <small>硬编码辅助：控制器固定工具链，Plan 只解释。自主规划：Plan 自选工具和顺序，系统只校验白名单、参数与证据依赖。</small>
           </label>
           <label class="settings-toggle">模型思考模式
             <select data-setting="llm.enable_thinking">
@@ -286,7 +286,7 @@
       </section>
 
       <section class="panel settings-card settings-card-wide">
-        <div class="panel-head"><div><span class="eyebrow">智能体提示词</span><h3>四个智能体与核验提示词</h3></div><p class="settings-card-note">可在此直接修改并保存；下一轮问答与识别会使用最新提示词。</p></div>
+        <div class="panel-head"><div><span class="eyebrow">智能体提示词</span><h3>智能体、检索与核验提示词</h3></div><p class="settings-card-note">可在此直接修改并保存；下一轮问答与识别会使用最新提示词。</p></div>
         <div class="settings-prompt-grid">
           <label class="settings-prompt-item">意图分析提示词（planner_intent）
             <textarea data-setting="prompts.planner_intent" rows="8" spellcheck="false"></textarea>
@@ -296,13 +296,21 @@
             <textarea data-setting="prompts.planner" rows="8" spellcheck="false"></textarea>
             <small>解释本轮工具计划；不能增删工具，也不能直接回答用户问题。</small>
           </label>
+          <label class="settings-prompt-item">PlanAgent 提示词（自主规划模式）
+            <textarea data-setting="prompts.planner_autonomous" rows="10" spellcheck="false"></textarea>
+            <small>由 PlanAgent 自选工具和顺序；系统只校验接口、参数和证据依赖。</small>
+          </label>
           <label class="settings-prompt-item">ObserveAgent 提示词
             <textarea data-setting="prompts.observer" rows="8" spellcheck="false"></textarea>
             <small>记录工具执行事实与证据缺口，不重判最终答案。</small>
           </label>
           <label class="settings-prompt-item">ReflectAgent 提示词
             <textarea data-setting="prompts.reflector" rows="8" spellcheck="false"></textarea>
-            <small>审计证据是否充分，决定停止或继续下一轮。</small>
+            <small>硬编码辅助模式下审计固定链路，不改变控制器状态。</small>
+          </label>
+          <label class="settings-prompt-item">ReflectAgent 提示词（自主规划模式）
+            <textarea data-setting="prompts.reflector_autonomous" rows="10" spellcheck="false"></textarea>
+            <small>根据已观察事实实际决定停止、重规划、冲突或无法确认。</small>
           </label>
           <label class="settings-prompt-item">单帧识别提示词
             <textarea data-setting="prompts.single_frame_recognition" rows="7" spellcheck="false"></textarea>
@@ -327,18 +335,14 @@
   </div>
 </section>
 </main>
-<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">新建先验库项</h3><button onclick="closeModal()">×</button></div><label>舷号<input id="modalHullNumber" type="text" placeholder="例如 0857"></label><label>描述<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label>
-          <label class="settings-prompt-item">PlanAgent 提示词（完全自主模式）
-            <textarea data-setting="prompts.planner_autonomous" rows="10" spellcheck="false"></textarea>
-            <small>仅在“完全自主”模式下使用；需包含工具白名单与 JSON 输出格式。</small>
-          </label><label>参考图<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">新建或追加参考图，总数最多六张。</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">保存</button></div></div></div>
+<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">新建先验库项</h3><button onclick="closeModal()">×</button></div><label>舷号<input id="modalHullNumber" type="text" placeholder="例如 0857"></label><label>描述<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label><label>参考图<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">新建或追加参考图，总数最多六张。</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">保存</button></div></div></div>
 <div class="modal-overlay" id="bulkModal"><div class="modal"><div class="modal-head"><h3>批量导入库项</h3><button onclick="closeBulkModal()">×</button></div><label>请输入舷号与描述的对象<textarea id="bulkInput" rows="9" placeholder='{"0857":"灰色船体，白色上层建筑"}'></textarea></label><div class="modal-actions"><button class="btn ghost" onclick="closeBulkModal()">取消</button><button class="btn primary" onclick="submitBulk()">导入</button></div></div></div>
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=20"></script>
-<script src="/static/js/settings.js?v=6"></script>
+<script src="/static/js/agent.js?v=21"></script>
+<script src="/static/js/settings.js?v=7"></script>
 </body>
 </html>

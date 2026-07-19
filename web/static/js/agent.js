@@ -292,7 +292,7 @@ function appendSystemThought(event) {
       mode.className = 'plan-mode-banner';
       stream.prepend(mode);
     }
-    const label = event.planMode === 'autonomous' ? '完全自主' : (event.planMode === 'guided' ? '硬编码辅助' : (event.message || ''));
+    const label = event.planMode === 'autonomous' ? '自主规划（仅接口安全约束）' : (event.planMode === 'guided' ? '硬编码辅助' : (event.message || ''));
     mode.textContent = `PlanAgent 模式：${label}`;
     if (event.planMode) mode.dataset.mode = event.planMode;
   }
@@ -408,10 +408,12 @@ function appendThoughtEvent(event) {
     const content = card.querySelector('.agent-stream-text');
     const streamedText = content.textContent.trim();
     const fallbackText = modelSummaryText(event.modelSummary);
-    if (event.planRepair) {
-      content.textContent = `计划已修正：${event.planRepair}`;
-    } else if (!streamedText && fallbackText) {
+    if (!streamedText && fallbackText) {
       content.textContent = fallbackText;
+    }
+    if (event.planRepair) {
+      const repairText = `计划校验：${event.planRepair}`;
+      content.textContent = content.textContent.trim() ? `${content.textContent.trim()}\n${repairText}` : repairText;
     }
     if (!content.textContent.trim()) content.textContent = event.fallback || '模型未返回可展示文本';
     card.querySelector('.agent-stream-cursor')?.remove();

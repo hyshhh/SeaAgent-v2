@@ -16,6 +16,7 @@ class Planner:
     _OPERATIONS = {"existence", "list", "time", "count", "explain"}
     _TARGET_KINDS = {"hull", "description", "all"}
     _REGISTRY_RELATIONS = {"any", "in", "out"}
+    _PLAN_STATES = {"sufficient", "replan", "conflict", "uncertain"}
     _WEAK_TARGETS = {"", "船", "船舶", "船只", "目标", "在库船", "未在库船", "库船"}
 
     def __init__(self, llm: AgentLLMService, allowed_tools: set[str]):
@@ -376,7 +377,7 @@ class Planner:
         memory_scope: dict[str, Any] | None = None,
         on_delta: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        """完全自主模式：由模型输出本轮工具调用计划，再做白名单与参数校验。"""
+        """自主规划模式：模型选择工具，程序仅校验接口、参数和证据依赖。"""
         history = history or []
         memory_scope = memory_scope or {}
         payload = {
@@ -402,32 +403,42 @@ class Planner:
             "availableResultKeys": sorted(memory_scope.keys()),
             "allowedTools": sorted(self.allowed_tools),
         }
-        model_plan: dict[str, Any] = {}
-        raw = ""
-        try:
-            prompt = self.llm._prompt("planner_autonomous")
-            raw = self.llm.complete_text_stream(prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False), on_delta) if on_delta else self.llm.complete_text(prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False))
-            model_plan = self._extract_json_object(raw)
-        except Exception as error:
-            model_plan = self._fallback_autonomous_plan(intent)
-            model_plan["modelFallback"] = str(error)
-            if on_delta and model_plan.get("modelFallback"):
-                on_delta(f"\n[兜底规划] {model_plan['goal']}")
-
+        model_plan, raw, request_error = self._request_autonomous_plan(payload, on_delta)
         calls = self._sanitize_calls(model_plan.get("calls") or [])
+        state = self._plan_state(model_plan)
         plan_repair: str | None = None
-        executable, issue = self._calls_are_executable(calls, memory_scope)
-        if not calls or not executable:
-            fallback = self._fallback_autonomous_plan(intent)
-            calls = self._sanitize_calls(fallback.get("calls") or [])
-            plan_repair = issue or "自主计划未生成有效工具调用，已使用受控兜底计划"
-            # 修复后的计划必须与实际执行工具一致，避免前端展示与执行脱节。
-            for key in ("goal", "proposedState", "reason", "evidenceGap", "answerHint"):
-                if key in fallback:
-                    model_plan[key] = fallback[key]
-        state = str(model_plan.get("proposedState") or "replan").lower()
-        if state not in {"sufficient", "replan", "conflict", "uncertain"}:
-            state = "replan"
+        executable, issue = self._calls_are_executable(calls, memory_scope, state)
+
+        if request_error or not executable:
+            initial_issue = request_error or issue or "自主计划未生成可执行工具调用"
+            repair_payload = {
+                **payload,
+                "planValidationError": initial_issue,
+                "previousInvalidPlan": {
+                    "goal": str(model_plan.get("goal") or ""),
+                    "calls": calls,
+                    "proposedState": state,
+                },
+            }
+            if on_delta:
+                on_delta("\n[计划校验未通过，正在请求重新规划]\n")
+            repaired_plan, repaired_raw, repair_error = self._request_autonomous_plan(repair_payload, on_delta)
+            repaired_calls = self._sanitize_calls(repaired_plan.get("calls") or [])
+            repaired_state = self._plan_state(repaired_plan)
+            repaired_ok, repaired_issue = self._calls_are_executable(repaired_calls, memory_scope, repaired_state)
+            if not repair_error and repaired_ok:
+                model_plan = repaired_plan
+                raw = repaired_raw
+                calls = repaired_calls
+                state = repaired_state
+                plan_repair = f"{initial_issue}；PlanAgent 已重新规划"
+            else:
+                failure = repair_error or repaired_issue or "重规划未生成可执行工具调用"
+                model_plan = self._autonomous_unavailable_plan(f"{initial_issue}；重规划失败：{failure}")
+                raw = ""
+                calls = []
+                state = "uncertain"
+                plan_repair = f"{initial_issue}；重规划仍无效，已停止工具执行"
         goal = str(model_plan.get("goal") or "根据意图检索轨迹记忆与先验库证据").strip()
         reason = str(model_plan.get("reason") or "按自主规划执行工具并收集证据").strip()
         evidence_gap = model_plan.get("evidenceGap")
@@ -459,6 +470,37 @@ class Planner:
             plan["modelFallback"] = model_plan["modelFallback"]
         return plan
 
+    def _request_autonomous_plan(
+        self,
+        payload: dict[str, Any],
+        on_delta: Callable[[str], None] | None = None,
+    ) -> tuple[dict[str, Any], str, str | None]:
+        """请求一次自主计划；失败只返回错误，不代替模型编译语义工具链。"""
+        try:
+            prompt = self.llm._prompt("planner_autonomous")
+            request = prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False)
+            raw = self.llm.complete_text_stream(request, on_delta) if on_delta else self.llm.complete_text(request)
+            return self._extract_json_object(raw), raw, None
+        except Exception as error:
+            return {}, "", str(error)
+
+    @classmethod
+    def _plan_state(cls, plan: dict[str, Any]) -> str:
+        state = str(plan.get("proposedState") or "replan").lower()
+        return state if state in cls._PLAN_STATES else "replan"
+
+    @staticmethod
+    def _autonomous_unavailable_plan(reason: str) -> dict[str, Any]:
+        return {
+            "goal": "当前无法形成可执行的自主计划",
+            "calls": [],
+            "proposedState": "uncertain",
+            "reason": reason,
+            "evidenceGap": "缺少经接口校验的工具计划",
+            "answerHint": "",
+            "modelFallback": reason,
+        }
+
     def _sanitize_calls(self, calls: Any) -> list[dict[str, Any]]:
         if not isinstance(calls, list):
             return []
@@ -484,14 +526,27 @@ class Planner:
             cleaned.append(call)
         return cleaned
 
-    def _calls_are_executable(self, calls: list[dict[str, Any]], memory_scope: dict[str, Any]) -> tuple[bool, str | None]:
-        """校验自主计划的工具依赖，阻止空候选直接进入匹配工具。"""
+    def _calls_are_executable(
+        self,
+        calls: list[dict[str, Any]],
+        memory_scope: dict[str, Any],
+        proposed_state: str = "replan",
+    ) -> tuple[bool, str | None]:
+        """校验自主计划的接口依赖，不替模型选择或替换工具链。"""
         if not calls:
-            return False, "自主计划没有合法工具调用"
+            if memory_scope and proposed_state in {"sufficient", "conflict", "uncertain"}:
+                return True, None
+            return False, "当前没有可执行工具调用；首轮或继续取证时不能使用空调用"
         available = set(memory_scope)
         for call in calls:
             tool = call["tool"]
             arguments = call.get("arguments") or {}
+            condition = call.get("condition") or {}
+            if condition:
+                ref = str(condition.get("ref") or "").strip()
+                root = ref.split(".", 1)[0]
+                if not root or (root not in available and root not in memory_scope):
+                    return False, f"{tool} 的执行条件引用了未获得的结果"
             requirements: tuple[tuple[str, str], ...] = ()
             if tool == "getFrames":
                 requirements = (("trackIds", "轨迹编号"),)
@@ -508,9 +563,19 @@ class Planner:
             elif tool == "dedupTracks":
                 requirements = (("tracks", "轨迹列表"), ("keyframesByTrack", "关键帧集合"))
             elif tool == "verifyTarget":
-                sources = ("description", "registryReferenceIds", "keyframeIds", "shipSegmentIds")
-                if not any(self._has_call_value(arguments.get(name), available, memory_scope) for name in sources):
-                    return False, "verifyTarget 缺少可核验的文字、参考图、关键帧或片段"
+                has_description = self._has_call_value(arguments.get("description"), available, memory_scope)
+                has_registry = self._has_call_value(arguments.get("registryReferenceIds"), available, memory_scope)
+                has_keyframes = self._has_call_value(arguments.get("keyframeIds"), available, memory_scope)
+                has_segments = self._has_call_value(arguments.get("shipSegmentIds"), available, memory_scope)
+                text_to_registry = has_description and has_registry and not has_keyframes and not has_segments
+                text_to_track = has_description and not has_registry and (has_keyframes != has_segments)
+                registry_to_track = has_registry and not has_description and (has_keyframes != has_segments)
+                if not (text_to_registry or text_to_track or registry_to_track):
+                    return False, "verifyTarget 仅支持文字对库图、文字对轨迹，或库图对轨迹"
+            elif tool == "showEvidence":
+                evidence_fields = ("keyframeIds", "shipSegmentIds", "registryReferenceIds")
+                if not any(self._has_call_value(arguments.get(name), available, memory_scope) for name in evidence_fields):
+                    return False, "showEvidence 至少需要一类证据编号"
 
             for field, label in requirements:
                 if not self._has_call_value(arguments.get(field), available, memory_scope):
@@ -615,79 +680,6 @@ class Planner:
             except (TypeError, ValueError):
                 return None
         return None
-
-    def _fallback_autonomous_plan(self, intent: dict[str, Any]) -> dict[str, Any]:
-        time_range = list(intent["timeRange"]) if intent.get("timeRange") else None
-        hull = intent.get("hullNumber")
-        description = intent.get("description")
-        target_scope = intent.get("targetScope") or "track_memory"
-        target_kind = intent.get("targetKind") or "all"
-        operation = intent.get("operation") or "list"
-        page = int(intent.get("retrievalPageSize") or 60)
-        if target_scope == "registry" and target_kind == "hull" and hull:
-            return {
-                "goal": f"查询先验库舷号 {hull}",
-                "calls": [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}],
-                "proposedState": "sufficient",
-                "reason": "库项查询可直接返回库记录",
-                "evidenceGap": None,
-                "answerHint": f"返回舷号 {hull} 的库项信息",
-            }
-        if target_scope == "registry" and operation == "list" and target_kind == "all":
-            return {
-                "goal": "列出先验库全部条目",
-                "calls": [{"id": "registryList", "tool": "listRegistry", "arguments": {}}],
-                "proposedState": "sufficient",
-                "reason": "直接读取先验库目录",
-                "evidenceGap": None,
-                "answerHint": "列出全部库项",
-            }
-        if target_kind == "hull" and hull:
-            return {
-                "goal": f"检索视频中舷号 {hull} 的轨迹与库项",
-                "calls": [
-                    {"id": "tracks", "tool": "getTrack", "arguments": {"hullNumber": hull, "timeRange": time_range, "offset": 0, "limit": page}},
-                    {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
-                ],
-                "proposedState": "replan",
-                "reason": "先查直接轨迹与库项，再决定是否向量匹配",
-                "evidenceGap": "若无直接轨迹且库项可检索，需对关键帧做图像匹配",
-                "answerHint": "",
-            }
-        if target_kind == "description" and description:
-            return {
-                "goal": f"按描述检索候选轨迹：{description}",
-                "calls": [
-                    {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": page}},
-                    {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                    {"id": "matches", "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": "frames.keyframes"}, "topK": 3}},
-                ],
-                "proposedState": "replan",
-                "reason": "描述问题需要先取关键帧再文本匹配",
-                "evidenceGap": "根据匹配分数决定是否灰区核验或继续分页",
-                "answerHint": "",
-            }
-        if operation == "count":
-            return {
-                "goal": "统计时间范围内船舶数量并去重",
-                "calls": [
-                    {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": 0}},
-                    {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                    {"id": "dedup", "tool": "dedupTracks", "arguments": {"tracks": {"$ref": "tracks.tracks"}, "keyframesByTrack": {"$ref": "frames.keyframesByTrack"}}},
-                ],
-                "proposedState": "sufficient",
-                "reason": "数量统计依赖轨迹集合与跨轨迹去重",
-                "evidenceGap": None,
-                "answerHint": "按去重结果统计数量",
-            }
-        return {
-            "goal": "读取时间范围内轨迹列表",
-            "calls": [{"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": time_range, "offset": 0, "limit": page}}],
-            "proposedState": "sufficient",
-            "reason": "默认先读取轨迹列表作为证据",
-            "evidenceGap": None,
-            "answerHint": "返回轨迹列表",
-        }
 
     @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any]:

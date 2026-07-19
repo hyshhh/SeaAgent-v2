@@ -3,14 +3,19 @@ import unittest
 
 from agent.controller import AgentController
 from agent.planner import Planner
+from agent.reflector import Reflector
 
 
 class _InvalidPlanLLM:
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+
     def _prompt(self, key: str) -> str:
         self.asserted_key = key
         return "test"
 
     def complete_text(self, prompt: str) -> str:
+        self.requests.append(prompt)
         return json.dumps(
             {
                 "goal": "错误空参数计划",
@@ -30,9 +35,9 @@ class _InvalidPlanLLM:
             ensure_ascii=False,
         )
 
-
 class _ValidPlanLLM(_InvalidPlanLLM):
     def complete_text(self, prompt: str) -> str:
+        self.requests.append(prompt)
         return json.dumps(
             {
                 "goal": "有效引用计划",
@@ -54,6 +59,29 @@ class _ValidPlanLLM(_InvalidPlanLLM):
         )
 
 
+class _RepairPlanLLM(_InvalidPlanLLM):
+    def complete_text(self, prompt: str) -> str:
+        self.requests.append(prompt)
+        if len(self.requests) == 1:
+            return super().complete_text(prompt)
+        return _ValidPlanLLM.complete_text(self, prompt)
+
+
+class _ReflectLLM:
+    def _prompt(self, key: str) -> str:
+        self.key = key
+        return "test"
+
+    def complete_text(self, prompt: str) -> str:
+        self.prompt = prompt
+        return "状态：replan\n依据：当前只有候选匹配，未完成灰区核验\n缺口：目标船片段\n动作：下一轮读取候选轨迹片段"
+
+
+class _Repository:
+    def get_track(self, track_id: str) -> dict[str, object] | None:
+        return {"trackId": str(track_id), "finalDescription": "仓库轨迹"}
+
+
 class AutonomousPlannerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.intent = {
@@ -67,15 +95,27 @@ class AutonomousPlannerTest(unittest.TestCase):
             "maxRounds": 5,
         }
 
-    def test_empty_dependent_arguments_use_controlled_fallback(self) -> None:
-        planner = Planner(_InvalidPlanLLM(), AgentController.TOOL_NAMES)
+    def test_invalid_plan_stops_without_hardcoded_tool_chain(self) -> None:
+        llm = _InvalidPlanLLM()
+        planner = Planner(llm, AgentController.TOOL_NAMES)
+
+        plan = planner.decide_tools("视频中有没有黄色无人艇？", self.intent)
+
+        self.assertIn("planRepair", plan)
+        self.assertEqual(plan["calls"], [])
+        self.assertEqual(plan["proposedState"], "uncertain")
+        self.assertEqual(len(llm.requests), 2)
+        self.assertIn("planValidationError", llm.requests[1])
+
+    def test_replanned_calls_are_executed_when_valid(self) -> None:
+        llm = _RepairPlanLLM()
+        planner = Planner(llm, AgentController.TOOL_NAMES)
 
         plan = planner.decide_tools("视频中有没有黄色无人艇？", self.intent)
 
         self.assertIn("planRepair", plan)
         self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
         self.assertEqual(plan["calls"][1]["arguments"]["trackIds"], {"$ref": "tracks.trackIds"})
-        self.assertEqual(plan["calls"][2]["arguments"]["galleryImages"], {"$ref": "frames.keyframes"})
 
     def test_valid_dependent_references_are_preserved(self) -> None:
         planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
@@ -84,6 +124,45 @@ class AutonomousPlannerTest(unittest.TestCase):
 
         self.assertNotIn("planRepair", plan)
         self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
+
+    def test_verify_target_requires_a_supported_evidence_pair(self) -> None:
+        planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
+        valid, issue = planner._calls_are_executable(
+            [{"id": "verify", "tool": "verifyTarget", "arguments": {"description": "黄色无人艇"}}],
+            {},
+            "replan",
+        )
+
+        self.assertFalse(valid)
+        self.assertIn("verifyTarget", issue or "")
+
+    def test_autonomous_reflector_parses_and_uses_its_own_state(self) -> None:
+        reflector = Reflector(_ReflectLLM())
+
+        reflection = reflector.review(
+            "sufficient",
+            "PlanAgent 建议停止",
+            {"calls": [{"tool": "matchText", "matchCount": 1}]},
+            autonomous=True,
+            success_criteria="完成灰区核验",
+        )
+
+        self.assertEqual(reflection["state"], "replan")
+        self.assertEqual(reflection["evidenceGap"], "目标船片段")
+
+    def test_match_results_only_materialize_matched_tracks(self) -> None:
+        controller = object.__new__(AgentController)
+        controller.repository = _Repository()
+        tracks = [
+            {"trackId": "track-1", "finalDescription": "灰色货船"},
+            {"trackId": "track-2", "finalDescription": "黄色无人艇"},
+        ]
+        matches = [{"matchedTrackId": "track-2", "embeddingScore": 0.91, "scoreBand": "match"}]
+
+        result = controller._tracks_for_matches(matches, tracks)
+
+        self.assertEqual([item["trackId"] for item in result], ["track-2"])
+        self.assertEqual(result[0]["embeddingScore"], 0.91)
 
 
 if __name__ == "__main__":
