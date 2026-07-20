@@ -92,7 +92,30 @@ async def clip_file(segment_id: str, request: Request):
     path = Path(request.app.state.config["paths"]["clip_dir"]) / f"{segment_id}.mp4"
     if not path.exists():
         raise HTTPException(404, "目标船片段不存在")
-    return FileResponse(path, media_type="video/mp4")
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
+
+@router.get("/api/evidence/clips/{segment_id}/poster")
+async def clip_poster(segment_id: str, request: Request):
+    if Path(segment_id).name != segment_id:
+        raise HTTPException(400, "片段编号非法")
+    clip_dir = Path(request.app.state.config["paths"]["clip_dir"])
+    path = clip_dir / f"{segment_id}.jpg"
+    clip_path = clip_dir / f"{segment_id}.mp4"
+    if not path.exists() and clip_path.exists():
+        quality = int(request.app.state.config["pipeline"].get("evidence", {}).get("poster_quality", 82))
+        await run_in_threadpool(request.app.state.tool_service._ensure_clip_poster, clip_path, path, quality)
+    if not path.exists():
+        raise HTTPException(404, "目标船片段封面不存在")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+@router.get("/api/evidence/tracks/{track_id}/clip")
+async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None):
+    time_range = (startTime, endTime) if startTime is not None and endTime is not None else None
+    result = await run_in_threadpool(request.app.state.tool_service.getClip, track_id, time_range)
+    path = Path(result.get("segmentPath", ""))
+    if not result.get("ok") or not result.get("found", True) or not path.is_file():
+        raise HTTPException(404, result.get("error") or "目标船片段不存在")
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
 
 @router.get("/api/evidence/registry/{reference_id}")
 async def registry_file(reference_id: str, request: Request):

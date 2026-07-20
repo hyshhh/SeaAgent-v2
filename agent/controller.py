@@ -899,7 +899,6 @@ class AgentController:
             "hitCount": hit_count,
             "totalTrackCount": len(tracks),
         }
-        # 证据区仍只预览前 display_limit 条，避免一次性弹出过多 clip
         return self._finish(
             conclusion,
             result_tracks,
@@ -1290,39 +1289,51 @@ class AgentController:
         return record
 
     def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
-        primary = tracks[:self.display_limit]
-        if not primary or self.display_record is not None:
+        if not tracks or self.display_record is not None:
             return
-        calls, layouts = [], []
-        for index, track in enumerate(primary):
+        unique_tracks = list({str(item["trackId"]): item for item in tracks}.values())
+        missing_frame_tracks = [
+            str(track["trackId"])
+            for track in unique_tracks
+            if not self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")
+        ]
+        frame_groups = self.tools.getFrames(missing_frame_tracks).get("keyframesByTrack", {}) if missing_frame_tracks else {}
+        track_references = {
+            str(track["trackId"]): self._ids(track, "matchedRegistryReferenceIds", "queryRegistryReferenceIds", "registryReferenceIds")
+            for track in unique_tracks
+        }
+        representative_refs = self.tools._representative_registry_reference_ids(
+            [reference_id for values in track_references.values() for reference_id in values]
+        ) if include_registry else []
+        assigned_refs: set[str] = set()
+        for track in unique_tracks:
             track_id = str(track["trackId"])
-            keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")[:3]
-            segment_ids = self._ids(track, "shipSegmentIds")[:1]
-            reference_ids = self._ids(track, "matchedRegistryReferenceIds", "queryRegistryReferenceIds", "registryReferenceIds")[:6] if include_registry else []
-            frame_call = f"displayFrames{index}"
-            clip_call = f"displayClip{index}"
-            show_call = f"displayTrack{index}"
+            keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")
             if not keyframe_ids:
-                calls.append({"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": [track_id]}})
-            if include_clips and not segment_ids:
-                calls.append({"id": clip_call, "tool": "getClip", "arguments": {"trackId": track_id, "timeRange": self.meta.get("timeRange")}})
-            arguments: dict[str, Any] = {"keyframeIds": keyframe_ids or {"$ref": f"{frame_call}.keyframeIds"}}
-            if include_clips:
-                arguments["shipSegmentIds"] = segment_ids or {"$ref": f"{clip_call}.shipSegmentId", "$list": True}
-            if reference_ids:
-                arguments["registryReferenceIds"] = reference_ids
-            calls.append({"id": show_call, "tool": "showEvidence", "arguments": arguments})
-            layouts.append({"trackId": track_id, "showCallId": show_call, "clipCallId": clip_call if include_clips and not segment_ids else None, "includeClip": include_clips})
-        self._display("展示主轨迹证据", calls)
-        scope = self.display_record.get("scope", {}) if self.display_record else {}
-        for layout in layouts:
-            shown = scope.get(layout["showCallId"], {})
-            clip_result = scope.get(layout["clipCallId"], {}) if layout.get("clipCallId") else {}
-            segment_ids = shown.get("shownShipSegmentIds", [])
-            clip_error = None
-            if layout.get("includeClip") and not segment_ids:
-                clip_error = clip_result.get("error") or "clip_unavailable"
-            self.display_groups.append({"trackId": layout["trackId"], "keyframeIds": shown.get("shownKeyframeIds", []), "shipSegmentIds": segment_ids, "registryReferenceIds": shown.get("shownRegistryReferenceIds", []), "clipError": clip_error})
+                frames = frame_groups.get(track_id, {}).get("keyframes", [])
+                best = max(frames, key=lambda item: item.get("retentionScore", 0), default=None)
+                keyframe_ids = [best["keyframeId"]] if best else []
+            segment_ids = self._ids(track, "shipSegmentIds")[:1]
+            reference_ids = [
+                reference_id for reference_id in representative_refs
+                if reference_id in track_references[track_id] and reference_id not in assigned_refs
+            ]
+            assigned_refs.update(reference_ids)
+            self.display_groups.append({
+                "trackId": track_id,
+                "keyframeIds": keyframe_ids[:1],
+                "shipSegmentIds": segment_ids,
+                "clipTrackId": track_id if include_clips and not segment_ids else None,
+                "clipTimeRange": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None,
+                "registryReferenceIds": reference_ids,
+                "clipError": None,
+            })
+        self.display_record = {
+            "displayId": f"display-{uuid.uuid4().hex[:12]}",
+            "mode": "lazy",
+            "trackCount": len(self.display_groups),
+            "registryReferenceCount": len(assigned_refs),
+        }
 
     def _display(self, goal: str, calls: list[dict[str, Any]]) -> None:
         if self.display_record is not None or not calls:

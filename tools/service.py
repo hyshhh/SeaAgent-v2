@@ -75,28 +75,46 @@ class ToolService:
         if source_path is None or not source_path.is_file() or not boxes:
             return {"ok": False, "error": "source_evidence_unavailable", "trackId": str(trackId)}
         box_map = {int(item["frameIndex"]): item["bbox"] for item in boxes}
-        widths = [max(1, int(box[2]) - int(box[0])) for box in box_map.values()]
-        heights = [max(1, int(box[3]) - int(box[1])) for box in box_map.values()]
-        canvas_size = (self._even_size(max(widths)), self._even_size(max(heights)))
+        evidence = self.config["pipeline"].get("evidence", {})
+        canvas_size = (
+            self._even_size(evidence.get("clip_width", 640)),
+            self._even_size(evidence.get("clip_height", 360)),
+        )
+        clip_fps = max(1.0, float(evidence.get("clip_fps", 8)))
+        clip_crf = max(0, min(51, int(evidence.get("clip_crf", 28))))
+        poster_quality = max(1, min(100, int(evidence.get("poster_quality", 82))))
         output_dir = Path(self.config["paths"]["clip_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
         video_start_time = min(float(item["timestamp"]) for item in boxes)
         video_end_time = max(float(item["timestamp"]) for item in boxes)
-        cache_key = f"{trackId}|{video_start_time:.3f}|{video_end_time:.3f}|{trajectory_path.stat().st_mtime_ns}"
+        cache_key = (
+            f"evidence-v2|{trackId}|{video_start_time:.3f}|{video_end_time:.3f}|"
+            f"{trajectory_path.stat().st_mtime_ns}|{canvas_size[0]}x{canvas_size[1]}|"
+            f"{clip_fps:.3f}|{clip_crf}|{poster_quality}"
+        )
         segment_id = f"segment-{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:12]}"
         output_path = output_dir / f"{segment_id}.mp4"
+        poster_path = output_dir / f"{segment_id}.jpg"
         if output_path.is_file() and output_path.stat().st_size > 0:
-            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": "cached", "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
-        fps = max(1.0, float(trajectory.get("sourceFps") or 25))
-        writer, codec = self._open_video_writer(output_path, fps, canvas_size)
+            self._ensure_clip_poster(output_path, poster_path, poster_quality)
+            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "posterPath": str(poster_path) if poster_path.is_file() else None, "codec": "cached", "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
+        source_fps = max(1.0, float(trajectory.get("sourceFps") or 25))
+        output_fps = min(source_fps, clip_fps)
+        temporary_path = output_dir / f"{segment_id}.raw.mp4"
+        temporary_path.unlink(missing_ok=True)
+        writer, codec = self._open_video_writer(temporary_path, output_fps, canvas_size)
         capture = cv2.VideoCapture(str(source_path))
         if writer is None or not capture.isOpened():
             capture.release()
             if writer is not None:
                 writer.release()
-            output_path.unlink(missing_ok=True)
+            temporary_path.unlink(missing_ok=True)
             return {"ok": False, "error": "segment_codec_unavailable", "trackId": str(trackId)}
         written = 0
+        last_written_frame: int | None = None
+        frame_gap = max(1, int(round(source_fps / output_fps)))
+        poster_frame: np.ndarray | None = None
+        poster_area = -1
         try:
             first, last = min(box_map), max(box_map)
             capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, first))
@@ -106,24 +124,29 @@ class ToolService:
                     break
                 if frame_index not in box_map:
                     continue
+                if last_written_frame is not None and frame_index - last_written_frame < frame_gap:
+                    continue
                 x1, y1, x2, y2 = self._clamp_box(box_map[frame_index], frame.shape)
                 crop = frame[y1:y2, x1:x2]
                 if crop.size == 0:
                     continue
-                canvas = np.zeros((canvas_size[1], canvas_size[0], 3), dtype=np.uint8)
-                offset_x = (canvas_size[0] - crop.shape[1]) // 2
-                offset_y = (canvas_size[1] - crop.shape[0]) // 2
-                canvas[offset_y:offset_y + crop.shape[0], offset_x:offset_x + crop.shape[1]] = crop
+                canvas = self._fit_crop_to_canvas(crop, canvas_size)
                 writer.write(canvas)
+                last_written_frame = frame_index
+                crop_area = crop.shape[0] * crop.shape[1]
+                if crop_area > poster_area:
+                    poster_frame = canvas.copy()
+                    poster_area = crop_area
                 written += 1
         finally:
             capture.release()
             writer.release()
         if written == 0:
-            output_path.unlink(missing_ok=True)
+            temporary_path.unlink(missing_ok=True)
             return {"ok": False, "error": "empty_target_segment", "trackId": str(trackId)}
-        codec = self._ensure_browser_clip(output_path, codec)
-        return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "codec": codec, "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
+        codec = self._compress_evidence_clip(temporary_path, output_path, codec, clip_crf)
+        self._write_poster(poster_path, poster_frame, poster_quality)
+        return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "posterPath": str(poster_path) if poster_path.is_file() else None, "codec": codec, "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
 
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
         items = self.repository.registry_by_hull(hullNumber)
@@ -301,7 +324,13 @@ class ToolService:
 
 
     def showEvidence(self, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None, registryReferenceIds: list[str] | None = None) -> dict[str, Any]:
-        return {"ok": True, "displayId": f"display-{uuid.uuid4().hex[:12]}", "shownKeyframeIds": (keyframeIds or [])[:3], "shownShipSegmentIds": (shipSegmentIds or [])[:3], "shownRegistryReferenceIds": (registryReferenceIds or [])[:6]}
+        return {
+            "ok": True,
+            "displayId": f"display-{uuid.uuid4().hex[:12]}",
+            "shownKeyframeIds": list(dict.fromkeys(keyframeIds or [])),
+            "shownShipSegmentIds": list(dict.fromkeys(shipSegmentIds or [])),
+            "shownRegistryReferenceIds": self._representative_registry_reference_ids(registryReferenceIds or []),
+        }
 
     def dedupTracks(self, tracks: list[dict[str, Any]], keyframesByTrack: dict[str, Any]) -> dict[str, Any]:
         candidates = {}
@@ -364,6 +393,24 @@ class ToolService:
             grouped.setdefault(str(item[key]), []).append(item)
         return grouped
 
+    def _representative_registry_reference_ids(self, reference_ids: list[str]) -> list[str]:
+        ordered_ids = list(dict.fromkeys(str(value) for value in reference_ids if value))
+        reference_map = {item["referenceId"]: item for item in self.repository.references_by_ids(ordered_ids)}
+        hull_by_registry = {
+            str(item["registryId"]): normalize_hull_number(item.get("hullNumber")) or str(item["registryId"])
+            for item in self.repository.list_registry()
+        }
+        selected, seen = [], set()
+        for reference_id in ordered_ids:
+            reference = reference_map.get(reference_id)
+            registry_id = str(reference.get("registryId")) if reference else reference_id
+            owner = hull_by_registry.get(registry_id, registry_id)
+            if owner in seen:
+                continue
+            seen.add(owner)
+            selected.append(reference_id)
+        return selected
+
     @staticmethod
     def _clamp_box(box: list[int], shape: tuple[int, ...]) -> tuple[int, int, int, int]:
         height, width = shape[:2]
@@ -386,25 +433,59 @@ class ToolService:
         return value if value % 2 == 0 else value + 1
 
     @staticmethod
-    def _ensure_browser_clip(path: Path, codec: str | None) -> str | None:
-        if codec in {"avc1", "H264"}:
-            return codec
-        ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            return codec
-        converted = path.with_name(f"{path.stem}.browser.mp4")
+    def _fit_crop_to_canvas(crop: np.ndarray, canvas_size: tuple[int, int]) -> np.ndarray:
+        canvas_width, canvas_height = canvas_size
+        content_width = max(2, int(canvas_width * 0.94))
+        content_height = max(2, int(canvas_height * 0.94))
+        crop_height, crop_width = crop.shape[:2]
+        scale = min(content_width / max(1, crop_width), content_height / max(1, crop_height))
+        resized_width = max(1, min(content_width, int(round(crop_width * scale))))
+        resized_height = max(1, min(content_height, int(round(crop_height * scale))))
+        interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
+        resized = cv2.resize(crop, (resized_width, resized_height), interpolation=interpolation)
+        canvas = np.full((canvas_height, canvas_width, 3), (5, 14, 20), dtype=np.uint8)
+        offset_x = (canvas_width - resized_width) // 2
+        offset_y = (canvas_height - resized_height) // 2
+        canvas[offset_y:offset_y + resized_height, offset_x:offset_x + resized_width] = resized
+        return canvas
+
+    @staticmethod
+    def _write_poster(path: Path, frame: np.ndarray | None, quality: int) -> bool:
+        if frame is None or frame.size == 0:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return bool(cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]))
+
+    @classmethod
+    def _ensure_clip_poster(cls, clip_path: Path, poster_path: Path, quality: int) -> bool:
+        if poster_path.is_file() and poster_path.stat().st_size > 0:
+            return True
+        capture = cv2.VideoCapture(str(clip_path))
         try:
-            result = subprocess.run([
-                ffmpeg, "-y", "-loglevel", "error", "-i", str(path), "-an",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(converted),
-            ], capture_output=True, timeout=120, check=False)
-            if result.returncode == 0 and converted.is_file() and converted.stat().st_size > 0:
-                converted.replace(path)
-                return "h264"
-        except (OSError, subprocess.SubprocessError):
-            pass
+            ok, frame = capture.read()
+        finally:
+            capture.release()
+        return cls._write_poster(poster_path, frame if ok else None, quality)
+
+    @staticmethod
+    def _compress_evidence_clip(source_path: Path, output_path: Path, codec: str | None, crf: int) -> str | None:
+        ffmpeg = shutil.which("ffmpeg")
+        converted = output_path.with_name(f"{output_path.stem}.compressing.mp4")
+        if ffmpeg:
+            try:
+                result = subprocess.run([
+                    ffmpeg, "-y", "-loglevel", "error", "-i", str(source_path), "-an",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(converted),
+                ], capture_output=True, timeout=120, check=False)
+                if result.returncode == 0 and converted.is_file() and converted.stat().st_size > 0:
+                    converted.replace(output_path)
+                    source_path.unlink(missing_ok=True)
+                    return "h264"
+            except (OSError, subprocess.SubprocessError):
+                pass
         converted.unlink(missing_ok=True)
+        source_path.replace(output_path)
         return codec
 
     def _sample_segments(self, segment_ids: list[str], limit: int) -> list[np.ndarray]:

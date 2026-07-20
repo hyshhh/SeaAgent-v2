@@ -83,6 +83,11 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.retrieval.image_exclude": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.dedup_high": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.dedup_low": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
+    "pipeline.evidence.clip_width": {"type": "int", "min": 320, "max": 1280, "step": 16},
+    "pipeline.evidence.clip_height": {"type": "int", "min": 180, "max": 720, "step": 2},
+    "pipeline.evidence.clip_fps": {"type": "int", "min": 1, "max": 25, "step": 1},
+    "pipeline.evidence.clip_crf": {"type": "int", "min": 18, "max": 40, "step": 1},
+    "pipeline.evidence.poster_quality": {"type": "int", "min": 40, "max": 95, "step": 1},
     "pipeline.agent.max_rounds": {"type": "int", "min": 1, "max": 10, "step": 1},
     "pipeline.agent.plan_mode": {
         "type": "enum",

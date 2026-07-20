@@ -150,11 +150,20 @@ function renderAgentAnswer(result) {
     ${chain ? `<div class="tool-tags">${chain}</div>` : ''}`;
 }
 
-function evidenceItem(type, id, trackId = null) {
+function evidenceItem(type, id, trackId = null, options = {}) {
   const prefix = type === 'video' ? 'Clip' : type === 'keyframe' ? 'Keyframe' : 'Database Reference';
   const route = type === 'video' ? 'clips' : type === 'keyframe' ? 'keyframes' : 'registry';
   const owner = trackId == null ? '' : `Track ${trackId} · `;
-  return {type, id, label: `${owner}${prefix} ${id}`, url: `/api/evidence/${route}/${encodeURIComponent(id)}`};
+  const scope = Array.isArray(options.timeRange)
+    ? `?startTime=${encodeURIComponent(options.timeRange[0])}&endTime=${encodeURIComponent(options.timeRange[1])}`
+    : '';
+  const url = type === 'video' && options.trackClip
+    ? `/api/evidence/tracks/${encodeURIComponent(id)}/clip${scope}`
+    : `/api/evidence/${route}/${encodeURIComponent(id)}`;
+  const posterUrl = type !== 'video' ? null : options.posterKeyframeId
+    ? `/api/evidence/keyframes/${encodeURIComponent(options.posterKeyframeId)}`
+    : `/api/evidence/clips/${encodeURIComponent(id)}/poster`;
+  return {type, id, label: options.label || `${owner}${prefix} ${id}`, url, posterUrl};
 }
 
 function evidenceCard(item) {
@@ -163,9 +172,22 @@ function evidenceCard(item) {
     return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>Clip Unavailable</strong><small>${escapeHtml(item.reason)}</small></div><span>${owner}</span></article>`;
   }
   const media = item.type === 'video'
-    ? `<video controls preload="metadata" src="${item.url}"></video>`
+    ? `<button class="evidence-video-loader" type="button" data-src="${escapeHtml(item.url)}" data-poster="${escapeHtml(item.posterUrl || '')}" onclick="loadEvidenceVideo(this)">${item.posterUrl ? `<img loading="lazy" src="${escapeHtml(item.posterUrl)}" alt="${escapeHtml(item.label)}">` : '<div class="evidence-video-placeholder"></div>'}<span class="evidence-play-badge">▶</span></button>`
     : `<img loading="lazy" src="${item.url}" alt="${escapeHtml(item.label)}">`;
   return `<article class="evidence-card">${media}<span title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span></article>`;
+}
+
+function loadEvidenceVideo(trigger) {
+  const source = trigger?.dataset?.src;
+  if (!source) return;
+  const video = document.createElement('video');
+  video.controls = true;
+  video.preload = 'none';
+  video.playsInline = true;
+  video.src = source;
+  if (trigger.dataset.poster) video.poster = trigger.dataset.poster;
+  trigger.replaceWith(video);
+  video.play().catch(() => {});
 }
 
 function clipErrorText(error) {
@@ -181,25 +203,43 @@ function clipErrorText(error) {
 
 function evidenceColumn(title, subtitle, items, emptyText) {
   const content = items.length ? items.map(evidenceCard).join('') : `<div class="evidence-column-empty">${escapeHtml(emptyText)}</div>`;
-  return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle}</span></div><div class="evidence-column-media">${content}</div></section>`;
+  return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle} · ${items.length}</span></div><div class="evidence-column-media">${content}</div></section>`;
 }
 
-function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available') {
+function representativeRegistryEvidence(registryItems) {
+  const seen = new Set();
+  const items = [];
+  for (const registry of registryItems || []) {
+    const owner = String(registry.hullNumber || registry.registryId || '').trim();
+    const referenceId = (registry.references || []).find((item) => item?.referenceId)?.referenceId
+      || (registry.registryReferenceIds || [])[0];
+    if (!referenceId || seen.has(owner)) continue;
+    seen.add(owner);
+    items.push(evidenceItem('registry', referenceId, null, {label: `Hull ${owner} · Database Reference`}));
+  }
+  return items;
+}
+
+function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = []) {
   const container = document.getElementById('evidenceGallery');
-  const groups = (displayGroups || []).slice(0, 3);
-  let clips = groups.map((group) => group.shipSegmentIds?.[0]
-    ? evidenceItem('video', group.shipSegmentIds[0], group.trackId)
-    : group.clipError ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId} : null).filter(Boolean);
+  const groups = displayGroups || [];
+  let clips = groups.map((group) => {
+    if (group.shipSegmentIds?.[0]) return evidenceItem('video', group.shipSegmentIds[0], group.trackId);
+    if (group.clipTrackId) return evidenceItem('video', group.clipTrackId, group.trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange});
+    return group.clipError ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId} : null;
+  }).filter(Boolean);
   let keyframes = groups.map((group) => group.keyframeIds?.[0]
     ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId) : null).filter(Boolean);
-  const registryGroup = groups.find((group) => group.registryReferenceIds?.length);
-  const registryIds = [...new Set(groups.flatMap(group => group.registryReferenceIds || []))].slice(0, 6);
-  let database = registryIds.map(id => evidenceItem('registry', id, registryGroup?.trackId));
+  let database = representativeRegistryEvidence(registryItems);
+  if (!database.length) {
+    const registryIds = [...new Set(groups.flatMap(group => group.registryReferenceIds || []))];
+    database = registryIds.map(id => evidenceItem('registry', id));
+  }
 
-  if (!clips.length) clips = (evidence?.shipSegmentIds || []).slice(0, 3).map((id) => evidenceItem('video', id));
-  if (!keyframes.length) keyframes = (evidence?.keyframeIds || []).slice(0, 3).map((id) => evidenceItem('keyframe', id));
+  if (!clips.length) clips = (evidence?.shipSegmentIds || []).map((id) => evidenceItem('video', id));
+  if (!keyframes.length) keyframes = (evidence?.keyframeIds || []).map((id) => evidenceItem('keyframe', id));
   if (!database.length && evidence?.registryReferenceIds?.length) {
-    database = [...new Set(evidence.registryReferenceIds)].slice(0, 6).map(id => evidenceItem('registry', id));
+    database = [...new Set(evidence.registryReferenceIds)].map(id => evidenceItem('registry', id));
   }
 
   container.className = 'evidence-columns';
@@ -481,7 +521,7 @@ async function askAgent() {
     renderEvidence(null, null, 'Collecting evidence...');
     const result = await streamAgentQuery(question);
     renderAgentAnswer(result);
-    renderEvidence(result.evidence, result.displayGroups);
+    renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || []);
   } catch (error) {
     setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';

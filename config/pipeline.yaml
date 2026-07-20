@@ -36,6 +36,12 @@ pipeline:
     image_exclude: 0.52
     dedup_high: 0.82
     dedup_low: 0.72
+  evidence:
+    clip_width: 640
+    clip_height: 360
+    clip_fps: 8
+    clip_crf: 28
+    poster_quality: 82
   agent:
     # guided=hardcoded tool chain + explanatory Plan; autonomous=Plan chooses tools
     plan_mode: guided
