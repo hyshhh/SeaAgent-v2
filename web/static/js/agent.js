@@ -247,15 +247,6 @@ function observeEvidenceVideos(container) {
   loaders.forEach((loader) => evidenceVideoObserver.observe(loader));
 }
 
-function formatToolError(error) {
-  const value = valueText(error);
-  if (!value) return '';
-  if (value.includes('embedding_service_unavailable') || value.toLowerCase().includes('connection refused') || value.includes('向量服务未启动')) {
-    return '向量服务未启动或地址不可达（默认 http://localhost:7891/v1）';
-  }
-  return value;
-}
-
 function clipErrorText(error) {
   return ({
     track_not_found: 'Track not found',
@@ -480,7 +471,7 @@ function agentTags(event) {
   if (event.role === 'observer') {
     return (event.calls || []).map((call) => {
       const failed = call.ok === false;
-      const error = failed && call.error ? `：${formatToolError(call.error)}` : '';
+      const error = failed && call.error ? `：${valueText(call.error)}` : '';
       const title = failed && call.error ? ` title="${escapeHtml(valueText(call.error))}"` : '';
       return `<span class="${failed ? 'failed' : ''}"${title}>${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : failed ? `失败${escapeHtml(error)}` : '完成'}</span>`;
     }).join('');
@@ -584,7 +575,7 @@ function updateObserverToolEvent(event) {
   const index = logs.findIndex((item) => item.id === event.id);
   const label = event.tool || event.id || '工具';
   const status = event.phase === 'running' ? '执行中' : event.phase === 'skipped' ? '跳过' : event.ok === false ? '失败' : '完成';
-  const detail = event.error ? `：${formatToolError(event.error)}` : '';
+  const detail = event.error ? `：${compactAgentValue(event.error, 70)}` : '';
   const item = {id: event.id, text: `${label} · ${status}${detail}`};
   if (index >= 0) logs[index] = item; else logs.push(item);
   card._toolLogs = logs.slice(-6);

@@ -945,12 +945,9 @@ class AgentController:
             history = self._autonomous_history()
             round_result = self._round_autonomous(history)
             last_round = round_result
-            reflection = round_result.get("reflection") or {}
-            state = str(reflection.get("state") or "uncertain")
-            reason = str(reflection.get("reason") or final_reason)
+            state = str(round_result.get("reflection", {}).get("state") or "uncertain")
+            reason = str(round_result.get("reflection", {}).get("reason") or final_reason)
             final_state, final_reason = state, reason
-            if reflection.get("serviceUnavailable") or reflection.get("evidenceGap") == "embedding_service_unavailable":
-                break
             if state == "replan":
                 continue
             break
@@ -1030,13 +1027,6 @@ class AgentController:
         if reflection.get("state") == "sufficient" and not history and not self._has_successful_observation(observed):
             reflection["state"] = "uncertain"
             reflection["reason"] = "本轮未获得有效工具结果，暂不能确认"
-        # 向量服务不可用时立即停止，禁止多轮盲重试 matchText/matchImage。
-        if Observer.has_service_unavailable(observed):
-            reflection["state"] = "uncertain"
-            reflection["reason"] = "向量服务未启动或地址不可达，描述匹配无法继续。请启动 Qwen3-VL-Embedding-2B 服务（默认 http://localhost:7891/v1）后重试。"
-            reflection["evidenceGap"] = "embedding_service_unavailable"
-            reflection["nextAction"] = "停止：依赖向量服务，请先启动 embedding 接口"
-            reflection["serviceUnavailable"] = True
         self._emit(
             "agent_end",
             "ReflectAgent",
@@ -1100,23 +1090,10 @@ class AgentController:
         registry_items = self._collect_registry_from_scope()
         count_value = self._collect_count_from_scope()
         answer_hint = ""
-        service_unavailable = False
         if last_round:
             answer_hint = str(last_round.get("answerHint") or "").strip()
             plan = last_round.get("plan") or {}
             answer_hint = answer_hint or str(plan.get("answerHint") or "").strip()
-            reflection = last_round.get("reflection") or {}
-            service_unavailable = bool(reflection.get("serviceUnavailable") or reflection.get("evidenceGap") == "embedding_service_unavailable")
-        if service_unavailable:
-            detail = reason or "向量服务未启动或地址不可达"
-            return self._finish(
-                "向量服务不可用",
-                tracks,
-                detail if "向量服务" in detail else f"向量服务未启动或地址不可达：{detail}",
-                "uncertain",
-                extra={"planMode": "autonomous", "errorCode": "embedding_service_unavailable", "serviceUnavailable": True},
-                display={"tracks": tracks, "includeClips": False},
-            )
 
         if matches:
             supported_matches = [item for item in matches if item.get("scoreBand") != "mismatch"]

@@ -131,22 +131,6 @@ class Observer:
             return "argument_missing:evidence"
         return None
 
-    @classmethod
-    def has_service_unavailable(cls, observed: dict[str, Any]) -> bool:
-        """检测向量服务不可用，便于控制器短路。"""
-        for item in observed.get("observations") or []:
-            result = item.get("result") or {}
-            code = str(result.get("errorCode") or result.get("error") or item.get("skipReason") or "")
-            detail = str(result.get("errorDetail") or result.get("error") or "")
-            text = f"{code} {detail}".lower()
-            if "embedding_service_unavailable" in text or "connection refused" in text:
-                return True
-        for item in (observed.get("summary") or {}).get("calls") or []:
-            code = str(item.get("errorCode") or item.get("error") or "")
-            if "embedding_service_unavailable" in code.lower() or "connection refused" in code.lower() or "向量服务未启动" in code:
-                return True
-        return False
-
     @staticmethod
     def _emit_tool_event(callback: Callable[[dict[str, Any]], None] | None, phase: str, observation: dict[str, Any]) -> None:
         if not callback:
@@ -161,8 +145,7 @@ class Observer:
                 result = observation.get("result") or {}
                 payload["ok"] = result.get("ok") is not False
                 if result.get("error"):
-                    payload["error"] = Observer.format_error(result.get("error"), result.get("errorDetail"))
-                    payload["errorCode"] = result.get("errorCode") or result.get("error")
+                    payload["error"] = result["error"]
             callback(payload)
         except Exception:
             pass
@@ -225,40 +208,6 @@ class Observer:
                 compact[key] = value
         return compact
 
-    @staticmethod
-    def format_error(error: Any, detail: Any = None) -> str:
-        """把工具错误转成前端可读中文。"""
-        code = str(error or "").strip()
-        detail_text = str(detail or "").strip()
-        mapping = {
-            "embedding_service_unavailable": "向量服务未启动或地址不可达（默认 http://localhost:7891/v1）",
-            "argument_missing:galleryImages": "缺少候选图像",
-            "argument_missing:trackIds": "缺少轨迹编号",
-            "argument_missing:trackId": "缺少轨迹编号",
-            "argument_missing:description": "缺少描述文本",
-            "dependency_empty:frames.keyframes": "关键帧结果为空",
-            "dependency_reference_empty": "引用路径为空",
-            "condition_not_met": "执行条件未满足",
-            "tool_not_allowed": "工具不在白名单",
-            "description_required": "描述文本为空",
-            "one_keyframe_side_and_one_registry_side_required": "matchImage 需要一侧关键帧、一侧库参考图",
-        }
-        if code in mapping:
-            text = mapping[code]
-        elif code.startswith("dependency_empty:"):
-            text = f"依赖结果为空：{code.split(':', 1)[1]}"
-        elif code.startswith("dependency_failed:"):
-            text = f"上游工具失败：{code.split(':', 1)[1]}"
-        elif code.startswith("argument_missing:"):
-            text = f"缺少参数：{code.split(':', 1)[1]}"
-        elif "connection refused" in code.lower() or "connection refused" in detail_text.lower():
-            text = "向量服务未启动或地址不可达（默认 http://localhost:7891/v1）"
-        else:
-            text = code or "工具执行失败"
-        if detail_text and detail_text not in text and code in {"embedding_service_unavailable"}:
-            text = f"{text}；详情：{detail_text[:160]}"
-        return text
-
     @classmethod
     def _summarize_observation(cls, observation: dict[str, Any]) -> dict[str, Any]:
         summary = {"id": observation["id"], "tool": observation["tool"], "skipped": observation.get("skipped", False)}
@@ -266,17 +215,12 @@ class Observer:
             summary["skipReason"] = observation.get("skipReason")
             result = observation.get("result") or {}
             if result.get("error"):
-                summary["error"] = cls.format_error(result.get("error"), result.get("errorDetail"))
-                summary["errorCode"] = result.get("errorCode") or result.get("error")
-            elif observation.get("skipReason"):
-                summary["error"] = cls.format_error(observation.get("skipReason"))
-                summary["errorCode"] = observation.get("skipReason")
+                summary["error"] = result["error"]
             return summary
         result = observation.get("result", {})
         summary["ok"] = result.get("ok")
         if result.get("error"):
-            summary["error"] = cls.format_error(result.get("error"), result.get("errorDetail"))
-            summary["errorCode"] = result.get("errorCode") or result.get("error")
+            summary["error"] = result["error"]
         tracks = result.get("tracks")
         if "tracks" in result and isinstance(tracks, list):
             summary["trackCount"] = len(tracks)
