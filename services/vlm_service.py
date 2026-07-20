@@ -14,19 +14,36 @@ class LLMServiceError(RuntimeError):
     pass
 
 def _extract_json(text: str) -> dict[str, Any]:
-    content = text.strip()
+    """从模型输出中提取完整对象，优先保留最外层计划对象。"""
+    content = str(text or "").strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    try:
-        value = json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if not match:
-            raise LLMServiceError("模型未返回 JSON")
-        value = json.loads(match.group())
-    if not isinstance(value, dict):
-        raise LLMServiceError("模型 JSON 顶层必须是对象")
-    return value
+    if content.lower().startswith("json\n"):
+        content = content[5:].lstrip()
+
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+    last_error: Exception | None = None
+    for match in re.finditer(r"\{", content):
+        candidate = content[match.start():]
+        for value_text in (candidate, re.sub(r",(\s*[}\]])", r"\1", candidate)):
+            try:
+                value, _ = decoder.raw_decode(value_text)
+            except json.JSONDecodeError as error:
+                last_error = error
+                continue
+            if isinstance(value, dict):
+                candidates.append(value)
+                break
+
+    if candidates:
+        priority = ("calls", "goal", "proposedState", "state", "decision")
+        candidates.sort(key=lambda item: sum(key in item for key in priority), reverse=True)
+        return candidates[0]
+    if not content:
+        raise LLMServiceError("模型未返回 JSON")
+    raise LLMServiceError(f"模型 JSON 无法解析：{last_error}")
+
 
 def _data_url(image: str | Path | np.ndarray) -> str:
     if isinstance(image, np.ndarray):

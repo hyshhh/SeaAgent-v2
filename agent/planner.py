@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from services import AgentLLMService
+from services.vlm_service import _extract_json as _extract_json_response
 
 
 class Planner:
@@ -432,6 +433,7 @@ class Planner:
                     "goal": str(model_plan.get("goal") or ""),
                     "calls": calls,
                     "proposedState": state,
+                    "rawExcerpt": raw[-1200:] if raw else "",
                 },
             }
             if on_delta:
@@ -453,6 +455,9 @@ class Planner:
                 calls = []
                 state = "uncertain"
                 plan_repair = f"{initial_issue}；重规划仍无效，已停止工具执行"
+        # PlanAgent 只提出本轮计划；是否停止必须由 ReflectAgent 根据真实观察决定。
+        if calls and state == "sufficient":
+            state = "replan"
         goal = str(model_plan.get("goal") or "根据意图检索轨迹记忆与先验库证据").strip()
         reason = str(model_plan.get("reason") or "按自主规划执行工具并收集证据").strip()
         evidence_gap = model_plan.get("evidenceGap")
@@ -470,7 +475,7 @@ class Planner:
             "answerHint": answer_hint,
             "stopCondition": "证据足够、证据冲突、已读完全部候选或达到轮次上限",
             "modelPlan": {
-                "summary": (f"计划已修正：{plan_repair}。{goal}" if plan_repair else (raw.strip()[:500] if raw else goal)),
+                "summary": self._plan_summary(goal, calls, reason, state),
                 "goal": goal,
                 "proposedState": state,
                 "reason": reason,
@@ -521,14 +526,26 @@ class Planner:
         payload: dict[str, Any],
         on_delta: Callable[[str], None] | None = None,
     ) -> tuple[dict[str, Any], str, str | None]:
-        """请求一次自主计划；失败只返回错误，不代替模型编译语义工具链。"""
+        """请求结构化自主计划；展示摘要与可执行计划分离。"""
+        raw = ""
         try:
             prompt = self.llm._prompt("planner_autonomous")
             request = prompt + "\n输入：" + json.dumps(payload, ensure_ascii=False)
-            raw = self.llm.complete_text_stream(request, on_delta) if on_delta else self.llm.complete_text(request)
+            complete_json = getattr(self.llm, "complete_json", None)
+            if callable(complete_json):
+                model_plan = complete_json(request)
+                raw = json.dumps(model_plan, ensure_ascii=False)
+                return model_plan, raw, None
+            # 结构化计划不向前端流式输出原始 JSON，只在完成后展示摘要。
+            raw = self.llm.complete_text(request)
             return self._extract_json_object(raw), raw, None
         except Exception as error:
-            return {}, "", str(error)
+            return {}, raw, str(error)
+
+    @staticmethod
+    def _plan_summary(goal: str, calls: list[dict[str, Any]], reason: str, state: str) -> str:
+        tools = " → ".join(str(call.get("tool") or "工具") for call in calls) or "本轮不调用工具"
+        return f"目标：{goal}；工具：{tools}；状态：{state}；说明：{reason}"
 
     @classmethod
     def _plan_state(cls, plan: dict[str, Any]) -> str:
@@ -680,6 +697,9 @@ class Planner:
         if not root:
             return "引用为空"
         if root in memory_scope:
+            source = memory_scope.get(root)
+            if isinstance(source, dict) and source.get("ok") is False:
+                return f"引用了失败的工具结果：{root}"
             present, _ = cls._read_path(memory_scope, reference)
             return None if present else f"引用了不存在的结果字段：{reference}"
         if root in call_outputs:
@@ -699,8 +719,13 @@ class Planner:
         for part in path.split("."):
             if isinstance(current, dict) and part in current:
                 current = current[part]
-            else:
-                return False, None
+                continue
+            if isinstance(current, list) and part.isdigit():
+                index = int(part)
+                if 0 <= index < len(current):
+                    current = current[index]
+                    continue
+            return False, None
         return True, current
 
     @staticmethod
@@ -728,10 +753,24 @@ class Planner:
         if isinstance(value, dict) and "$ref" in value:
             reference = str(value.get("$ref") or "").strip()
             root = reference.split(".", 1)[0]
-            return bool(root) and (root in available or root in memory_scope)
+            if not root:
+                return False
+            if root in memory_scope:
+                present, resolved = Planner._read_path(memory_scope, reference)
+                return present and Planner._has_value(resolved)
+            return root in available
         if isinstance(value, (list, tuple, set, dict)):
             return bool(value)
         return value not in (None, "")
+
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        """判断工具必需参数是否有真实内容，避免把空结果送入下一工具。"""
+        if value is None or value == "":
+            return False
+        if isinstance(value, (list, tuple, set, dict)):
+            return bool(value)
+        return True
 
     def _sanitize_arguments(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
@@ -841,23 +880,10 @@ class Planner:
 
     @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any]:
-        content = (text or "").strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         try:
-            value = json.loads(content)
-            if isinstance(value, dict):
-                return value
-        except Exception:
-            pass
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if not match:
-            raise ValueError("模型未返回可解析 JSON 计划")
-        value = json.loads(match.group())
-        if not isinstance(value, dict):
-            raise ValueError("计划 JSON 必须是对象")
-        return value
-
+            return _extract_json_response(text)
+        except Exception as error:
+            raise ValueError(str(error)) from error
 
     def build(self, goal: str, calls: list[dict[str, Any]], scope: Any = None, evidence_gap: str | None = None, on_delta: Callable[[str], None] | None = None, intent: dict[str, Any] | None = None) -> dict[str, Any]:
         invalid = [call["tool"] for call in calls if call["tool"] not in self.allowed_tools]

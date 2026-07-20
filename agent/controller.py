@@ -89,7 +89,7 @@ class AgentController:
         self.meta["maxRounds"] = self.max_rounds
         self.meta["retrievalPageSize"] = self.retrieval_page_size
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
-        self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（仅接口安全约束）'}", planMode=self.plan_mode)
+        self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（PlanAgent规划，ObserveAgent执行）'}", planMode=self.plan_mode)
         try:
             if self.plan_mode == "autonomous":
                 result = self._answer_autonomous()
@@ -982,25 +982,29 @@ class AgentController:
             fallback=plan.get("modelFallback"),
             planRepair=plan.get("planRepair"),
             planMode="autonomous",
+            planOnly=True,
+            executionOwner="ObserveAgent",
         )
 
-        self._emit("agent_start", "ObserveAgent", "正在执行自主规划的工具并汇总证据", round=round_number, role="observer")
+        self._emit("agent_start", "ObserveAgent", "执行 PlanAgent 的工具计划", round=round_number, role="observer", executionOwner="ObserveAgent")
         observed = self.observer.execute(
             plan,
             context=self.working_scope,
             on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
+            on_tool_event=lambda event: self._emit("agent_tool", "ObserveAgent", "", round=round_number, role="observer", **event),
         )
         # 累积结果供后续 $ref
         self.working_scope.update(observed.get("scope") or {})
         self._emit(
             "agent_end",
             "ObserveAgent",
-            "观察完成",
+            "工具执行完成",
             round=round_number,
             role="observer",
             calls=observed["summary"].get("calls", []),
             modelSummary=observed["summary"].get("modelObservation"),
             fallback=observed["summary"].get("modelFallback"),
+            executionOwner="ObserveAgent",
         )
 
         default_state = str(plan.get("proposedState") or "uncertain")
@@ -1033,6 +1037,7 @@ class AgentController:
             evidenceGap=reflection.get("evidenceGap"),
             modelSummary=reflection.get("modelReflection"),
             fallback=reflection.get("modelFallback"),
+            nextAction=reflection.get("nextAction"),
         )
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
@@ -1267,21 +1272,25 @@ class AgentController:
         if len(self.rounds) >= self.max_rounds:
             raise RuntimeError("达到最大推理轮次")
         round_number = len(self.rounds) + 1
-        self._emit("agent_start", "PlanAgent", "正在分析目标并组织工具计划", round=round_number, role="planner")
+        self._emit("agent_start", "PlanAgent", "仅生成本轮工具计划，不执行工具", round=round_number, role="planner", executionOwner="ObserveAgent")
         guided_goal = goal
         if self.meta.get("expectedOutcome") and self.meta.get("expectedOutcome") not in guided_goal:
             guided_goal = f"{goal}｜验收：{self.meta.get('expectedOutcome')}"
         plan = self.planner.build(guided_goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
         public_plan = self._public_plan(plan, calls)
-        self._emit("agent_end", "PlanAgent", "规划完成", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"))
+        self._emit("agent_end", "PlanAgent", "规划完成，等待 ObserveAgent 执行", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"), planOnly=True, executionOwner="ObserveAgent")
 
-        self._emit("agent_start", "ObserveAgent", "正在执行工具并整理轨迹证据", round=round_number, role="observer")
-        observed = self.observer.execute(plan, on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta))
-        self._emit("agent_end", "ObserveAgent", "观察完成", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"), fallback=observed["summary"].get("modelFallback"))
+        self._emit("agent_start", "ObserveAgent", "执行 PlanAgent 的工具计划", round=round_number, role="observer", executionOwner="ObserveAgent")
+        observed = self.observer.execute(
+            plan,
+            on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
+            on_tool_event=lambda event: self._emit("agent_tool", "ObserveAgent", "", round=round_number, role="observer", **event),
+        )
+        self._emit("agent_end", "ObserveAgent", "工具执行完成", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"), fallback=observed["summary"].get("modelFallback"), executionOwner="ObserveAgent")
 
         self._emit("agent_start", "ReflectAgent", "正在检查证据充分性、冲突与后续动作", round=round_number, role="reflector")
         reflection = self.reflector.review(default_state, reason, observed["summary"], evidence_gap, lambda delta: self._emit("agent_delta", "ReflectAgent", "", round=round_number, role="reflector", delta=delta))
-        self._emit("agent_end", "ReflectAgent", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"), fallback=reflection.get("modelFallback"))
+        self._emit("agent_end", "ReflectAgent", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"), fallback=reflection.get("modelFallback"), nextAction=reflection.get("nextAction"))
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
         self._store_observations(round_id, observed)

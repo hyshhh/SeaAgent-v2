@@ -43,7 +43,7 @@ pipeline:
     clip_crf: 31
     poster_quality: 75
   agent:
-    # guided=hardcoded tool chain + explanatory Plan; autonomous=Plan chooses tools
+    # guided=固定工具链；autonomous=PlanAgent规划、ObserveAgent执行、ReflectAgent判断
     plan_mode: guided
     max_rounds: 5
     display_limit: 3

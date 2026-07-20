@@ -5,29 +5,67 @@ from services import AgentLLMService
 from tools import ToolService
 
 class Observer:
+    _REQUIRED_ARGUMENTS = {
+        "getFrames": ("trackIds",),
+        "getClip": ("trackId",),
+        "getRegistry": ("hullNumber",),
+        "matchHull": ("hullNumberArray",),
+        "matchText": ("description", "galleryImages"),
+        "matchImage": ("queryImages", "galleryImages"),
+        "dedupTracks": ("tracks", "keyframesByTrack"),
+    }
+
     def __init__(self, llm: AgentLLMService, tools: ToolService):
         self.llm = llm
         self.tools = tools
 
-    def execute(self, plan: dict[str, Any], context: dict[str, Any] | None = None, on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
+    def execute(
+        self,
+        plan: dict[str, Any],
+        context: dict[str, Any] | None = None,
+        on_delta: Callable[[str], None] | None = None,
+        on_tool_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         scope = dict(context or {})
         observations = []
-        for call in plan["calls"]:
+        for call in plan.get("calls") or []:
+            call_id = call["id"]
+            tool = call["tool"]
             if not self._condition(call.get("condition"), scope):
-                result = {"ok": False, "error": "condition_not_met", "tool": call["tool"]}
-                scope[call["id"]] = result
-                observations.append({"id": call["id"], "tool": call["tool"], "skipped": True, "skipReason": "condition_not_met", "result": result})
+                result = {"ok": False, "error": "condition_not_met", "tool": tool}
+                observation = {"id": call_id, "tool": tool, "skipped": True, "skipReason": "condition_not_met", "result": result}
+                scope[call_id] = result
+                observations.append(observation)
+                self._emit_tool_event(on_tool_event, "skipped", observation)
                 continue
             dependency_issue = self._dependency_issue(call.get("arguments", {}), scope)
             if dependency_issue:
-                result = {"ok": False, "error": dependency_issue, "tool": call["tool"]}
-                scope[call["id"]] = result
-                observations.append({"id": call["id"], "tool": call["tool"], "skipped": True, "skipReason": dependency_issue, "result": result})
+                result = {"ok": False, "error": dependency_issue, "tool": tool}
+                observation = {"id": call_id, "tool": tool, "skipped": True, "skipReason": dependency_issue, "result": result}
+                scope[call_id] = result
+                observations.append(observation)
+                self._emit_tool_event(on_tool_event, "skipped", observation)
                 continue
             arguments = self._resolve(call.get("arguments", {}), scope)
-            result = self.tools.execute(call["tool"], arguments)
-            scope[call["id"]] = result
-            observations.append({"id": call["id"], "tool": call["tool"], "arguments": self._compact(arguments), "result": result})
+            argument_issue = self._required_argument_issue(tool, arguments)
+            if argument_issue:
+                result = {"ok": False, "error": argument_issue, "tool": tool}
+                observation = {"id": call_id, "tool": tool, "skipped": True, "skipReason": argument_issue, "result": result}
+                scope[call_id] = result
+                observations.append(observation)
+                self._emit_tool_event(on_tool_event, "skipped", observation)
+                continue
+            self._emit_tool_event(on_tool_event, "running", {"id": call_id, "tool": tool})
+            try:
+                result = self.tools.execute(tool, arguments)
+                if not isinstance(result, dict):
+                    result = {"ok": False, "error": "tool_result_invalid", "tool": tool}
+            except Exception as error:
+                result = {"ok": False, "error": f"tool_execution_failed:{error}", "tool": tool}
+            observation = {"id": call_id, "tool": tool, "arguments": self._compact(arguments), "result": result}
+            scope[call_id] = result
+            observations.append(observation)
+            self._emit_tool_event(on_tool_event, "completed" if result.get("ok") is not False else "failed", observation)
         intent = plan.get("intent") if isinstance(plan.get("intent"), dict) else {}
         summary = {
             "task": {
@@ -61,9 +99,14 @@ class Observer:
                 source = scope.get(root)
                 if isinstance(source, dict) and source.get("ok") is False:
                     return f"dependency_failed:{root}"
-                present, _ = cls._read_with_presence(scope, reference)
-                if not present and "$default" not in value:
-                    return f"dependency_field_missing:{reference}"
+                present, resolved = cls._read_with_presence(scope, reference)
+                if not present:
+                    if "$default" in value:
+                        resolved = value["$default"]
+                    else:
+                        return f"dependency_field_missing:{reference}"
+                if cls._empty_dependency(resolved):
+                    return f"dependency_empty:{reference}"
             for item in value.values():
                 issue = cls._dependency_issue(item, scope)
                 if issue:
@@ -76,13 +119,50 @@ class Observer:
         return None
 
     @staticmethod
+    def _empty_dependency(value: Any) -> bool:
+        return value is None or value == "" or (isinstance(value, (list, tuple, set, dict)) and not value)
+
+    @classmethod
+    def _required_argument_issue(cls, tool: str, arguments: dict[str, Any]) -> str | None:
+        for field in cls._REQUIRED_ARGUMENTS.get(tool, ()):
+            if cls._empty_dependency(arguments.get(field)):
+                return f"argument_missing:{field}"
+        if tool == "showEvidence" and not any(arguments.get(field) for field in ("keyframeIds", "shipSegmentIds", "registryReferenceIds")):
+            return "argument_missing:evidence"
+        return None
+
+    @staticmethod
+    def _emit_tool_event(callback: Callable[[dict[str, Any]], None] | None, phase: str, observation: dict[str, Any]) -> None:
+        if not callback:
+            return
+        try:
+            payload = {"phase": phase, "id": observation.get("id"), "tool": observation.get("tool")}
+            if observation.get("skipped"):
+                payload["skipped"] = True
+                payload["error"] = observation.get("skipReason")
+            elif phase in {"completed", "failed"}:
+                payload["summary"] = Observer._summarize_observation(observation)
+                result = observation.get("result") or {}
+                payload["ok"] = result.get("ok") is not False
+                if result.get("error"):
+                    payload["error"] = result["error"]
+            callback(payload)
+        except Exception:
+            pass
+
+    @staticmethod
     def _read_with_presence(value: Any, path: str) -> tuple[bool, Any]:
         current = value
         for part in path.split("."):
             if isinstance(current, dict) and part in current:
                 current = current[part]
-            else:
-                return False, None
+                continue
+            if isinstance(current, list) and part.isdigit():
+                index = int(part)
+                if 0 <= index < len(current):
+                    current = current[index]
+                    continue
+            return False, None
         return True, current
 
     def _resolve(self, value: Any, scope: dict[str, Any]) -> Any:
@@ -113,13 +193,8 @@ class Observer:
 
     @staticmethod
     def _read(value: Any, path: str) -> Any:
-        current = value
-        for part in path.split("."):
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-        return current
+        present, current = Observer._read_with_presence(value, path)
+        return current if present else None
 
     @staticmethod
     def _compact(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -154,6 +229,9 @@ class Observer:
         if "keyframes" in result and isinstance(keyframes, list):
             summary["keyframeCount"] = len(keyframes)
             summary["keyframes"] = [{key: cls._short(item.get(key)) for key in ("keyframeId", "trackId", "timestamp", "description", "isEmbedded") if item.get(key) not in (None, "")} for item in keyframes[:5]]
+        registry_items = result.get("registryItems")
+        if "registryItems" in result and isinstance(registry_items, list):
+            summary["registryCount"] = len(registry_items)
         matches = result.get("matches")
         if "matches" in result and isinstance(matches, list):
             summary["matchCount"] = len(matches)

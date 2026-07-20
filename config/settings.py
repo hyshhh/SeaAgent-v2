@@ -44,7 +44,7 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
         "help": {
             "planner_intent": "按规则表选择意图：模型自选 R01-R16，并输出 targetScope/targetKind/operation 等查询规格。",
             "planner": "解释本轮工具计划，不改工具清单。",
-            "planner_autonomous": "PlanAgent 自行选择工具和顺序；系统只校验接口安全。",
+            "planner_autonomous": "PlanAgent 只生成下一轮计划；ObserveAgent 执行工具，ReflectAgent 根据真实观察决定是否继续。",
             "observer": "记录工具执行事实，不重判答案。",
             "reflector": "审计固定工具链的证据，不修改控制器状态。",
             "reflector_autonomous": "根据观察事实决定 sufficient、replan、conflict 或 uncertain。",

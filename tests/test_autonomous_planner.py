@@ -6,6 +6,7 @@ from agent.controller import AgentController
 from agent.observer import Observer
 from agent.planner import Planner
 from agent.reflector import Reflector
+from services.vlm_service import _extract_json
 
 
 class _InvalidPlanLLM:
@@ -99,6 +100,27 @@ class _StringReferencePlanLLM(_InvalidPlanLLM):
             ensure_ascii=False,
         )
 
+class _CompleteJsonPlanLLM:
+    def __init__(self) -> None:
+        self.json_calls = 0
+        self.text_calls = 0
+
+    def _prompt(self, key: str) -> str:
+        return "test"
+
+    def complete_json(self, prompt: str) -> dict[str, object]:
+        self.json_calls += 1
+        return {
+            "goal": "结构化计划",
+            "calls": [{"id": "tracks", "tool": "getTrack", "arguments": {"limit": 10}}],
+            "proposedState": "replan",
+            "reason": "先读取轨迹",
+        }
+
+    def complete_text(self, prompt: str) -> str:
+        self.text_calls += 1
+        raise AssertionError("结构化接口存在时不应调用文本接口")
+
 class _ReflectLLM:
     def _prompt(self, key: str) -> str:
         self.key = key
@@ -160,6 +182,15 @@ class AutonomousPlannerTest(unittest.TestCase):
 
         self.assertNotIn("planRepair", plan)
         self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
+    def test_structured_plan_interface_is_preferred(self) -> None:
+        llm = _CompleteJsonPlanLLM()
+        planner = Planner(llm, AgentController.TOOL_NAMES)
+
+        plan = planner.decide_tools("视频中有没有船？", self.intent)
+
+        self.assertEqual(llm.json_calls, 1)
+        self.assertEqual(llm.text_calls, 0)
+        self.assertEqual(plan["calls"][0]["tool"], "getTrack")
 
     def test_string_references_are_normalized_before_validation(self) -> None:
         planner = Planner(_StringReferencePlanLLM(), AgentController.TOOL_NAMES)
@@ -207,6 +238,19 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertIn("availableResults", llm.requests[0])
         self.assertIn("hasMore", llm.requests[0])
 
+    def test_observer_skips_matching_when_gallery_is_empty(self) -> None:
+        observer = Observer(_ReflectLLM(), _FailingTools())
+        result = observer.execute(
+            {
+                "calls": [
+                    {"id": "match", "tool": "matchText", "arguments": {"description": "黄色无人艇", "galleryImages": {"$ref": "frames.keyframes"}}},
+                ]
+            },
+            context={"frames": {"ok": True, "keyframes": []}},
+        )
+
+        self.assertTrue(result["observations"][0]["skipped"])
+        self.assertIn("dependency_empty", result["observations"][0]["skipReason"])
     def test_observer_stops_dependent_tools_after_failed_reference(self) -> None:
         observer = Observer(_ReflectLLM(), _FailingTools())
         result = observer.execute(
@@ -229,6 +273,17 @@ class AutonomousPlannerTest(unittest.TestCase):
         )
 
         self.assertEqual(reflection["state"], "replan")
+    def test_nested_match_reference_can_supply_clip_track_id(self) -> None:
+        planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
+        valid, issue = planner._calls_are_executable(
+            [
+                {"id": "clip", "tool": "getClip", "arguments": {"trackId": {"$ref": "match.matches.0.matchedTrackId"}}},
+            ],
+            {"match": {"ok": True, "matches": [{"matchedTrackId": "11"}]}},
+            "replan",
+        )
+
+        self.assertTrue(valid, issue)
     def test_verify_target_requires_a_supported_evidence_pair(self) -> None:
         planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
         valid, issue = planner._calls_are_executable(
@@ -338,6 +393,21 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertEqual(result[0]["embeddingScore"], 0.91)
 
 
+class JsonExtractionTest(unittest.TestCase):
+    def test_extracts_json_from_explanation_and_code_fence(self) -> None:
+        value = _extract_json('说明文字\n```json\n{"goal":"读取轨迹","calls":[]}\n```')
+
+        self.assertEqual(value["goal"], "读取轨迹")
+
+    def test_prefers_plan_object_when_multiple_objects_exist(self) -> None:
+        value = _extract_json('{"note":"提示"}\n{"goal":"读取轨迹","calls":[{"tool":"getTrack"}]}')
+
+        self.assertEqual(value["goal"], "读取轨迹")
+
+    def test_repairs_trailing_comma(self) -> None:
+        value = _extract_json('{"goal":"读取轨迹","calls":[],}')
+
+        self.assertEqual(value["calls"], [])
 class PlannerTimeRangeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.timezone = timezone(timedelta(hours=8))
