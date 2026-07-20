@@ -442,5 +442,95 @@ class PlannerTimeRangeTest(unittest.TestCase):
         )
 
 
+
+
+class _EmbeddingFailTools:
+    def execute(self, name, arguments):
+        if name == "matchText":
+            return {
+                "ok": False,
+                "error": "embedding_service_unavailable",
+                "errorDetail": "向量模型接口请求失败：[Errno 111] Connection refused",
+                "errorCode": "embedding_service_unavailable",
+                "tool": name,
+                "matches": [],
+            }
+        if name == "getTrack":
+            return {"ok": True, "trackIds": ["1"], "tracks": [{"trackId": "1"}], "hasMore": False, "totalTrackCount": 1, "returnedTrackCount": 1}
+        if name == "getFrames":
+            return {
+                "ok": True,
+                "keyframeIds": ["k1"],
+                "keyframes": [{"keyframeId": "k1", "trackId": "1", "isEmbedded": True, "keyframeVectorId": 1}],
+                "keyframesByTrack": {"1": {"keyframeIds": ["k1"], "keyframes": [{"keyframeId": "k1", "trackId": "1", "isEmbedded": True, "keyframeVectorId": 1}]}},
+                "discardedKeyframeIds": [],
+                "unsearchableTrackIds": [],
+            }
+        return {"ok": True}
+
+
+class EmbeddingServiceFailureTests(unittest.TestCase):
+    def test_observer_formats_embedding_error(self) -> None:
+        text = Observer.format_error("embedding_service_unavailable", "Connection refused")
+        self.assertIn("向量服务未启动", text)
+
+    def test_observer_detects_service_unavailable(self) -> None:
+        observed = {
+            "observations": [
+                {
+                    "id": "match",
+                    "tool": "matchText",
+                    "result": {
+                        "ok": False,
+                        "error": "embedding_service_unavailable",
+                        "errorCode": "embedding_service_unavailable",
+                    },
+                }
+            ],
+            "summary": {"calls": [{"tool": "matchText", "error": "向量服务未启动或地址不可达", "errorCode": "embedding_service_unavailable"}]},
+        }
+        self.assertTrue(Observer.has_service_unavailable(observed))
+
+    def test_planner_stops_after_embedding_failure_history(self) -> None:
+        class _ShouldNotCallLLM(_InvalidPlanLLM):
+            def complete_text(self, prompt: str) -> str:
+                raise AssertionError("向量服务失败后不应再次请求 PlanAgent 模型")
+
+        planner = Planner(_ShouldNotCallLLM(), AgentController.TOOL_NAMES)
+        plan = planner.decide_tools(
+            "视频中有没有黄色无人艇？",
+            {
+                "questionType": "description",
+                "strategy": "description",
+                "operation": "existence",
+                "targetScope": "video",
+                "targetKind": "description",
+                "registryRelation": "any",
+                "description": "黄色无人艇",
+                "timeRange": None,
+                "maxRounds": 5,
+            },
+            history=[
+                {
+                    "observed": {
+                        "calls": [
+                            {
+                                "tool": "matchText",
+                                "ok": False,
+                                "error": "向量服务未启动或地址不可达（默认 http://localhost:7891/v1）",
+                                "errorCode": "embedding_service_unavailable",
+                            }
+                        ]
+                    },
+                    "evidenceGap": "embedding_service_unavailable",
+                }
+            ],
+        )
+        self.assertEqual(plan["calls"], [])
+        self.assertEqual(plan["proposedState"], "uncertain")
+        self.assertTrue(plan.get("serviceUnavailable") or plan.get("evidenceGap") == "embedding_service_unavailable")
+
+
+
 if __name__ == "__main__":
     unittest.main()

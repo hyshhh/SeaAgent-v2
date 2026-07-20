@@ -12,6 +12,7 @@ import numpy as np
 from config import load_config
 from memory import MemoryRepository, normalize_hull_number
 from services import AgentLLMService, QwenMultimodalEmbedder
+from services.embedding_service import EmbeddingUnavailableError
 from vector_store import VectorCatalog
 
 class ToolService:
@@ -410,8 +411,28 @@ class ToolService:
             return {"ok": False, "error": "tool_not_allowed", "tool": name}
         try:
             return tool(**arguments)
+        except EmbeddingUnavailableError as error:
+            return {
+                "ok": False,
+                "error": "embedding_service_unavailable",
+                "errorDetail": str(error),
+                "errorCode": "embedding_service_unavailable",
+                "tool": name,
+                "matches": [],
+            }
         except Exception as error:
-            return {"ok": False, "error": str(error), "tool": name}
+            message = str(error)
+            lowered = message.lower()
+            if "connection refused" in lowered or "connecterror" in lowered or "10061" in lowered:
+                return {
+                    "ok": False,
+                    "error": "embedding_service_unavailable",
+                    "errorDetail": message,
+                    "errorCode": "embedding_service_unavailable",
+                    "tool": name,
+                    "matches": [],
+                }
+            return {"ok": False, "error": message, "tool": name}
 
     def _band(self, score: float, mode: str) -> str:
         match = float(self.settings[f"{mode}_match"])

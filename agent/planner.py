@@ -418,6 +418,31 @@ class Planner:
             "availableResults": self._describe_available_results(memory_scope),
             "allowedTools": sorted(self.allowed_tools),
         }
+        service_issue = self._embedding_service_issue(history)
+        if service_issue:
+            model_plan = self._autonomous_unavailable_plan(service_issue)
+            plan = {
+                "goal": model_plan["goal"],
+                "intent": intent or {},
+                "scope": intent.get("timeRange"),
+                "calls": [],
+                "evidenceGap": "embedding_service_unavailable",
+                "proposedState": "uncertain",
+                "reason": service_issue,
+                "answerHint": "请先启动向量服务后重试",
+                "stopCondition": "向量服务不可用时立即停止",
+                "modelPlan": {
+                    "summary": self._plan_summary(model_plan["goal"], [], service_issue, "uncertain"),
+                    "goal": model_plan["goal"],
+                    "proposedState": "uncertain",
+                    "reason": service_issue,
+                    "answerHint": "请先启动向量服务后重试",
+                },
+                "planMode": "autonomous",
+                "serviceUnavailable": True,
+            }
+            return plan
+
         model_plan, raw, request_error = self._request_autonomous_plan(payload, on_delta)
         calls = self._sanitize_calls(model_plan.get("calls") or [])
         state = self._plan_state(model_plan)
@@ -551,6 +576,24 @@ class Planner:
     def _plan_state(cls, plan: dict[str, Any]) -> str:
         state = str(plan.get("proposedState") or "replan").lower()
         return state if state in cls._PLAN_STATES else "replan"
+
+
+    @staticmethod
+    def _embedding_service_issue(history: list[dict[str, Any]] | None) -> str | None:
+        """历史观察若已确认向量服务不可用，则禁止继续规划匹配工具。"""
+        for item in history or []:
+            observed = item.get("observed") or {}
+            text_blob = str(observed)
+            if "embedding_service_unavailable" in text_blob or "向量服务未启动" in text_blob or "Connection refused" in text_blob:
+                return "向量服务未启动或地址不可达，停止重复调用 matchText/matchImage。请启动 Qwen3-VL-Embedding-2B（默认 http://localhost:7891/v1）后重试。"
+            for call in observed.get("calls") or []:
+                code = str(call.get("errorCode") or call.get("error") or "")
+                if "embedding_service_unavailable" in code or "向量服务未启动" in code or "connection refused" in code.lower():
+                    return "向量服务未启动或地址不可达，停止重复调用 matchText/matchImage。请启动 Qwen3-VL-Embedding-2B（默认 http://localhost:7891/v1）后重试。"
+            gap = str(item.get("evidenceGap") or "")
+            if gap == "embedding_service_unavailable":
+                return "向量服务未启动或地址不可达，停止重复调用 matchText/matchImage。请启动 Qwen3-VL-Embedding-2B（默认 http://localhost:7891/v1）后重试。"
+        return None
 
     @staticmethod
     def _autonomous_unavailable_plan(reason: str) -> dict[str, Any]:

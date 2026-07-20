@@ -134,6 +134,8 @@ prompts:
     4. 引用必须是 JSON 对象，不能写成字符串或数组字符串：{"$ref":"tracks.trackIds"}。
     5. 有 calls 时 proposedState 必须为 replan；PlanAgent 不负责决定最终停止。只有已有观察完全满足 successCriteria 且不需要工具时，calls 才能为空。
     6. 工具失败、依赖字段缺失、结果为空或 hasMore=true 时，不能把目标写成已确认；下一轮应改变分页、参数或证据来源。
+    7. 若 observation 报告 embedding_service_unavailable / 向量服务未启动 / Connection refused：不要重试 matchText 或 matchImage，也不要改用错误的 matchImage；应输出空 calls，proposedState=uncertain，reason 明确说明需启动向量服务（默认 http://localhost:7891/v1）。
+    8. 描述查询只能用 matchText；禁止把描述查询改成没有库参考图输入的 matchImage。
 
     【可用工具】只能使用以下名称和参数：
     - getTrack(timeRange=null|[start,end], hullNumber=null|string, finalMatchType=null|string, offset=0, limit=0)：读取轨迹；返回 trackIds、tracks、hasMore、nextOffset。
@@ -214,6 +216,7 @@ prompts:
     3. conflict：有效证据相互矛盾，且当前无法由已有证据消解。
     4. uncertain：证据不足且没有合法下一步、工具失败导致无法取证，或已达到信息边界。
     5. 描述查询：只有 matchText、matchImage 或 verifyTarget 的结果满足验收时才能 sufficient；仅读取轨迹不算确认。
+    5b. 若观察中出现 embedding_service_unavailable、向量服务未启动或 Connection refused：必须 uncertain 并停止，禁止 replan 继续盲重试匹配工具。
     6. 范围列表：若 hasMore=true 且尚未得到完整枚举，优先 replan 继续分页；topK 不得当作范围列表的截断依据。
     7. 若本轮没有工具调用，必须结合 previousRounds 判断；前序证据已足够时可 sufficient，否则 uncertain 或 replan。
     8. 状态与动作必须一致：动作以“下一轮”“继续”“重新规划”或“补充”开头时，状态只能是 replan；状态为 uncertain 时，动作必须写“停止并返回结果”，且明确说明不存在可执行的下一步工具。
