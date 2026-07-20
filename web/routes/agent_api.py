@@ -102,7 +102,7 @@ async def clip_poster(segment_id: str, request: Request):
     path = clip_dir / f"{segment_id}.jpg"
     clip_path = clip_dir / f"{segment_id}.mp4"
     if not path.exists() and clip_path.exists():
-        quality = int(request.app.state.config["pipeline"].get("evidence", {}).get("poster_quality", 82))
+        quality = int(request.app.state.config["pipeline"].get("evidence", {}).get("poster_quality", 86))
         await run_in_threadpool(request.app.state.tool_service._ensure_clip_poster, clip_path, path, quality)
     if not path.exists():
         raise HTTPException(404, "目标船片段封面不存在")

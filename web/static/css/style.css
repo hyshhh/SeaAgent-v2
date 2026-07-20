@@ -148,6 +148,18 @@
 .evidence-video-loader:hover .evidence-play-badge {
   background: rgba(24, 136, 166, .9);
 }
+.evidence-columns {
+  grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr));
+}
+.evidence-column .evidence-card video {
+  display: block;
+  width: 100%;
+  background: #02080e;
+}
+@media (max-width: 1200px) {
+  .evidence-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 760px) {
+  .evidence-columns { grid-template-columns: 1fr; }
   .evidence-column-media { max-height: 60vh; }
 }

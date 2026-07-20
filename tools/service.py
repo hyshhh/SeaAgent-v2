@@ -77,12 +77,12 @@ class ToolService:
         box_map = {int(item["frameIndex"]): item["bbox"] for item in boxes}
         evidence = self.config["pipeline"].get("evidence", {})
         canvas_size = (
-            self._even_size(evidence.get("clip_width", 640)),
-            self._even_size(evidence.get("clip_height", 360)),
+            self._even_size(evidence.get("clip_width", 960)),
+            self._even_size(evidence.get("clip_height", 540)),
         )
-        clip_fps = max(1.0, float(evidence.get("clip_fps", 8)))
-        clip_crf = max(0, min(51, int(evidence.get("clip_crf", 28))))
-        poster_quality = max(1, min(100, int(evidence.get("poster_quality", 82))))
+        clip_fps = max(1.0, float(evidence.get("clip_fps", 10)))
+        clip_crf = max(0, min(51, int(evidence.get("clip_crf", 25))))
+        poster_quality = max(1, min(100, int(evidence.get("poster_quality", 86))))
         output_dir = Path(self.config["paths"]["clip_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
         video_start_time = min(float(item["timestamp"]) for item in boxes)

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=18">
+<link rel="stylesheet" href="/static/css/style.css?v=19">
 </head>
 <body>
 <header class="app-header">
@@ -288,11 +288,11 @@
       <section class="panel settings-card">
         <div class="panel-head"><div><span class="eyebrow">证据展示</span><h3>目标船片段压缩</h3></div></div>
         <div class="settings-fields">
-          <label>片段宽度<input data-setting="pipeline.evidence.clip_width" type="number"><small>目标船片段的固定输出宽度，默认 640。</small></label>
-          <label>片段高度<input data-setting="pipeline.evidence.clip_height" type="number"><small>目标船片段的固定输出高度，默认 360。</small></label>
-          <label>片段帧率<input data-setting="pipeline.evidence.clip_fps" type="number"><small>证据视频每秒帧数；降低可减少传输和解码开销。</small></label>
-          <label>压缩强度<input data-setting="pipeline.evidence.clip_crf" type="number"><small>数值越大文件越小，默认 28。</small></label>
-          <label>封面质量<input data-setting="pipeline.evidence.poster_quality" type="number"><small>证据卡片封面图质量；视频点击后才加载。</small></label>
+          <label>片段宽度<input data-setting="pipeline.evidence.clip_width" type="number"><small>目标船片段的固定输出宽度，默认 960。</small></label>
+          <label>片段高度<input data-setting="pipeline.evidence.clip_height" type="number"><small>目标船片段的固定输出高度，默认 540。</small></label>
+          <label>片段帧率<input data-setting="pipeline.evidence.clip_fps" type="number"><small>默认每秒 10 帧，在清晰度和加载速度之间保持平衡。</small></label>
+          <label>压缩强度<input data-setting="pipeline.evidence.clip_crf" type="number"><small>数值越小越清晰，默认 25。</small></label>
+          <label>封面质量<input data-setting="pipeline.evidence.poster_quality" type="number"><small>证据卡片进入可视区域后自动加载并静音播放。</small></label>
         </div>
       </section>
 
@@ -353,7 +353,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=22"></script>
+<script src="/static/js/agent.js?v=23"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>

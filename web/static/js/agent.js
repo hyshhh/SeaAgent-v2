@@ -166,28 +166,68 @@ function evidenceItem(type, id, trackId = null, options = {}) {
   return {type, id, label: options.label || `${owner}${prefix} ${id}`, url, posterUrl};
 }
 
+let evidenceVideoObserver = null;
+
 function evidenceCard(item) {
   if (item.type === 'unavailable') {
     const owner = item.trackId == null ? 'Clip Evidence' : `Track ${escapeHtml(item.trackId)} · Clip Evidence`;
     return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>Clip Unavailable</strong><small>${escapeHtml(item.reason)}</small></div><span>${owner}</span></article>`;
   }
   const media = item.type === 'video'
-    ? `<button class="evidence-video-loader" type="button" data-src="${escapeHtml(item.url)}" data-poster="${escapeHtml(item.posterUrl || '')}" onclick="loadEvidenceVideo(this)">${item.posterUrl ? `<img loading="lazy" src="${escapeHtml(item.posterUrl)}" alt="${escapeHtml(item.label)}">` : '<div class="evidence-video-placeholder"></div>'}<span class="evidence-play-badge">▶</span></button>`
+    ? `<button class="evidence-video-loader" type="button" data-src="${escapeHtml(item.url)}" data-poster="${escapeHtml(item.posterUrl || '')}" onclick="loadEvidenceVideo(this, true)">${item.posterUrl ? `<img loading="lazy" src="${escapeHtml(item.posterUrl)}" alt="${escapeHtml(item.label)}">` : '<div class="evidence-video-placeholder"></div>'}<span class="evidence-play-badge">▶</span></button>`
     : `<img loading="lazy" src="${item.url}" alt="${escapeHtml(item.label)}">`;
   return `<article class="evidence-card">${media}<span title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span></article>`;
 }
 
-function loadEvidenceVideo(trigger) {
+function loadEvidenceVideo(trigger, shouldPlay = true) {
   const source = trigger?.dataset?.src;
-  if (!source) return;
+  if (!source || trigger.dataset.loading === 'true') return null;
+  trigger.dataset.loading = 'true';
+  evidenceVideoObserver?.unobserve(trigger);
   const video = document.createElement('video');
   video.controls = true;
-  video.preload = 'none';
+  video.preload = 'metadata';
   video.playsInline = true;
+  video.autoplay = true;
+  video.defaultMuted = true;
+  video.muted = true;
+  video.loop = true;
   video.src = source;
   if (trigger.dataset.poster) video.poster = trigger.dataset.poster;
   trigger.replaceWith(video);
-  video.play().catch(() => {});
+  evidenceVideoObserver?.observe(video);
+  if (shouldPlay) video.play().catch(() => {});
+  return video;
+}
+
+function observeEvidenceVideos(container) {
+  evidenceVideoObserver?.disconnect();
+  evidenceVideoObserver = null;
+  const loaders = [...container.querySelectorAll('.evidence-video-loader')];
+  if (!loaders.length) return;
+  if (!('IntersectionObserver' in window)) {
+    loaders.slice(0, 2).forEach((loader) => loadEvidenceVideo(loader, true));
+    return;
+  }
+  evidenceVideoObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const target = entry.target;
+      if (target.matches('.evidence-video-loader')) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
+          evidenceVideoObserver.unobserve(target);
+          loadEvidenceVideo(target, true);
+        }
+        return;
+      }
+      if (target.tagName !== 'VIDEO') return;
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
+        target.play().catch(() => {});
+      } else {
+        target.pause();
+      }
+    });
+  }, {root: null, rootMargin: '100px 0px', threshold: [0, 0.2, 0.6]});
+  loaders.forEach((loader) => evidenceVideoObserver.observe(loader));
 }
 
 function clipErrorText(error) {
@@ -248,6 +288,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     evidenceColumn('Keyframe Evidence', 'Recognition Frames', keyframes, emptyText),
     evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText),
   ].join('');
+  observeEvidenceVideos(container);
 }
 function modelSummaryText(value) {
   if (!value) return '';
