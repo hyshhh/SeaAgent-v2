@@ -162,7 +162,7 @@ prompts:
     1. 每轮只规划必要工具，默认 1-4 个，最多 6 个。
     2. 先取结构化数据（getTrack/getRegistry/listRegistry），再取证据（getFrames/getClip），再匹配（matchText/matchImage/matchHull），最后灰区核验（verifyTarget）或展示（showEvidence）。
     3. 描述类问题用 matchText，不要退化成只 list 轨迹。
-    4. 舷号问题先 getTrack(hull) 与 getRegistry(hull)；无直接轨迹时再用库参考图 matchImage 全库关键帧。
+    4. 舷号问题先 getTrack(hull) 与 getRegistry(hull)。若首轮没有直接舷号轨迹、但库项有参考图，下一轮必须依次：getTrack（不传 hullNumber，读取全部候选轨迹）→ getFrames（读取候选关键帧）→ matchImage（库参考图对全部候选关键帧）；此时 proposedState=replan。只有全部候选轨迹为空、没有可用关键帧或库项没有参考图时才可 uncertain。
     5. 范围枚举（在库/未在库/列表）应尽量取全，不要把 topK 当成列表截断；topK 仅用于单点匹配。
     6. 若上一轮 hasMore=true 或证据不足，本轮继续取下一页或补 getFrames/getClip/verifyTarget。
     7. 证据足够时 proposedState=sufficient；有明确下一步取证时=replan；有效证据相互矛盾时=conflict；无合法取证路径或达到信息边界时=uncertain。
@@ -222,6 +222,7 @@ prompts:
     5. 描述查询：只有 matchText、matchImage 或 verifyTarget 的结果满足验收时才能 sufficient；仅读取轨迹不算确认。
     6. 范围列表：若 hasMore=true 且尚未得到完整枚举，优先 replan 继续分页；topK 不得当作范围列表的截断依据。
     7. 若本轮没有工具调用，必须结合 previousRounds 判断；前序证据已足够时可 sufficient，否则 uncertain 或 replan。
+    8. 状态与动作必须一致：动作以“下一轮”“继续”“重新规划”或“补充”开头时，状态只能是 replan；状态为 uncertain 时，动作必须写“停止并返回结果”，且明确说明不存在可执行的下一步工具。
   verify_description: |
     判断给定船舶图像是否符合目标描述“{description}”。
     图像可能来自轨迹关键帧、视频片段，也可能是先验库参考图。

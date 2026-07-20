@@ -151,6 +151,33 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertEqual(reflection["state"], "replan")
         self.assertEqual(reflection["evidenceGap"], "目标船片段")
 
+    def test_autonomous_reflector_repairs_uncertain_with_next_round_action(self) -> None:
+        reflection = Reflector._parse_autonomous_review(
+            "状态：uncertain\n依据：未完成图像匹配\n缺口：全轨迹关键帧\n动作：下一轮读取全部轨迹后调用 matchImage"
+        )
+
+        self.assertEqual(reflection["state"], "replan")
+        self.assertIn("更正", reflection["stateCorrection"])
+        self.assertEqual(reflection["nextAction"], "下一轮读取全部轨迹后调用 matchImage")
+
+    def test_autonomous_history_keeps_reflector_next_action(self) -> None:
+        controller = object.__new__(AgentController)
+        controller.rounds = [{
+            "roundId": "round-1",
+            "plan": {"goal": "先查直接轨迹", "calls": []},
+            "observed": {"calls": []},
+            "reflection": {
+                "state": "replan",
+                "reason": "需要全轨迹匹配",
+                "evidenceGap": "关键帧",
+                "nextAction": "读取全部轨迹并调用 matchImage",
+            },
+        }]
+
+        history = controller._autonomous_history()
+
+        self.assertEqual(history[0]["nextAction"], "读取全部轨迹并调用 matchImage")
+
     def test_match_results_only_materialize_matched_tracks(self) -> None:
         controller = object.__new__(AgentController)
         controller.repository = _Repository()

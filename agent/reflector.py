@@ -10,6 +10,7 @@ from services import AgentLLMService
 
 class Reflector:
     ALLOWED = {"sufficient", "replan", "conflict", "uncertain"}
+    _CONTINUE_ACTION = re.compile(r"^\s*(?:下一轮|继续(?:规划|执行|调用|读取|获取)?|重新规划|补充(?:读取|获取|调用)?)")
 
     def __init__(self, llm: AgentLLMService):
         self.llm = llm
@@ -101,7 +102,10 @@ class Reflector:
                 raw = self.llm.complete_text(request)
             parsed = self._parse_autonomous_review(raw)
             reflection.update(parsed)
-            reflection["modelReflection"] = {"summary": raw.strip()}
+            summary = raw.strip()
+            if parsed.get("stateCorrection"):
+                summary = f"{summary}\n\n[状态一致性修正] {parsed['stateCorrection']}"
+            reflection["modelReflection"] = {"summary": summary}
         except Exception as error:
             reflection["reason"] = "ReflectAgent 未返回有效审计结果"
             reflection["evidenceGap"] = evidence_gap or "缺少可用的反思结论"
@@ -124,12 +128,16 @@ class Reflector:
             action = str(value.get("action") or value.get("动作") or "").strip()
             if gap.lower() in {"无", "none", "null", "没有", "无缺口"}:
                 gap = ""
-            return {
-                "state": state if state in cls.ALLOWED else "uncertain",
+            state, correction = cls._normalize_autonomous_state(state, action)
+            parsed = {
+                "state": state,
                 "reason": basis or "ReflectAgent 未给出明确依据",
                 "evidenceGap": gap or None,
                 "nextAction": action or None,
             }
+            if correction:
+                parsed["stateCorrection"] = correction
+            return parsed
 
         def field(*names: str) -> str:
             for name in names:
@@ -147,9 +155,21 @@ class Reflector:
         if gap.lower() in {"无", "none", "null", "没有", "无缺口"}:
             gap = ""
         reason = basis or action or "ReflectAgent 未给出明确依据"
-        return {
-            "state": state if state in cls.ALLOWED else "uncertain",
+        state, correction = cls._normalize_autonomous_state(state, action)
+        parsed = {
+            "state": state,
             "reason": reason,
             "evidenceGap": gap or None,
             "nextAction": action or None,
         }
+        if correction:
+            parsed["stateCorrection"] = correction
+        return parsed
+
+    @classmethod
+    def _normalize_autonomous_state(cls, state: str, action: str) -> tuple[str, str | None]:
+        """防止模型把“继续下一轮”和“无法确认”同时输出而提前终止循环。"""
+        normalized = state if state in cls.ALLOWED else "uncertain"
+        if normalized == "uncertain" and cls._CONTINUE_ACTION.search(str(action or "")):
+            return "replan", "动作明确要求进入下一轮，状态由 uncertain 更正为 replan。"
+        return normalized, None

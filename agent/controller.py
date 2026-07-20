@@ -1063,6 +1063,7 @@ class AgentController:
                     "state": (item.get("reflection") or {}).get("state"),
                     "reason": (item.get("reflection") or {}).get("reason"),
                     "evidenceGap": (item.get("reflection") or {}).get("evidenceGap"),
+                    "nextAction": (item.get("reflection") or {}).get("nextAction"),
                 }
             )
         return history
