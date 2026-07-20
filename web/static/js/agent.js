@@ -182,9 +182,10 @@ function balanceEvidencePlayback() {
 }
 
 function evidenceCard(item) {
-  if (item.type === 'unavailable') {
-    const owner = item.trackId == null ? 'Clip Evidence' : `Track ${escapeHtml(item.trackId)} · Clip Evidence`;
-    return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>Clip Unavailable</strong><small>${escapeHtml(item.reason)}</small></div><span>${owner}</span></article>`;
+  if (item.type === 'unavailable' || item.type === 'missing') {
+    const owner = item.label || (item.trackId == null ? 'Evidence' : `Track ${item.trackId} · Evidence`);
+    const title = item.type === 'unavailable' ? 'Clip Unavailable' : 'No Matched Evidence';
+    return `<article class="evidence-card unavailable"><div class="evidence-placeholder"><strong>${title}</strong><small>${escapeHtml(item.reason)}</small></div><span title="${escapeHtml(owner)}">${escapeHtml(owner)}</span></article>`;
   }
   const media = item.type === 'video'
     ? `<button class="evidence-video-loader" type="button" data-src="${escapeHtml(item.url)}" data-poster="${escapeHtml(item.posterUrl || '')}" onclick="loadEvidenceVideo(this, true)">${item.posterUrl ? `<img loading="lazy" src="${escapeHtml(item.posterUrl)}" alt="${escapeHtml(item.label)}">` : '<div class="evidence-video-placeholder"></div>'}<span class="evidence-play-badge">▶</span></button>`
@@ -259,7 +260,9 @@ function clipErrorText(error) {
 
 function evidenceColumn(title, subtitle, items, emptyText) {
   const content = items.length ? items.map(evidenceCard).join('') : `<div class="evidence-column-empty">${escapeHtml(emptyText)}</div>`;
-  return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle} · ${items.length}</span></div><div class="evidence-column-media">${content}</div></section>`;
+  const available = items.filter((item) => !['missing', 'unavailable'].includes(item.type)).length;
+  const count = items.length ? `${available}/${items.length}` : '0';
+  return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle} · ${count}</span></div><div class="evidence-column-media">${content}</div></section>`;
 }
 
 function representativeRegistryEvidence(registryItems) {
@@ -276,26 +279,77 @@ function representativeRegistryEvidence(registryItems) {
   return items;
 }
 
-function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = []) {
+function missingEvidence(trackId, category) {
+  const labels = {
+    clip: `Track ${trackId} · Clip Evidence`,
+    keyframe: `Track ${trackId} · Keyframe Evidence`,
+    registry: `Track ${trackId} · Database Evidence`,
+  };
+  const reasons = {
+    clip: 'No target vessel clip',
+    keyframe: 'No active keyframe',
+    registry: 'No matched registry reference',
+  };
+  return {type: 'missing', trackId, label: labels[category], reason: reasons[category]};
+}
+
+function synchronizeEvidenceColumns(container) {
+  const columns = [...container.querySelectorAll('.evidence-column-media')];
+  let syncing = false;
+  columns.forEach((source) => source.addEventListener('scroll', () => {
+    if (syncing) return;
+    syncing = true;
+    columns.forEach((target) => {
+      if (target !== source) target.scrollTop = source.scrollTop;
+    });
+    requestAnimationFrame(() => { syncing = false; });
+  }, {passive: true}));
+}
+
+function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
   const container = document.getElementById('evidenceGallery');
+  evidenceVideoObserver?.disconnect();
+  visibleEvidenceVideos.forEach((video) => video.pause());
+  visibleEvidenceVideos.clear();
   const groups = displayGroups || [];
-  let clips = groups.map((group) => {
-    if (group.shipSegmentIds?.[0]) return evidenceItem('video', group.shipSegmentIds[0], group.trackId);
-    if (group.clipTrackId) return evidenceItem('video', group.clipTrackId, group.trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange});
-    return group.clipError ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId} : null;
-  }).filter(Boolean);
-  let keyframes = groups.map((group) => group.keyframeIds?.[0]
-    ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId) : null).filter(Boolean);
-  let database = representativeRegistryEvidence(registryItems);
-  if (!database.length) {
-    const registryIds = [...new Set(groups.flatMap(group => group.registryReferenceIds || []))];
-    database = registryIds.map(id => evidenceItem('registry', id));
+  const registryOnly = result?.targetScope === 'registry';
+  if (registryOnly) {
+    let database = representativeRegistryEvidence(registryItems);
+    if (!database.length) {
+      database = [...new Set(evidence?.registryReferenceIds || [])].map((id) => evidenceItem('registry', id));
+    }
+    container.className = 'evidence-columns registry-only';
+    container.innerHTML = evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText);
+    return;
   }
 
-  if (!clips.length) clips = (evidence?.shipSegmentIds || []).map((id) => evidenceItem('video', id));
-  if (!keyframes.length) keyframes = (evidence?.keyframeIds || []).map((id) => evidenceItem('keyframe', id));
-  if (!database.length && evidence?.registryReferenceIds?.length) {
-    database = [...new Set(evidence.registryReferenceIds)].map(id => evidenceItem('registry', id));
+  let clips;
+  let keyframes;
+  let database;
+  if (groups.length) {
+    clips = groups.map((group) => {
+      if (group.shipSegmentIds?.[0]) return evidenceItem('video', group.shipSegmentIds[0], group.trackId);
+      if (group.clipTrackId) return evidenceItem('video', group.clipTrackId, group.trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange});
+      if (group.clipError) return {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId, label: `Track ${group.trackId} · Clip Evidence`};
+      return missingEvidence(group.trackId, 'clip');
+    });
+    keyframes = groups.map((group) => group.keyframeIds?.[0]
+      ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId)
+      : missingEvidence(group.trackId, 'keyframe'));
+    database = groups.map((group) => group.registryReferenceIds?.[0]
+      ? evidenceItem('registry', group.registryReferenceIds[0], group.trackId, {label: `Track ${group.trackId} · Database Reference`})
+      : missingEvidence(group.trackId, 'registry'));
+  } else {
+    const rawClips = evidence?.shipSegmentIds || [];
+    const rawKeyframes = evidence?.keyframeIds || [];
+    const rawDatabase = evidence?.registryReferenceIds || [];
+    const rowCount = Math.max(rawClips.length, rawKeyframes.length, rawDatabase.length);
+    clips = Array.from({length: rowCount}, (_, index) => rawClips[index]
+      ? evidenceItem('video', rawClips[index]) : missingEvidence(index + 1, 'clip'));
+    keyframes = Array.from({length: rowCount}, (_, index) => rawKeyframes[index]
+      ? evidenceItem('keyframe', rawKeyframes[index]) : missingEvidence(index + 1, 'keyframe'));
+    database = Array.from({length: rowCount}, (_, index) => rawDatabase[index]
+      ? evidenceItem('registry', rawDatabase[index]) : missingEvidence(index + 1, 'registry'));
   }
 
   container.className = 'evidence-columns';
@@ -304,6 +358,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     evidenceColumn('Keyframe Evidence', 'Recognition Frames', keyframes, emptyText),
     evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText),
   ].join('');
+  synchronizeEvidenceColumns(container);
   observeEvidenceVideos(container);
 }
 function modelSummaryText(value) {
@@ -578,7 +633,7 @@ async function askAgent() {
     renderEvidence(null, null, 'Collecting evidence...');
     const result = await streamAgentQuery(question);
     renderAgentAnswer(result);
-    renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || []);
+    renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
     setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';

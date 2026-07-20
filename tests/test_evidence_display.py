@@ -63,6 +63,24 @@ class EvidenceDisplayTest(unittest.TestCase):
         self.assertEqual([item["clipTrackId"] for item in controller.display_groups], [str(index) for index in range(1, 99)])
         self.assertTrue(all(len(item["keyframeIds"]) == 1 for item in controller.display_groups))
 
+    def test_each_track_keeps_its_own_registry_reference(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {}
+        controller.display_record = None
+        controller.display_groups = []
+        tracks = [
+            {"trackId": "1", "registryReferenceIds": ["ref-003-a"]},
+            {"trackId": "2", "registryReferenceIds": ["ref-003-a"]},
+        ]
+
+        controller._display_tracks(tracks, include_clips=False, include_registry=True)
+
+        self.assertEqual(
+            [item["registryReferenceIds"] for item in controller.display_groups],
+            [["ref-003-a"], ["ref-003-a"]],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

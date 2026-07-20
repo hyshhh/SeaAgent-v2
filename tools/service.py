@@ -80,7 +80,7 @@ class ToolService:
             self._even_size(evidence.get("clip_width", 640)),
             self._even_size(evidence.get("clip_height", 360)),
         )
-        clip_fps = max(1.0, float(evidence.get("clip_fps", 6)))
+        clip_fps = max(1.0, float(evidence.get("clip_fps", 15)))
         clip_crf = max(0, min(51, int(evidence.get("clip_crf", 31))))
         poster_quality = max(1, min(100, int(evidence.get("poster_quality", 75))))
         output_dir = Path(self.config["paths"]["clip_dir"])

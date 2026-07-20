@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=19">
+<link rel="stylesheet" href="/static/css/style.css?v=20">
 </head>
 <body>
 <header class="app-header">
@@ -290,7 +290,7 @@
         <div class="settings-fields">
           <label>片段宽度<input data-setting="pipeline.evidence.clip_width" type="number"><small>目标船片段的固定输出宽度，默认 640。</small></label>
           <label>片段高度<input data-setting="pipeline.evidence.clip_height" type="number"><small>目标船片段的固定输出高度，默认 360。</small></label>
-          <label>片段帧率<input data-setting="pipeline.evidence.clip_fps" type="number"><small>默认每秒 6 帧，优先降低传输和解码负载。</small></label>
+          <label>片段帧率<input data-setting="pipeline.evidence.clip_fps" type="number"><small>默认每秒 15 帧；保持 640×360 分辨率，并限制单段自动播放。</small></label>
           <label>压缩强度<input data-setting="pipeline.evidence.clip_crf" type="number"><small>数值越大文件越小，默认 31。</small></label>
           <label>封面质量<input data-setting="pipeline.evidence.poster_quality" type="number"><small>证据卡片进入可视区域后自动加载并静音播放。</small></label>
         </div>
@@ -353,7 +353,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=24"></script>
+<script src="/static/js/agent.js?v=25"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>

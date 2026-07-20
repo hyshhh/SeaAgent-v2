@@ -1302,10 +1302,6 @@ class AgentController:
             str(track["trackId"]): self._ids(track, "matchedRegistryReferenceIds", "queryRegistryReferenceIds", "registryReferenceIds")
             for track in unique_tracks
         }
-        representative_refs = self.tools._representative_registry_reference_ids(
-            [reference_id for values in track_references.values() for reference_id in values]
-        ) if include_registry else []
-        assigned_refs: set[str] = set()
         for track in unique_tracks:
             track_id = str(track["trackId"])
             keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")
@@ -1314,13 +1310,12 @@ class AgentController:
                 best = max(frames, key=lambda item: item.get("retentionScore", 0), default=None)
                 keyframe_ids = [best["keyframeId"]] if best else []
             segment_ids = self._ids(track, "shipSegmentIds")[:1]
-            reference_ids = [
-                reference_id for reference_id in representative_refs
-                if reference_id in track_references[track_id] and reference_id not in assigned_refs
-            ]
-            assigned_refs.update(reference_ids)
+            reference_ids = self.tools._representative_registry_reference_ids(
+                track_references[track_id]
+            )[:1] if include_registry else []
             self.display_groups.append({
                 "trackId": track_id,
+                "hullNumber": track.get("finalHullNumber"),
                 "keyframeIds": keyframe_ids[:1],
                 "shipSegmentIds": segment_ids,
                 "clipTrackId": track_id if include_clips and not segment_ids else None,
@@ -1332,7 +1327,7 @@ class AgentController:
             "displayId": f"display-{uuid.uuid4().hex[:12]}",
             "mode": "lazy",
             "trackCount": len(self.display_groups),
-            "registryReferenceCount": len(assigned_refs),
+            "registryReferenceCount": sum(bool(group["registryReferenceIds"]) for group in self.display_groups),
         }
 
     def _display(self, goal: str, calls: list[dict[str, Any]]) -> None:

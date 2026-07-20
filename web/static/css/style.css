@@ -156,6 +156,17 @@
   width: 100%;
   background: #02080e;
 }
+.evidence-columns.registry-only {
+  grid-template-columns: minmax(320px, 520px);
+  justify-content: start;
+}
+.evidence-column .evidence-card > span {
+  display: block;
+  height: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 @media (max-width: 1200px) {
   .evidence-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

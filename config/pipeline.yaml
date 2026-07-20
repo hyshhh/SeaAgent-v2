@@ -39,7 +39,7 @@ pipeline:
   evidence:
     clip_width: 640
     clip_height: 360
-    clip_fps: 6
+    clip_fps: 15
     clip_crf: 31
     poster_quality: 75
   agent:
