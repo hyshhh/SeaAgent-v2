@@ -620,11 +620,19 @@ function appendThoughtEvent(event) {
     const card = ensureAgentCard(event.round, event.role);
     if (!card) return;
     const content = card.querySelector('.agent-stream-text');
-    content.textContent = compactAgentText(event) || event.fallback || '本轮没有可展示信息';
+    const summaryText = compactAgentText(event) || '';
+    const isPlanCard = event.role === 'planner' || event.planOnly;
+    const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
+    content.textContent = summaryText || planNote || event.fallback || '本轮没有可展示信息';
     card.classList.remove('active');
     const hasFailedCall = event.role === 'observer' && (event.calls || []).some((call) => call.skipped || call.ok === false);
-    card.classList.toggle('failed', Boolean(event.fallback || hasFailedCall));
-    card.querySelector('.agent-thought-head em').textContent = event.fallback ? '摘要失败' : hasFailedCall ? '部分失败' : '完成';
+    const markFailed = isPlanCard ? false : Boolean(event.fallback || hasFailedCall);
+    card.classList.toggle('failed', markFailed);
+    let statusLabel = '完成';
+    if (isPlanCard && event.planRepair) statusLabel = '计划已修正';
+    else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
+    else if (hasFailedCall) statusLabel = '部分失败';
+    card.querySelector('.agent-thought-head em').textContent = statusLabel;
     card.querySelector('.agent-thought-tags').innerHTML = agentTags(event);
   } else {
     appendSystemThought(event);

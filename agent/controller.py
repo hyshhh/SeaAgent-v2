@@ -1027,6 +1027,22 @@ class AgentController:
         if reflection.get("state") == "sufficient" and not history and not self._has_successful_observation(observed):
             reflection["state"] = "uncertain"
             reflection["reason"] = "本轮未获得有效工具结果，暂不能确认"
+        # 连续空计划 / 计划校验失败时停止 replan，避免多轮空转
+        empty_plan = not (plan.get("calls") or [])
+        if empty_plan and reflection.get("state") == "replan":
+            reflection["state"] = "uncertain"
+            reflection["reason"] = plan.get("planRepair") or plan.get("reason") or "未能形成可执行工具计划"
+            reflection["evidenceGap"] = plan.get("evidenceGap") or "缺少可执行工具计划"
+        consecutive_empty = 0
+        for item in reversed(self.rounds):
+            if (item.get("plan") or {}).get("calls"):
+                break
+            consecutive_empty += 1
+        if empty_plan:
+            consecutive_empty += 1
+        if consecutive_empty >= 2 and reflection.get("state") == "replan":
+            reflection["state"] = "uncertain"
+            reflection["reason"] = "连续多轮未能形成可执行工具计划，已停止"
         self._emit(
             "agent_end",
             "ReflectAgent",

@@ -153,27 +153,28 @@ class AutonomousPlannerTest(unittest.TestCase):
             "maxRounds": 5,
         }
 
-    def test_invalid_plan_stops_without_hardcoded_tool_chain(self) -> None:
+    def test_invalid_empty_args_are_auto_completed_for_description(self) -> None:
+        """空 trackIds/gallery 不再直接停死，而是补全最小描述检索链。"""
         llm = _InvalidPlanLLM()
         planner = Planner(llm, AgentController.TOOL_NAMES)
 
         plan = planner.decide_tools("视频中有没有黄色无人艇？", self.intent)
 
-        self.assertIn("planRepair", plan)
-        self.assertEqual(plan["calls"], [])
-        self.assertEqual(plan["proposedState"], "uncertain")
-        self.assertEqual(len(llm.requests), 2)
-        self.assertIn("planValidationError", llm.requests[1])
+        self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
+        self.assertEqual(plan["calls"][1]["arguments"]["trackIds"], {"$ref": "tracks.trackIds"})
+        self.assertEqual(plan["calls"][2]["arguments"]["galleryImages"], {"$ref": "frames.keyframes"})
+        self.assertEqual(plan["proposedState"], "replan")
 
     def test_replanned_calls_are_executed_when_valid(self) -> None:
+        """无效计划可被自动补全或二次规划为可执行链。"""
         llm = _RepairPlanLLM()
         planner = Planner(llm, AgentController.TOOL_NAMES)
 
         plan = planner.decide_tools("视频中有没有黄色无人艇？", self.intent)
 
-        self.assertIn("planRepair", plan)
         self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
         self.assertEqual(plan["calls"][1]["arguments"]["trackIds"], {"$ref": "tracks.trackIds"})
+        self.assertIn(plan["calls"][2]["tool"], {"matchText"})
 
     def test_valid_dependent_references_are_preserved(self) -> None:
         planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
@@ -191,6 +192,38 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertEqual(llm.json_calls, 1)
         self.assertEqual(llm.text_calls, 0)
         self.assertEqual(plan["calls"][0]["tool"], "getTrack")
+
+    def test_missing_get_track_is_auto_inserted_before_get_frames(self) -> None:
+        class _OnlyFramesLLM(_InvalidPlanLLM):
+            def complete_text(self, prompt: str) -> str:
+                self.requests.append(prompt)
+                return json.dumps(
+                    {
+                        "goal": "缺上游轨迹",
+                        "calls": [
+                            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                            {
+                                "id": "match",
+                                "tool": "matchText",
+                                "arguments": {
+                                    "description": "黄色无人艇",
+                                    "galleryImages": {"$ref": "frames.keyframes"},
+                                    "topK": 5,
+                                },
+                            },
+                        ],
+                        "proposedState": "replan",
+                        "reason": "缺 getTrack",
+                        "evidenceGap": None,
+                        "answerHint": "",
+                    },
+                    ensure_ascii=False,
+                )
+
+        planner = Planner(_OnlyFramesLLM(), AgentController.TOOL_NAMES)
+        plan = planner.decide_tools("视频中有没有黄色无人艇？", self.intent)
+        self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
+        self.assertEqual(plan["calls"][0]["arguments"]["limit"], 60)
 
     def test_string_references_are_normalized_before_validation(self) -> None:
         planner = Planner(_StringReferencePlanLLM(), AgentController.TOOL_NAMES)
