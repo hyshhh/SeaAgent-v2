@@ -14,18 +14,76 @@ class Observer:
         observations = []
         for call in plan["calls"]:
             if not self._condition(call.get("condition"), scope):
-                observations.append({"id": call["id"], "tool": call["tool"], "skipped": True})
+                result = {"ok": False, "error": "condition_not_met", "tool": call["tool"]}
+                scope[call["id"]] = result
+                observations.append({"id": call["id"], "tool": call["tool"], "skipped": True, "skipReason": "condition_not_met", "result": result})
+                continue
+            dependency_issue = self._dependency_issue(call.get("arguments", {}), scope)
+            if dependency_issue:
+                result = {"ok": False, "error": dependency_issue, "tool": call["tool"]}
+                scope[call["id"]] = result
+                observations.append({"id": call["id"], "tool": call["tool"], "skipped": True, "skipReason": dependency_issue, "result": result})
                 continue
             arguments = self._resolve(call.get("arguments", {}), scope)
             result = self.tools.execute(call["tool"], arguments)
             scope[call["id"]] = result
             observations.append({"id": call["id"], "tool": call["tool"], "arguments": self._compact(arguments), "result": result})
-        summary = {"calls": [self._summarize_observation(item) for item in observations]}
+        intent = plan.get("intent") if isinstance(plan.get("intent"), dict) else {}
+        summary = {
+            "task": {
+                "goal": plan.get("goal"),
+                "expectedOutcome": intent.get("expectedOutcome"),
+                "successCriteria": intent.get("successCriteria"),
+                "evidenceGap": plan.get("evidenceGap"),
+                "proposedState": plan.get("proposedState"),
+            },
+            "calls": [self._summarize_observation(item) for item in observations],
+            "executedCount": sum(1 for item in observations if not item.get("skipped")),
+            "failedCount": sum(1 for item in observations if (item.get("result") or {}).get("ok") is False),
+            "skippedCount": sum(1 for item in observations if item.get("skipped")),
+        }
         try:
             summary["modelObservation"] = self.llm.role("observer", summary, on_delta)
         except Exception as error:
             summary["modelFallback"] = str(error)
         return {"observations": observations, "scope": scope, "summary": summary}
+
+    @classmethod
+    def _dependency_issue(cls, value: Any, scope: dict[str, Any]) -> str | None:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                reference = str(value.get("$ref") or "").strip()
+                if not reference:
+                    return "dependency_reference_empty"
+                root = reference.split(".", 1)[0]
+                if root not in scope:
+                    return f"dependency_missing:{reference}"
+                source = scope.get(root)
+                if isinstance(source, dict) and source.get("ok") is False:
+                    return f"dependency_failed:{root}"
+                present, _ = cls._read_with_presence(scope, reference)
+                if not present and "$default" not in value:
+                    return f"dependency_field_missing:{reference}"
+            for item in value.values():
+                issue = cls._dependency_issue(item, scope)
+                if issue:
+                    return issue
+        elif isinstance(value, list):
+            for item in value:
+                issue = cls._dependency_issue(item, scope)
+                if issue:
+                    return issue
+        return None
+
+    @staticmethod
+    def _read_with_presence(value: Any, path: str) -> tuple[bool, Any]:
+        current = value
+        for part in path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return False, None
+        return True, current
 
     def _resolve(self, value: Any, scope: dict[str, Any]) -> Any:
         if isinstance(value, list):
@@ -79,6 +137,10 @@ class Observer:
     def _summarize_observation(cls, observation: dict[str, Any]) -> dict[str, Any]:
         summary = {"id": observation["id"], "tool": observation["tool"], "skipped": observation.get("skipped", False)}
         if summary["skipped"]:
+            summary["skipReason"] = observation.get("skipReason")
+            result = observation.get("result") or {}
+            if result.get("error"):
+                summary["error"] = result["error"]
             return summary
         result = observation.get("result", {})
         summary["ok"] = result.get("ok")

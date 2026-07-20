@@ -18,6 +18,19 @@ class Planner:
     _REGISTRY_RELATIONS = {"any", "in", "out"}
     _PLAN_STATES = {"sufficient", "replan", "conflict", "uncertain"}
     _WEAK_TARGETS = {"", "船", "船舶", "船只", "目标", "在库船", "未在库船", "库船"}
+    _TOOL_OUTPUT_FIELDS = {
+        "getTrack": {"queryScope", "trackIds", "tracks", "totalTrackCount", "returnedTrackCount", "offset", "limit", "hasMore", "nextOffset"},
+        "getFrames": {"keyframeIds", "keyframes", "keyframesByTrack", "discardedKeyframeIds", "unsearchableTrackIds"},
+        "getClip": {"ok", "found", "shipSegmentId", "segmentPath", "posterPath", "startTime", "endTime"},
+        "getRegistry": {"ok", "found", "searchable", "hullNumber", "registryIds", "registryItems", "registryReferenceIds", "registryReferences", "discardedReferenceIds"},
+        "listRegistry": {"ok", "registryItems", "registryReferenceIds", "registryReferences", "unsearchableRegistryIds"},
+        "matchHull": {"ok", "exactMatches", "matchedHullNumbers", "unmatchedHullNumbers"},
+        "matchText": {"ok", "matchMode", "matches", "missingKeyframeIds"},
+        "matchImage": {"ok", "matchMode", "matches", "missingKeyframeIds", "missingRegistryReferenceIds"},
+        "verifyTarget": {"ok", "targetType", "decision", "facts", "registryReferenceIds", "keyframeIds", "shipSegmentIds"},
+        "showEvidence": {"ok", "displayId", "shownKeyframeIds", "shownShipSegmentIds", "shownRegistryReferenceIds"},
+        "dedupTracks": {"ok", "countStatus", "countStability", "upperCount", "lowerCount", "representativeTracks"},
+    }
 
     def __init__(self, llm: AgentLLMService, allowed_tools: set[str]):
         self.llm = llm
@@ -401,6 +414,7 @@ class Planner:
             "maxRounds": intent.get("maxRounds"),
             "previousRounds": history,
             "availableResultKeys": sorted(memory_scope.keys()),
+            "availableResults": self._describe_available_results(memory_scope),
             "allowedTools": sorted(self.allowed_tools),
         }
         model_plan, raw, request_error = self._request_autonomous_plan(payload, on_delta)
@@ -470,6 +484,38 @@ class Planner:
             plan["modelFallback"] = model_plan["modelFallback"]
         return plan
 
+    @classmethod
+    def _describe_available_results(cls, memory_scope: dict[str, Any]) -> dict[str, Any]:
+        """向 PlanAgent 提供结果结构，不发送大图像列表和完整轨迹正文。"""
+        described: dict[str, Any] = {}
+        count_fields = {
+            "trackIds", "tracks", "keyframeIds", "keyframes", "registryIds", "registryItems",
+            "registryReferenceIds", "registryReferences", "matches", "discardedKeyframeIds",
+            "unsearchableTrackIds", "missingKeyframeIds", "shownKeyframeIds", "shownShipSegmentIds",
+        }
+        for name, result in memory_scope.items():
+            if not isinstance(result, dict):
+                described[str(name)] = {"type": type(result).__name__}
+                continue
+            item: dict[str, Any] = {
+                "type": "toolResult",
+                "ok": result.get("ok"),
+                "fields": sorted(str(key) for key in result.keys()),
+            }
+            counts: dict[str, int] = {}
+            for field in count_fields:
+                value = result.get(field)
+                if isinstance(value, (list, dict)):
+                    counts[field] = len(value)
+            if counts:
+                item["counts"] = counts
+            for field in ("hasMore", "nextOffset", "totalTrackCount", "returnedTrackCount", "searchable", "found", "matchMode"):
+                if result.get(field) not in (None, ""):
+                    item[field] = result[field]
+            if result.get("error"):
+                item["error"] = str(result["error"])
+            described[str(name)] = item
+        return described
     def _request_autonomous_plan(
         self,
         payload: dict[str, Any],
@@ -532,21 +578,25 @@ class Planner:
         memory_scope: dict[str, Any],
         proposed_state: str = "replan",
     ) -> tuple[bool, str | None]:
-        """校验自主计划的接口依赖，不替模型选择或替换工具链。"""
+        """校验工具顺序、引用来源和参数组合，不替模型选择语义链路。"""
         if not calls:
             if memory_scope and proposed_state in {"sufficient", "conflict", "uncertain"}:
                 return True, None
             return False, "当前没有可执行工具调用；首轮或继续取证时不能使用空调用"
         available = set(memory_scope)
+        call_outputs: dict[str, str] = {}
         for call in calls:
             tool = call["tool"]
             arguments = call.get("arguments") or {}
             condition = call.get("condition") or {}
             if condition:
-                ref = str(condition.get("ref") or "").strip()
-                root = ref.split(".", 1)[0]
-                if not root or (root not in available and root not in memory_scope):
-                    return False, f"{tool} 的执行条件引用了未获得的结果"
+                issue = self._path_issue(str(condition.get("ref") or ""), available, memory_scope, call_outputs)
+                if issue:
+                    return False, f"{tool} 的执行条件{issue}"
+            issue = self._reference_issue(arguments, available, memory_scope, call_outputs)
+            if issue:
+                return False, f"{tool} 的参数{issue}"
+
             requirements: tuple[tuple[str, str], ...] = ()
             if tool == "getFrames":
                 requirements = (("trackIds", "轨迹编号"),)
@@ -590,7 +640,68 @@ class Planner:
                 if gallery_kind not in {"keyframe", "registry"}:
                     return False, "matchText 的候选图像必须是正式关键帧或先验库参考图"
             available.add(call["id"])
+            call_outputs[call["id"]] = tool
         return True, None
+
+    @classmethod
+    def _reference_issue(
+        cls,
+        value: Any,
+        available: set[str],
+        memory_scope: dict[str, Any],
+        call_outputs: dict[str, str],
+    ) -> str | None:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                issue = cls._path_issue(str(value.get("$ref") or ""), available, memory_scope, call_outputs)
+                if issue:
+                    return issue
+            for item in value.values():
+                issue = cls._reference_issue(item, available, memory_scope, call_outputs)
+                if issue:
+                    return issue
+        elif isinstance(value, list):
+            for item in value:
+                issue = cls._reference_issue(item, available, memory_scope, call_outputs)
+                if issue:
+                    return issue
+        return None
+
+    @classmethod
+    def _path_issue(
+        cls,
+        reference: str,
+        available: set[str],
+        memory_scope: dict[str, Any],
+        call_outputs: dict[str, str],
+    ) -> str | None:
+        reference = reference.strip()
+        root, _, field_path = reference.partition(".")
+        if not root:
+            return "引用为空"
+        if root in memory_scope:
+            present, _ = cls._read_path(memory_scope, reference)
+            return None if present else f"引用了不存在的结果字段：{reference}"
+        if root in call_outputs:
+            output_fields = cls._TOOL_OUTPUT_FIELDS.get(call_outputs[root], set())
+            if field_path and field_path.split(".", 1)[0] in output_fields:
+                return None
+            if not field_path:
+                return None
+            return f"引用了工具 {root} 未声明的结果字段：{reference}"
+        if root in available:
+            return None
+        return f"引用了未获得的结果：{reference}"
+
+    @staticmethod
+    def _read_path(value: Any, path: str) -> tuple[bool, Any]:
+        current = value
+        for part in path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return False, None
+        return True, current
 
     @staticmethod
     def _image_input_kind(value: Any) -> str:

@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from agent.controller import AgentController
+from agent.observer import Observer
 from agent.planner import Planner
 from agent.reflector import Reflector
 
@@ -113,6 +114,10 @@ class _Repository:
         return {"trackId": str(track_id), "finalDescription": "仓库轨迹"}
 
 
+class _FailingTools:
+    def execute(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
+        return {"ok": False, "error": "should_not_execute", "tool": name}
+
 class AutonomousPlannerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.intent = {
@@ -168,6 +173,62 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertNotIn("planRepair", plan)
         self.assertEqual(plan["calls"][0]["arguments"]["trackIds"], {"$ref": "tracks.trackIds"})
         self.assertEqual(plan["calls"][1]["arguments"]["galleryImages"], {"$ref": "frames.keyframes"})
+    def test_reference_field_must_be_declared_by_prior_tool(self) -> None:
+        planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
+        valid, issue = planner._calls_are_executable(
+            [
+                {"id": "tracks", "tool": "getTrack", "arguments": {}},
+                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.unknownField"}}},
+            ],
+            {},
+            "replan",
+        )
+
+        self.assertFalse(valid)
+        self.assertIn("unknownField", issue or "")
+
+    def test_planner_receives_available_result_structure(self) -> None:
+        llm = _ValidPlanLLM()
+        planner = Planner(llm, AgentController.TOOL_NAMES)
+
+        planner.decide_tools(
+            "视频中有没有黄色无人艇？",
+            self.intent,
+            memory_scope={
+                "tracks": {
+                    "ok": True,
+                    "trackIds": ["1"],
+                    "tracks": [{"trackId": "1"}],
+                    "hasMore": False,
+                }
+            },
+        )
+
+        self.assertIn("availableResults", llm.requests[0])
+        self.assertIn("hasMore", llm.requests[0])
+
+    def test_observer_stops_dependent_tools_after_failed_reference(self) -> None:
+        observer = Observer(_ReflectLLM(), _FailingTools())
+        result = observer.execute(
+            {
+                "calls": [
+                    {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                    {"id": "match", "tool": "matchText", "arguments": {"description": "黄色无人艇", "galleryImages": {"$ref": "frames.keyframes"}}},
+                ]
+            },
+            context={"tracks": {"ok": False, "error": "track_query_failed"}},
+        )
+
+        self.assertTrue(all(item["skipped"] for item in result["observations"]))
+        self.assertEqual(result["summary"]["skippedCount"], 2)
+        self.assertIn("dependency_failed", result["observations"][0]["skipReason"])
+
+    def test_reflector_repairs_terminal_state_with_continue_action(self) -> None:
+        reflection = Reflector._parse_autonomous_review(
+            "状态：sufficient\n依据：当前仍需补充证据\n缺口：关键帧\n动作：下一轮读取关键帧"
+        )
+
+        self.assertEqual(reflection["state"], "replan")
     def test_verify_target_requires_a_supported_evidence_pair(self) -> None:
         planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
         valid, issue = planner._calls_are_executable(

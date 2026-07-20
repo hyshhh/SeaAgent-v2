@@ -11,6 +11,16 @@ from services import AgentLLMService
 class Reflector:
     ALLOWED = {"sufficient", "replan", "conflict", "uncertain"}
     _CONTINUE_ACTION = re.compile(r"^\s*(?:下一轮|继续(?:规划|执行|调用|读取|获取)?|重新规划|补充(?:读取|获取|调用)?)")
+    _STATE_ALIASES = {
+        "完成": "sufficient",
+        "已完成": "sufficient",
+        "停止": "sufficient",
+        "继续": "replan",
+        "重规划": "replan",
+        "冲突": "conflict",
+        "不确定": "uncertain",
+        "无法确认": "uncertain",
+    }
 
     def __init__(self, llm: AgentLLMService):
         self.llm = llm
@@ -82,7 +92,9 @@ class Reflector:
         previous_rounds: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """自主规划模式由 ReflectAgent 读取观察事实并实际决定下一轮状态。"""
+        task = observation_summary.get("task") if isinstance(observation_summary.get("task"), dict) else {}
         payload = {
+            "task": task,
             "plannerProposal": proposed_state if proposed_state in self.ALLOWED else "replan",
             "plannerReason": planner_reason,
             "expectedOutcome": expected_outcome,
@@ -169,7 +181,8 @@ class Reflector:
     @classmethod
     def _normalize_autonomous_state(cls, state: str, action: str) -> tuple[str, str | None]:
         """防止模型把“继续下一轮”和“无法确认”同时输出而提前终止循环。"""
-        normalized = state if state in cls.ALLOWED else "uncertain"
-        if normalized == "uncertain" and cls._CONTINUE_ACTION.search(str(action or "")):
-            return "replan", "动作明确要求进入下一轮，状态由 uncertain 更正为 replan。"
+        normalized = cls._STATE_ALIASES.get(state, state)
+        normalized = normalized if normalized in cls.ALLOWED else "uncertain"
+        if normalized != "replan" and cls._CONTINUE_ACTION.search(str(action or "")):
+            return "replan", "动作明确要求进入下一轮，状态由终止状态更正为 replan。"
         return normalized, None
