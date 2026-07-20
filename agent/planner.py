@@ -732,8 +732,65 @@ class Planner:
         return plan
 
     @staticmethod
-    def _time_range(question: str) -> tuple[float, float] | None:
+    def _time_range(question: str, now: datetime | None = None) -> tuple[float, float] | None:
+        """解析监控查询中的相对日期、时段和钟点范围。"""
         cn_digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+        normalized = re.sub(r"[\s()（）\[\]【】]", "", question)
+        current = now or datetime.now().astimezone()
+        if current.tzinfo is None:
+            current = current.astimezone()
+
+        day_offset = 0
+        for tokens, offset in (
+            (("大前天",), -3),
+            (("前天",), -2),
+            (("昨天", "昨日"), -1),
+            (("今天", "今日", "当天"), 0),
+            (("后天",), 2),
+            (("明天", "明日"), 1),
+        ):
+            if any(token in normalized for token in tokens):
+                day_offset = offset
+                break
+        base_day = current + timedelta(days=day_offset)
+
+        def resolve_hour(hour: int, period: str | None) -> int | None:
+            if not 0 <= hour <= 23:
+                return None
+            if period in {"下午", "傍晚", "晚上", "晚间", "夜间"} and 1 <= hour < 12:
+                return hour + 12
+            if period == "中午" and 1 <= hour <= 5:
+                return hour + 12
+            if period in {"凌晨", "早上", "上午"} and hour == 12:
+                return 0
+            return hour
+
+        def build_range(
+            start_hour: int,
+            start_minute: int,
+            start_second: int,
+            end_hour: int,
+            end_minute: int,
+            end_second: int,
+            start_period: str | None,
+            end_period: str | None,
+        ) -> tuple[float, float] | None:
+            inherited_end_period = end_period or start_period
+            if not end_period and start_period in {"晚上", "晚间", "夜间"} and end_hour <= 5:
+                inherited_end_period = "凌晨"
+            normalized_start_hour = resolve_hour(start_hour, start_period)
+            normalized_end_hour = resolve_hour(end_hour, inherited_end_period)
+            if normalized_start_hour is None or normalized_end_hour is None:
+                return None
+            if not 0 <= start_minute <= 59 or not 0 <= end_minute <= 59:
+                return None
+            if not 0 <= start_second <= 59 or not 0 <= end_second <= 59:
+                return None
+            start = base_day.replace(hour=normalized_start_hour, minute=start_minute, second=start_second, microsecond=0)
+            end = base_day.replace(hour=normalized_end_hour, minute=end_minute, second=end_second, microsecond=0)
+            if end < start:
+                end += timedelta(days=1)
+            return start.timestamp(), end.timestamp()
 
         def parse_amount(token: str) -> float | None:
             token = token.strip()
@@ -753,32 +810,30 @@ class Planner:
                 return float(cn_digits[token])
             return None
 
-        relative_match = re.search(r"最近\s*([0-9一二两三四五六七八九十半]+(?:\.\d+)?)\s*分(?:钟)?", question)
+        relative_match = re.search(r"最近([0-9一二两三四五六七八九十半]+(?:\.\d+)?)分(?:钟)?", normalized)
         if relative_match:
             amount = parse_amount(relative_match.group(1))
             if amount is not None:
-                end = datetime.now().astimezone().timestamp()
+                end = current.timestamp()
                 return end - amount * 60, end
         clock_match = re.search(
-            r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:到|至|-|—|~)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?",
-            question,
+            r"(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:到|至|-|—|~)(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2}):(\d{2})(?::(\d{2}))?",
+            normalized,
         )
         if clock_match:
-            now = datetime.now().astimezone()
-            start = now.replace(hour=int(clock_match.group(1)), minute=int(clock_match.group(2)), second=int(clock_match.group(3) or 0), microsecond=0)
-            end = now.replace(hour=int(clock_match.group(4)), minute=int(clock_match.group(5)), second=int(clock_match.group(6) or 0), microsecond=0)
-            if end < start:
-                end += timedelta(days=1)
-            return start.timestamp(), end.timestamp()
+            return build_range(
+                int(clock_match.group(2)), int(clock_match.group(3)), int(clock_match.group(4) or 0),
+                int(clock_match.group(6)), int(clock_match.group(7)), int(clock_match.group(8) or 0),
+                clock_match.group(1), clock_match.group(5),
+            )
         hour_match = re.search(
-            r"(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分)?\s*(?:到|至|-|—|~)\s*(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分)?",
-            question,
+            r"(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2})点(?:(\d{1,2})分)?(?:到|至|-|—|~)(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2})点?(?:(\d{1,2})分)?",
+            normalized,
         )
         if hour_match:
-            now = datetime.now().astimezone()
-            start = now.replace(hour=int(hour_match.group(1)), minute=int(hour_match.group(2) or 0), second=0, microsecond=0)
-            end = now.replace(hour=int(hour_match.group(3)), minute=int(hour_match.group(4) or 0), second=0, microsecond=0)
-            if end < start:
-                end += timedelta(days=1)
-            return start.timestamp(), end.timestamp()
+            return build_range(
+                int(hour_match.group(2)), int(hour_match.group(3) or 0), 0,
+                int(hour_match.group(5)), int(hour_match.group(6) or 0), 0,
+                hour_match.group(1), hour_match.group(4),
+            )
         return None

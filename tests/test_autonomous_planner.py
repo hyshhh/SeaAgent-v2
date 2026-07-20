@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from agent.controller import AgentController
 from agent.planner import Planner
@@ -163,6 +164,40 @@ class AutonomousPlannerTest(unittest.TestCase):
 
         self.assertEqual([item["trackId"] for item in result], ["track-2"])
         self.assertEqual(result[0]["embeddingScore"], 0.91)
+
+
+class PlannerTimeRangeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.timezone = timezone(timedelta(hours=8))
+        self.now = datetime(2026, 7, 20, 10, 58, 23, tzinfo=self.timezone)
+
+    def assert_range(self, question: str, expected_start: datetime, expected_end: datetime) -> None:
+        result = Planner._time_range(question, now=self.now)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(datetime.fromtimestamp(result[0], self.timezone), expected_start)
+        self.assertEqual(datetime.fromtimestamp(result[1], self.timezone), expected_end)
+
+    def test_yesterday_afternoon_with_parentheses(self) -> None:
+        self.assert_range(
+            "查找一下昨（天下午）4点-5点有哪些在库船出现？",
+            datetime(2026, 7, 19, 16, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 19, 17, 0, tzinfo=self.timezone),
+        )
+
+    def test_yesterday_afternoon_clock_format(self) -> None:
+        self.assert_range(
+            "昨天下午4:00-5:00有哪些船？",
+            datetime(2026, 7, 19, 16, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 19, 17, 0, tzinfo=self.timezone),
+        )
+
+    def test_evening_range_can_cross_midnight(self) -> None:
+        self.assert_range(
+            "今天晚上11点到1点有哪些船？",
+            datetime(2026, 7, 20, 23, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 21, 1, 0, tzinfo=self.timezone),
+        )
 
 
 if __name__ == "__main__":
