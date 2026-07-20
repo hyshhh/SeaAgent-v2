@@ -68,6 +68,36 @@ class _RepairPlanLLM(_InvalidPlanLLM):
         return _ValidPlanLLM.complete_text(self, prompt)
 
 
+class _StringReferencePlanLLM(_InvalidPlanLLM):
+    def complete_text(self, prompt: str) -> str:
+        self.requests.append(prompt)
+        return json.dumps(
+            {
+                "goal": "兼容模型生成的类引用字符串",
+                "calls": [
+                    {
+                        "id": "frames",
+                        "tool": "getFrames",
+                        "arguments": {"trackIds": ["$ref: 'tracks.trackIds'"]},
+                    },
+                    {
+                        "id": "matchText",
+                        "tool": "matchText",
+                        "arguments": {
+                            "description": "黄色无人艇",
+                            "galleryImages": ["$ref: 'frames.keyframes' "],
+                            "topK": 10,
+                        },
+                    },
+                ],
+                "proposedState": "replan",
+                "reason": "读取已有轨迹的关键帧后执行描述匹配",
+                "evidenceGap": None,
+                "answerHint": "",
+            },
+            ensure_ascii=False,
+        )
+
 class _ReflectLLM:
     def _prompt(self, key: str) -> str:
         self.key = key
@@ -126,6 +156,18 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertNotIn("planRepair", plan)
         self.assertEqual([call["tool"] for call in plan["calls"]], ["getTrack", "getFrames", "matchText"])
 
+    def test_string_references_are_normalized_before_validation(self) -> None:
+        planner = Planner(_StringReferencePlanLLM(), AgentController.TOOL_NAMES)
+
+        plan = planner.decide_tools(
+            "视频中有没有黄色无人艇？",
+            self.intent,
+            memory_scope={"tracks": {"trackIds": ["1", "2"]}},
+        )
+
+        self.assertNotIn("planRepair", plan)
+        self.assertEqual(plan["calls"][0]["arguments"]["trackIds"], {"$ref": "tracks.trackIds"})
+        self.assertEqual(plan["calls"][1]["arguments"]["galleryImages"], {"$ref": "frames.keyframes"})
     def test_verify_target_requires_a_supported_evidence_pair(self) -> None:
         planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
         valid, issue = planner._calls_are_executable(

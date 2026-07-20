@@ -156,6 +156,7 @@ prompts:
     {"$ref": "tracks.trackIds"}
     {"$ref": "frames.keyframes"}
     {"$ref": "frames.keyframesByTrack"}
+    $ref 必须严格写成上述 JSON 对象，禁止写成字符串、禁止写成 ["$ref: 'frames.keyframes'"] 这类数组。
     同轮内后面的工具可以引用前面工具 id 的结果，例如 getFrames 的 trackIds 引用 getTrack 的 trackIds。
 
     规划原则：

@@ -641,6 +641,19 @@ class Planner:
             if key not in allowed_fields:
                 continue
             cleaned[key] = self._sanitize_value(value)
+        reference_fields = {
+            "getFrames": {"trackIds"},
+            "matchHull": {"hullNumberArray"},
+            "matchText": {"galleryImages"},
+            "matchImage": {"queryImages", "galleryImages"},
+            "verifyTarget": {"registryReferenceIds", "keyframeIds", "shipSegmentIds"},
+            "showEvidence": {"keyframeIds", "shipSegmentIds", "registryReferenceIds"},
+            "dedupTracks": {"tracks", "keyframesByTrack"},
+        }.get(tool, set())
+        for field in reference_fields:
+            value = cleaned.get(field)
+            if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict) and "$ref" in value[0]:
+                cleaned[field] = value[0]
         # 时间范围统一
         if "timeRange" in cleaned:
             cleaned["timeRange"] = self._normalize_time_range(cleaned.get("timeRange"))
@@ -693,7 +706,12 @@ class Planner:
             return {str(key): self._sanitize_value(item) for key, item in value.items()}
         if isinstance(value, list):
             return [self._sanitize_value(item) for item in value]
-        if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str):
+            reference = re.fullmatch(r"\s*\$ref\s*:\s*([\'\"]?)([^\'\"]+?)\1\s*", value)
+            if reference:
+                return {"$ref": reference.group(2).strip()}
+            return value
+        if isinstance(value, (int, float, bool)) or value is None:
             return value
         return str(value)
 
