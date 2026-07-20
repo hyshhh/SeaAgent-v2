@@ -45,6 +45,14 @@ class EvidenceDisplayTest(unittest.TestCase):
         self.assertEqual(canvas.shape, (360, 640, 3))
         self.assertGreater(np.count_nonzero(canvas == 255), crop.size)
 
+    def test_image_input_flattens_registry_and_keyframe_groups(self):
+        records = ToolService._flatten_image_records([
+            {"references": [{"referenceId": "ref-1"}]},
+            {"keyframesByTrack": {"1": {"keyframes": [{"keyframeId": "frame-1"}]}}},
+        ])
+
+        self.assertEqual(records, [{"referenceId": "ref-1"}, {"keyframeId": "frame-1"}])
+
     def test_registry_evidence_keeps_one_image_per_hull(self):
         service = ToolService.__new__(ToolService)
         service.repository = _RegistryRepository()

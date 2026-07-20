@@ -580,8 +580,37 @@ class Planner:
             for field, label in requirements:
                 if not self._has_call_value(arguments.get(field), available, memory_scope):
                     return False, f"{tool} 缺少有效{label}"
+            if tool == "matchImage":
+                query_kind = self._image_input_kind(arguments.get("queryImages"))
+                gallery_kind = self._image_input_kind(arguments.get("galleryImages"))
+                if {query_kind, gallery_kind} != {"keyframe", "registry"}:
+                    return False, "matchImage 必须使用一侧正式关键帧、另一侧先验库参考图"
+            if tool == "matchText":
+                gallery_kind = self._image_input_kind(arguments.get("galleryImages"))
+                if gallery_kind not in {"keyframe", "registry"}:
+                    return False, "matchText 的候选图像必须是正式关键帧或先验库参考图"
             available.add(call["id"])
         return True, None
+
+    @staticmethod
+    def _image_input_kind(value: Any) -> str:
+        """识别匹配工具引用的图像来源，阻止把轨迹摘要直接送入匹配工具。"""
+        if isinstance(value, dict) and "$ref" in value:
+            reference = str(value.get("$ref") or "").lower()
+            if reference.endswith(".keyframes"):
+                return "keyframe"
+            if reference.endswith(".registryreferences") or reference.endswith(".references"):
+                return "registry"
+            return "unknown"
+        if isinstance(value, list) and value:
+            kinds = {Planner._image_input_kind(item) for item in value}
+            return kinds.pop() if len(kinds) == 1 else "unknown"
+        if isinstance(value, dict):
+            if "keyframeVectorId" in value or "keyframeId" in value:
+                return "keyframe"
+            if "registryVectorId" in value or "referenceId" in value:
+                return "registry"
+        return "unknown"
 
     @staticmethod
     def _has_call_value(value: Any, available: set[str], memory_scope: dict[str, Any]) -> bool:

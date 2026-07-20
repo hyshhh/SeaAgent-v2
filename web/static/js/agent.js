@@ -421,7 +421,12 @@ function agentTags(event) {
     return (event.calls || []).map((call) => `<span>${escapeHtml(call.tool || '工具')}</span>`).join('');
   }
   if (event.role === 'observer') {
-    return (event.calls || []).map((call) => `<span class="${call.ok === false ? 'failed' : ''}">${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : call.ok === false ? '失败' : '完成'}</span>`).join('');
+    return (event.calls || []).map((call) => {
+      const failed = call.ok === false;
+      const error = failed && call.error ? `：${valueText(call.error)}` : '';
+      const title = failed && call.error ? ` title="${escapeHtml(valueText(call.error))}"` : '';
+      return `<span class="${failed ? 'failed' : ''}"${title}>${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : failed ? `失败${escapeHtml(error)}` : '完成'}</span>`;
+    }).join('');
   }
   if (event.role === 'reflector') {
     return `<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;

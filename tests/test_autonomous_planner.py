@@ -137,6 +137,48 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("verifyTarget", issue or "")
 
+    def test_match_image_requires_one_registry_and_one_keyframe_input(self) -> None:
+        planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
+        valid, issue = planner._calls_are_executable(
+            [
+                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": ["1"]}},
+                {
+                    "id": "invalidMatch",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": "frames.keyframes"},
+                        "galleryImages": {"$ref": "frames.keyframes"},
+                    },
+                },
+            ],
+            {},
+            "replan",
+        )
+
+        self.assertFalse(valid)
+        self.assertIn("matchImage", issue or "")
+
+    def test_match_image_accepts_registry_references_and_keyframes(self) -> None:
+        planner = Planner(_ValidPlanLLM(), AgentController.TOOL_NAMES)
+        valid, issue = planner._calls_are_executable(
+            [
+                {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": "小黑03"}},
+                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": ["1"]}},
+                {
+                    "id": "match",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": "registry.registryReferences"},
+                        "galleryImages": {"$ref": "frames.keyframes"},
+                    },
+                },
+            ],
+            {},
+            "replan",
+        )
+
+        self.assertTrue(valid, issue)
+
     def test_autonomous_reflector_parses_and_uses_its_own_state(self) -> None:
         reflector = Reflector(_ReflectLLM())
 

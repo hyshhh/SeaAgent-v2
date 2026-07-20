@@ -172,9 +172,10 @@ class ToolService:
         searchable_ids = {item["registryId"] for item in valid}
         return {"ok": True, "registryItems": items, "registryReferenceIds": [item["referenceId"] for item in valid], "registryReferences": valid, "discardedReferenceIds": discarded, "unsearchableRegistryIds": [item["registryId"] for item in items if item["registryId"] not in searchable_ids]}
 
-    def matchText(self, description: str, galleryImages: list[dict[str, Any]], topK: int | None = None) -> dict[str, Any]:
+    def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None, topK: int | None = None) -> dict[str, Any]:
         if not description.strip():
             return {"ok": False, "error": "description_required", "matches": []}
+        galleryImages = self._flatten_image_records(galleryImages)
         registry_images = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
         if registry_images:
             query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
@@ -240,7 +241,9 @@ class ToolService:
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
         return {"ok": True, "matchMode": "text_to_image", "matches": matches[:topK] if topK else matches, "missingKeyframeIds": missing}
 
-    def matchImage(self, queryImages: list[dict[str, Any]], galleryImages: list[dict[str, Any]], topK: int | None = None) -> dict[str, Any]:
+    def matchImage(self, queryImages: list[dict[str, Any]] | dict[str, Any] | None, galleryImages: list[dict[str, Any]] | dict[str, Any] | None, topK: int | None = None) -> dict[str, Any]:
+        queryImages = self._flatten_image_records(queryImages)
+        galleryImages = self._flatten_image_records(galleryImages)
         if not queryImages or not galleryImages:
             return {"ok": True, "matchMode": "image_to_image", "queryType": None, "matches": [], "missingKeyframeIds": [], "missingRegistryReferenceIds": []}
         query_keyframes = [item for item in queryImages if item.get("trackId") is not None and item.get("keyframeVectorId") is not None and item.get("isEmbedded")]
@@ -371,6 +374,35 @@ class ToolService:
         status = "incomplete" if missing else "stable" if len(high_groups) == len(low_groups) else "sensitive"
         scores = [{"trackIds": list(pair), "embeddingScore": round(score, 6)} for pair, score in sorted(pair_scores.items())]
         return {"ok": True, "trackCount": len(tracks), "highThresholdShipCount": len(high_groups), "lowThresholdShipCount": len(low_groups), "countStability": status, "highGroups": high_groups, "lowGroups": low_groups, "pairScores": scores, "grayPairs": gray, "unsearchableTrackIds": missing}
+
+    @classmethod
+    def _flatten_image_records(cls, value: Any) -> list[dict[str, Any]]:
+        """兼容工具结果中的 references、keyframes 和按轨迹分组的关键帧。"""
+        records: list[dict[str, Any]] = []
+
+        def visit(item: Any) -> None:
+            if isinstance(item, (list, tuple)):
+                for child in item:
+                    visit(child)
+                return
+            if not isinstance(item, dict):
+                return
+            if isinstance(item.get("registryReferences"), list):
+                visit(item["registryReferences"])
+                return
+            if isinstance(item.get("references"), list):
+                visit(item["references"])
+                return
+            if isinstance(item.get("keyframes"), list):
+                visit(item["keyframes"])
+                return
+            if isinstance(item.get("keyframesByTrack"), dict):
+                visit(list(item["keyframesByTrack"].values()))
+                return
+            records.append(item)
+
+        visit(value)
+        return records
 
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = getattr(self, name, None)
