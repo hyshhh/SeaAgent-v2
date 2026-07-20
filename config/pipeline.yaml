@@ -37,11 +37,11 @@ pipeline:
     dedup_high: 0.82
     dedup_low: 0.72
   evidence:
-    clip_width: 960
-    clip_height: 540
-    clip_fps: 10
-    clip_crf: 25
-    poster_quality: 86
+    clip_width: 640
+    clip_height: 360
+    clip_fps: 6
+    clip_crf: 31
+    poster_quality: 75
   agent:
     # guided=hardcoded tool chain + explanatory Plan; autonomous=Plan chooses tools
     plan_mode: guided

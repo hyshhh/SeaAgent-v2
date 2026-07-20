@@ -167,6 +167,19 @@ function evidenceItem(type, id, trackId = null, options = {}) {
 }
 
 let evidenceVideoObserver = null;
+const visibleEvidenceVideos = new Set();
+
+function balanceEvidencePlayback() {
+  const videos = [...visibleEvidenceVideos].filter((video) => video.isConnected);
+  videos.sort((left, right) => {
+    const position = left.compareDocumentPosition(right);
+    return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+  videos.forEach((video, index) => {
+    if (index === 0) video.play().catch(() => {});
+    else video.pause();
+  });
+}
 
 function evidenceCard(item) {
   if (item.type === 'unavailable') {
@@ -203,30 +216,33 @@ function loadEvidenceVideo(trigger, shouldPlay = true) {
 function observeEvidenceVideos(container) {
   evidenceVideoObserver?.disconnect();
   evidenceVideoObserver = null;
+  visibleEvidenceVideos.clear();
   const loaders = [...container.querySelectorAll('.evidence-video-loader')];
   if (!loaders.length) return;
   if (!('IntersectionObserver' in window)) {
-    loaders.slice(0, 2).forEach((loader) => loadEvidenceVideo(loader, true));
+    loaders.slice(0, 1).forEach((loader) => loadEvidenceVideo(loader, true));
     return;
   }
   evidenceVideoObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       const target = entry.target;
       if (target.matches('.evidence-video-loader')) {
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.35) {
           evidenceVideoObserver.unobserve(target);
-          loadEvidenceVideo(target, true);
+          loadEvidenceVideo(target, false);
         }
         return;
       }
       if (target.tagName !== 'VIDEO') return;
-      if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
-        target.play().catch(() => {});
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.35) {
+        visibleEvidenceVideos.add(target);
       } else {
+        visibleEvidenceVideos.delete(target);
         target.pause();
       }
+      balanceEvidencePlayback();
     });
-  }, {root: null, rootMargin: '100px 0px', threshold: [0, 0.2, 0.6]});
+  }, {root: null, rootMargin: '0px', threshold: [0, 0.35, 0.7]});
   loaders.forEach((loader) => evidenceVideoObserver.observe(loader));
 }
 
