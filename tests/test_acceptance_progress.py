@@ -237,5 +237,135 @@ class AcceptanceProgressTest(unittest.TestCase):
         )
 
 
+    def test_hull_query_requires_image_match_when_registry_exists_without_direct_hit(self) -> None:
+        intent = {
+            "targetScope": "track_memory",
+            "targetKind": "hull",
+            "operation": "existence",
+            "registryRelation": "any",
+            "hullNumber": "小白07",
+        }
+        scope = {
+            "directHullTracks": {
+                "ok": True,
+                "queryHullNumber": "小白07",
+                "trackIds": [],
+                "tracks": [],
+                "totalTrackCount": 0,
+                "hasMore": False,
+            },
+            "targetHullRegistry": {
+                "ok": True,
+                "found": True,
+                "searchable": True,
+                "hullNumber": "小白07",
+                "registryItems": [{"registryId": "r7", "hullNumber": "小白07"}],
+                "registryReferences": [{"referenceId": "ref7", "registryId": "r7"}],
+            },
+        }
+
+        progress = build_acceptance_progress(intent, scope)
+        self.assertFalse(progress["acceptanceSatisfied"])
+        self.assertEqual(progress["pendingRequirements"], ["hull_track_scope"])
+
+        scope["tracksPage0"] = {
+            "ok": True,
+            "queryHullNumber": None,
+            "queryFinalMatchType": None,
+            "trackIds": ["1", "2"],
+            "tracks": [{"trackId": "1"}, {"trackId": "2"}],
+            "totalTrackCount": 2,
+            "hasMore": False,
+        }
+        progress = build_acceptance_progress(intent, scope)
+        self.assertEqual(progress["pendingRequirements"], ["hull_keyframe_evidence"])
+
+        scope["hullSearchFrames"] = {
+            "ok": True,
+            "keyframes": [{"keyframeId": "k1", "trackId": "1"}, {"keyframeId": "k2", "trackId": "2"}],
+            "keyframesByTrack": {
+                "1": {"keyframes": [{"keyframeId": "k1", "trackId": "1"}]},
+                "2": {"keyframes": [{"keyframeId": "k2", "trackId": "2"}]},
+            },
+            "unsearchableTrackIds": [],
+        }
+        progress = build_acceptance_progress(intent, scope)
+        self.assertEqual(progress["pendingRequirements"], ["hull_image_classification"])
+
+        scope["hullImageMatch"] = {
+            "ok": True,
+            "matchMode": "image_to_image",
+            "matches": [{"matchedTrackId": "2", "matchedRegistryId": "r7", "scoreBand": "match"}],
+        }
+        progress = build_acceptance_progress(intent, scope)
+        self.assertTrue(progress["acceptanceSatisfied"])
+        self.assertEqual(progress["pendingRequirements"], [])
+
+    def test_hull_query_accepts_confirmed_direct_track_without_image_match(self) -> None:
+        intent = {
+            "targetScope": "track_memory",
+            "targetKind": "hull",
+            "operation": "existence",
+            "registryRelation": "any",
+            "hullNumber": "320",
+        }
+        scope = {
+            "directHullTracks": {
+                "ok": True,
+                "queryHullNumber": "320",
+                "trackIds": ["3"],
+                "tracks": [{"trackId": "3", "finalHullNumber": "320", "finalMatchType": "confirmed"}],
+                "totalTrackCount": 1,
+                "hasMore": False,
+            },
+            "targetHullRegistry": {
+                "ok": True,
+                "found": False,
+                "searchable": False,
+                "hullNumber": "320",
+                "registryItems": [],
+                "registryReferences": [],
+            },
+        }
+
+        progress = build_acceptance_progress(intent, scope)
+        self.assertTrue(progress["acceptanceSatisfied"])
+        self.assertEqual(progress["directConfirmedTrackIds"], ["3"])
+
+    def test_track_pagination_fallback_uses_unique_result_ids(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.meta = {"timeRange": None}
+        controller.retrieval_page_size = 60
+        controller.working_scope = {
+            "tracksPage0": {
+                "trackIds": [str(value) for value in range(60)],
+                "tracks": [],
+                "queryHullNumber": None,
+                "queryFinalMatchType": None,
+                "hasMore": True,
+                "nextOffset": 60,
+            }
+        }
+        acceptance = {
+            "pendingRequirements": ["complete_track_scope"],
+            "expectedTrackCount": 170,
+            "trackCount": 60,
+        }
+        first = controller._acceptance_fallback_calls(acceptance)
+        self.assertEqual(first[0]["id"], "tracksPage60")
+
+        controller.working_scope["tracksPage60"] = {
+            "trackIds": [str(value) for value in range(60, 120)],
+            "tracks": [],
+            "queryHullNumber": None,
+            "queryFinalMatchType": None,
+            "hasMore": True,
+            "nextOffset": 120,
+        }
+        acceptance["trackCount"] = 120
+        second = controller._acceptance_fallback_calls(acceptance)
+        self.assertEqual(second[0]["id"], "tracksPage120")
+
+
 if __name__ == "__main__":
     unittest.main()

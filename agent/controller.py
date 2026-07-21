@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 from config import load_config
-from memory import MemoryRepository
+from memory import MemoryRepository, normalize_hull_number
 from services import AgentLLMService, QwenMultimodalEmbedder
 from tools import ToolService
 from vector_store import VectorCatalog
@@ -985,10 +985,20 @@ class AgentController:
         if not pending:
             return []
         requirement = str(pending[0])
-        if requirement == "complete_track_scope":
+        if requirement == "hull_lookup":
+            hull_number = self.meta.get("hullNumber")
+            return [
+                {"id": "directHullTracks", "tool": "getTrack", "arguments": {"hullNumber": hull_number, "timeRange": self.meta.get("timeRange")}},
+                {"id": "targetHullRegistry", "tool": "getRegistry", "arguments": {"hullNumber": hull_number}},
+            ]
+        if requirement in {"complete_track_scope", "hull_track_scope"}:
             pages = [
                 value for value in self.working_scope.values()
-                if isinstance(value, dict) and "trackIds" in value and "hasMore" in value
+                if isinstance(value, dict)
+                and "trackIds" in value
+                and "hasMore" in value
+                and not normalize_hull_number(value.get("queryHullNumber"))
+                and not value.get("queryFinalMatchType")
             ]
             next_offsets = [
                 int(value["nextOffset"])
@@ -1000,7 +1010,7 @@ class AgentController:
             covered = int(acceptance.get("trackCount") or 0)
             remaining = max(1, int(total) - covered) if isinstance(total, int) else self.retrieval_page_size
             return [{
-                "id": "nextTracks",
+                "id": f"tracksPage{offset}",
                 "tool": "getTrack",
                 "arguments": {
                     "timeRange": self.meta.get("timeRange"),
@@ -1019,6 +1029,50 @@ class AgentController:
             return calls
         if requirement == "registry_catalog":
             return [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}]
+        if requirement == "hull_keyframe_evidence":
+            registry_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict)
+                and normalize_hull_number(value.get("hullNumber")) == normalize_hull_number(self.meta.get("hullNumber"))
+                and value.get("registryReferences")
+            ), None)
+            calls = [{
+                "id": "hullSearchFrames",
+                "tool": "getFrames",
+                "arguments": {"trackIds": {"$ref": "acceptance.hullSearchTrackIds"}},
+            }]
+            if registry_id:
+                calls.append({
+                    "id": "hullImageMatch",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": f"{registry_id}.registryReferences"},
+                        "galleryImages": {"$ref": "hullSearchFrames.keyframes"},
+                        "topK": 3,
+                    },
+                })
+            return calls
+        if requirement == "hull_image_classification":
+            frame_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict) and value.get("keyframes")
+            ), None)
+            registry_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict)
+                and normalize_hull_number(value.get("hullNumber")) == normalize_hull_number(self.meta.get("hullNumber"))
+                and value.get("registryReferences")
+            ), None)
+            if frame_id and registry_id:
+                return [{
+                    "id": "hullImageMatch",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": f"{registry_id}.registryReferences"},
+                        "galleryImages": {"$ref": f"{frame_id}.keyframes"},
+                        "topK": 3,
+                    },
+                }]
         if requirement == "keyframe_evidence":
             calls = [{
                 "id": "remainingFrames",
@@ -1072,6 +1126,10 @@ class AgentController:
         pending = list(acceptance.get("pendingRequirements") or [])
         expected_tools = {
             "complete_track_scope": {"getTrack"},
+            "hull_lookup": {"getTrack", "getRegistry"},
+            "hull_track_scope": {"getTrack"},
+            "hull_keyframe_evidence": {"getFrames"},
+            "hull_image_classification": {"matchImage"},
             "exact_hull_classification": {"matchHull"},
             "registry_catalog": {"listRegistry"},
             "keyframe_evidence": {"getFrames"},
@@ -1081,12 +1139,35 @@ class AgentController:
         current_calls = list(plan.get("calls") or [])
         current_tools = {str(call.get("tool")) for call in current_calls}
         requirement = str(pending[0]) if pending else ""
-        if expected_tools and current_tools.intersection(expected_tools):
+        plan_covers_requirement = bool(expected_tools and current_tools.intersection(expected_tools))
+        if requirement == "hull_lookup":
+            plan_covers_requirement = expected_tools.issubset(current_tools)
+        if expected_tools and plan_covers_requirement:
             repaired = dict(plan)
             if requirement == "exact_hull_classification" and not acceptance.get("registryLoaded") and "listRegistry" not in current_tools:
                 repaired["calls"] = current_calls + [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}]
                 repaired["planRepair"] = "按验收目标补充读取完整先验库"
                 return repaired
+            if requirement == "hull_keyframe_evidence" and "matchImage" not in current_tools:
+                frame_call = next((call for call in current_calls if call.get("tool") == "getFrames"), None)
+                registry_id = next((
+                    str(key) for key, value in reversed(list(self.working_scope.items()))
+                    if isinstance(value, dict)
+                    and normalize_hull_number(value.get("hullNumber")) == normalize_hull_number(self.meta.get("hullNumber"))
+                    and value.get("registryReferences")
+                ), None)
+                if frame_call and registry_id:
+                    repaired["calls"] = current_calls + [{
+                        "id": "hullImageMatch",
+                        "tool": "matchImage",
+                        "arguments": {
+                            "queryImages": {"$ref": f"{registry_id}.registryReferences"},
+                            "galleryImages": {"$ref": f"{frame_call['id']}.keyframes"},
+                            "topK": 3,
+                        },
+                    }]
+                    repaired["planRepair"] = "按舷号验收目标补充目标库图与关键帧匹配"
+                    return repaired
             if requirement == "keyframe_evidence" and "matchImage" not in current_tools:
                 frame_call = next((call for call in current_calls if call.get("tool") == "getFrames"), None)
                 registry_id = next((

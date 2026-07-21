@@ -29,7 +29,7 @@ class ToolService:
         page_size = max(0, min(200, int(limit or 0)))
         selected = tracks[start:start + page_size] if page_size else tracks[start:]
         next_offset = start + len(selected)
-        return {"ok": True, "queryScope": list(timeRange) if timeRange else None, "trackIds": [item["trackId"] for item in selected], "tracks": selected, "totalTrackCount": len(tracks), "returnedTrackCount": len(selected), "offset": start, "limit": page_size, "hasMore": next_offset < len(tracks), "nextOffset": next_offset if next_offset < len(tracks) else None}
+        return {"ok": True, "queryScope": list(timeRange) if timeRange else None, "queryHullNumber": normalize_hull_number(hullNumber), "queryFinalMatchType": finalMatchType, "trackIds": [item["trackId"] for item in selected], "tracks": selected, "totalTrackCount": len(tracks), "returnedTrackCount": len(selected), "offset": start, "limit": page_size, "hasMore": next_offset < len(tracks), "nextOffset": next_offset if next_offset < len(tracks) else None}
 
     def getFrames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
         ids = [str(value) for value in dict.fromkeys(trackIds)]

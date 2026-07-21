@@ -19,6 +19,10 @@ REQUIREMENT_LABELS = {
     "deduplicated_count": "跨轨迹去重数量",
     "target_match": "目标匹配证据",
     "registry_query": "先验库查询结果",
+    "hull_lookup": "舷号轨迹与目标库项查询",
+    "hull_track_scope": "舷号回退检索的完整轨迹范围",
+    "hull_keyframe_evidence": "舷号回退检索的正式关键帧",
+    "hull_image_classification": "目标库图与轨迹关键帧匹配",
 }
 
 
@@ -68,6 +72,48 @@ def build_acceptance_progress(
     if expected_track_count is not None:
         track_scope_complete = track_scope_complete and len(tracks) >= expected_track_count
 
+    target_hull = normalize_hull_number(intent.get("hullNumber"))
+    direct_hull_results = [
+        result for result in results
+        if target_hull and normalize_hull_number(result.get("queryHullNumber")) == target_hull
+    ]
+    direct_hull_lookup_seen = bool(direct_hull_results)
+    direct_hull_tracks = {
+        _track_id(row.get("trackId")): row
+        for result in direct_hull_results
+        for row in result.get("tracks") or []
+        if isinstance(row, dict) and row.get("trackId") is not None
+    }
+    direct_confirmed_track_ids = {
+        track_id for track_id, track in direct_hull_tracks.items()
+        if track.get("finalMatchType") == "confirmed"
+        and normalize_hull_number(track.get("finalHullNumber")) == target_hull
+    }
+
+    unfiltered_track_results = [
+        result for result in results
+        if isinstance(result.get("tracks"), list)
+        and "trackIds" in result
+        and not normalize_hull_number(result.get("queryHullNumber"))
+        and not result.get("queryFinalMatchType")
+    ]
+    hull_search_tracks: dict[str, dict[str, Any]] = {}
+    hull_track_totals: list[int] = []
+    hull_terminal_page = False
+    for result in unfiltered_track_results:
+        for row in result.get("tracks") or []:
+            if isinstance(row, dict) and row.get("trackId") is not None:
+                hull_search_tracks[_track_id(row.get("trackId"))] = row
+        total = result.get("totalTrackCount")
+        if isinstance(total, int) and total >= 0:
+            hull_track_totals.append(total)
+        if result.get("hasMore") is False:
+            hull_terminal_page = True
+    hull_expected_track_count = max(hull_track_totals) if hull_track_totals else None
+    hull_track_scope_complete = bool(unfiltered_track_results) and hull_terminal_page
+    if hull_expected_track_count is not None:
+        hull_track_scope_complete = hull_track_scope_complete and len(hull_search_tracks) >= hull_expected_track_count
+
     registry_results = [
         result
         for result in results
@@ -90,6 +136,16 @@ def build_acceptance_progress(
             str(value) for value in result.get("unsearchableRegistryIds") or []
         )
     registry_complete = registry_loaded and not unsearchable_registry_ids
+
+    target_registry_results = [
+        result for result in results
+        if target_hull
+        and normalize_hull_number(result.get("hullNumber")) == target_hull
+        and isinstance(result.get("registryItems"), list)
+    ]
+    target_registry_lookup_seen = bool(target_registry_results)
+    target_registry_found = any(bool(result.get("found") or result.get("registryItems")) for result in target_registry_results)
+    target_registry_searchable = any(bool(result.get("searchable")) for result in target_registry_results)
 
     matched_hulls: set[str] = set()
     unmatched_hulls: set[str] = set()
@@ -177,7 +233,42 @@ def build_acceptance_progress(
     next_action: str | None = None
     acceptance_satisfied = False
 
-    if relation in {"in", "out"} and target_scope != "registry":
+    if target_kind == "hull" and target_scope != "registry":
+        requirements = [
+            "hull_lookup",
+            "hull_track_scope",
+            "hull_keyframe_evidence",
+            "hull_image_classification",
+        ]
+        hull_image_result_seen = any(result.get("matchMode") == "image_to_image" for result in results)
+        if not direct_hull_lookup_seen or not target_registry_lookup_seen:
+            pending.append("hull_lookup")
+            next_action = "下一轮同时调用 getTrack 按目标舷号查轨迹，并调用 getRegistry 读取目标库项及参考图。"
+        elif direct_confirmed_track_ids:
+            acceptance_satisfied = True
+            next_action = "停止并返回已由轨迹级舷号确认的直接命中结果。"
+        elif not target_registry_found:
+            acceptance_satisfied = True
+            next_action = "目标舷号既无确认轨迹也无先验库项，停止并返回未找到可靠证据。"
+        elif not target_registry_searchable:
+            acceptance_satisfied = True
+            next_action = "目标库项缺少可检索参考图，停止并说明当前无法执行图像匹配。"
+        elif not hull_track_scope_complete:
+            pending.append("hull_track_scope")
+            next_action = "下一轮调用 getTrack 分页读取全视频轨迹，直到 hasMore=false 且轨迹覆盖完整。"
+        else:
+            hull_search_track_ids = set(hull_search_tracks)
+            missing_frames = hull_search_track_ids - frame_track_ids - unsearchable_track_ids
+            if missing_frames:
+                pending.append("hull_keyframe_evidence")
+                next_action = "下一轮读取全视频轨迹的正式关键帧，并使用目标库参考图调用 matchImage 返回前三条候选轨迹。"
+            elif not hull_image_result_seen:
+                pending.append("hull_image_classification")
+                next_action = "下一轮调用 matchImage，将目标库参考图与全视频正式关键帧匹配并返回前三条候选轨迹。"
+            else:
+                acceptance_satisfied = True
+                next_action = "停止并返回目标库参考图匹配得到的候选轨迹。"
+    elif relation in {"in", "out"} and target_scope != "registry":
         requirements = [
             "complete_track_scope",
             "exact_hull_classification",
@@ -258,10 +349,18 @@ def build_acceptance_progress(
         "pendingRequirementLabels": [REQUIREMENT_LABELS.get(value, value) for value in pending],
         "acceptanceSatisfied": acceptance_satisfied,
         "nextAction": next_action,
-        "trackScopeComplete": track_scope_complete,
-        "trackCount": len(tracks),
-        "expectedTrackCount": expected_track_count,
-        "trackIds": sorted(tracks),
+        "trackScopeComplete": hull_track_scope_complete if target_kind == "hull" and target_scope != "registry" else track_scope_complete,
+        "trackCount": len(hull_search_tracks) if target_kind == "hull" and target_scope != "registry" else len(tracks),
+        "expectedTrackCount": hull_expected_track_count if target_kind == "hull" and target_scope != "registry" else expected_track_count,
+        "trackIds": sorted(hull_search_tracks) if target_kind == "hull" and target_scope != "registry" else sorted(tracks),
+        "directHullLookupSeen": direct_hull_lookup_seen,
+        "directHullTrackIds": sorted(direct_hull_tracks),
+        "directConfirmedTrackIds": sorted(direct_confirmed_track_ids),
+        "hullRegistryLookupSeen": target_registry_lookup_seen,
+        "hullRegistryFound": target_registry_found,
+        "hullRegistrySearchable": target_registry_searchable,
+        "hullTrackScopeComplete": hull_track_scope_complete,
+        "hullSearchTrackIds": sorted(hull_search_tracks),
         "confirmedHullNumbers": sorted(confirmed_hulls),
         "checkedHullNumbers": sorted(checked_hulls),
         "exactHullComplete": exact_hull_complete,
@@ -284,6 +383,9 @@ def compact_acceptance(progress: dict[str, Any]) -> dict[str, Any]:
     """压缩长编号列表，仅保留验收决策所需信息。"""
     list_fields = {
         "trackIds",
+        "directHullTrackIds",
+        "directConfirmedTrackIds",
+        "hullSearchTrackIds",
         "confirmedHullNumbers",
         "checkedHullNumbers",
         "exactInRegistryTrackIds",
