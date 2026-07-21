@@ -60,18 +60,30 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+@router.delete("/api/agent/memory")
+async def clear_agent_memory(request: Request):
+    result = await run_in_threadpool(request.app.state.memory_manager.clear_qa_memory)
+    return {"success": True, "message": "问答记忆已清除", "data": result}
+
 @router.get("/api/agent/memory-summary")
 async def memory_summary(request: Request):
     snapshot = request.app.state.memory_manager.snapshot()
     registry = request.app.state.ship_service.list_ships()
     config = request.app.state.config
+    qa_memory = request.app.state.repository.qa_memory_summary()
+    recovery_rounds = int(config["pipeline"]["agent"].get("acceptance_recovery_rounds", 0))
     return {
         "trackCount": snapshot.get("trackCount", len(snapshot.get("tracks", []))),
         "keyframeCount": snapshot.get("keyframeCount", 0),
         "embeddedKeyframeCount": snapshot.get("embeddedKeyframeCount", 0),
         "registryCount": len(registry),
         "recognitionModel": config["llm"]["model"],
-        "maxRounds": config["pipeline"]["agent"]["max_rounds"],
+        "qaSessionCount": qa_memory["sessionCount"],
+        "qaRoundCount": qa_memory["roundCount"],
+        "qaEvidenceCount": qa_memory["evidenceCount"],
+        "maxRounds": int(config["pipeline"]["agent"]["max_rounds"]) + recovery_rounds,
+        "baseMaxRounds": config["pipeline"]["agent"]["max_rounds"],
+        "acceptanceRecoveryRounds": recovery_rounds,
     }
 
 @router.get("/api/memory/tracks/{track_id}/frames")

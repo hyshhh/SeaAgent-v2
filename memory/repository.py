@@ -159,6 +159,20 @@ class MemoryRepository:
         rows = self.registry_images.delete(lambda row: row["reference_id"] == reference_id)
         return self._reference_record(rows[0]) if rows else None
 
+    def qa_memory_summary(self) -> dict[str, int]:
+        return {
+            "sessionCount": len(self.qa_sessions.rows()),
+            "roundCount": len(self.qa_rounds.rows()),
+            "evidenceCount": len(self.qa_evidence.rows()),
+        }
+
+    def clear_qa_memory(self) -> dict[str, int]:
+        summary = self.qa_memory_summary()
+        self.qa_sessions.replace_all([])
+        self.qa_rounds.replace_all([])
+        self.qa_evidence.replace_all([])
+        return summary
+
     def add_session(self, session_id: str, query_info: dict[str, Any]) -> None:
         self.qa_sessions.upsert({"session_id": session_id, "query_info": _json(query_info), "final_result": ""}, "session_id")
 

@@ -122,6 +122,23 @@ class TrackMemoryManagerTest(unittest.TestCase):
         self.assertEqual(self.manager.settings.read()["retentionSeconds"], 6)
         self.assertFalse(any(Path(self.config["paths"]["clip_dir"]).iterdir()))
 
+    def test_clear_qa_memory_preserves_track_memory(self):
+        self.add_track("1", 10, 101)
+        self.repository.add_session("session-1", {"question": "测试"})
+        self.repository.add_round("round-1", "session-1", {"calls": []}, {"state": "sufficient"})
+        self.repository.add_evidence("evidence-1", "round-1", {"ok": True}, {"type": "keyframe"})
+        clip = Path(self.config["paths"]["clip_dir"], "qa-clip.mp4")
+        clip.write_bytes(b"clip")
+
+        result = self.manager.clear_qa_memory()
+
+        self.assertEqual(result, {"sessionCount": 1, "roundCount": 1, "evidenceCount": 1})
+        self.assertIsNotNone(self.repository.get_track("1"))
+        self.assertEqual(self.repository.qa_sessions.rows(), [])
+        self.assertEqual(self.repository.qa_rounds.rows(), [])
+        self.assertEqual(self.repository.qa_evidence.rows(), [])
+        self.assertFalse(clip.exists())
+
     def test_settings_are_visible_to_another_store(self):
         self.manager.settings.write(9)
         other = MemorySettingsStore(self.config["paths"]["memory_settings_json"])

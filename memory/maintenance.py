@@ -88,6 +88,12 @@ class TrackMemoryManager:
             self._clear_directories(("keyframe_dir", "trajectory_dir", "clip_dir"))
         return {"deletedTracks": snapshot["trackCount"], "deletedKeyframes": snapshot["keyframeCount"]}
 
+    def clear_qa_memory(self) -> dict[str, int]:
+        with self._lock:
+            result = self.repository.clear_qa_memory()
+            self._clear_directories(("clip_dir",))
+        return result
+
     def prune_expired(self, reference_time: float, protected_track_ids: Iterable[str | int] = ()) -> list[str]:
         retention = self.settings.read()["retentionSeconds"]
         if retention <= 0:

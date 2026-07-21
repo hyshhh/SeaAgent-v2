@@ -61,6 +61,7 @@ async function loadAgentMemorySummary(showNotice = false) {
   const modelName = document.getElementById('agentModelName');
   const refreshButton = document.getElementById('agentMemoryRefreshButton');
   const refreshStatus = document.getElementById('agentMemoryRefreshStatus');
+  const qaMemoryCount = document.getElementById('agentQaMemoryCount');
   if (refreshButton) {
     refreshButton.disabled = true;
     refreshButton.textContent = '刷新中…';
@@ -73,8 +74,13 @@ async function loadAgentMemorySummary(showNotice = false) {
     if (trackCount) trackCount.textContent = `${numberOfTracks} 条轨迹`;
     if (registryStatus) registryStatus.textContent = `${numberOfRegistryItems} 个库项`;
     if (modelName) modelName.textContent = summary.recognitionModel || '模型已连接';
+    if (qaMemoryCount) qaMemoryCount.textContent = `问答记忆 ${summary.qaSessionCount || 0} 条`;
     const limit = document.getElementById('agentRoundLimit');
-    if (limit) limit.textContent = `最多 ${summary.maxRounds || 3} 轮`;
+    if (limit) {
+      const baseRounds = summary.baseMaxRounds || summary.maxRounds || 3;
+      const recoveryRounds = summary.acceptanceRecoveryRounds || 0;
+      limit.textContent = recoveryRounds > 0 ? `最多 ${baseRounds} 轮 + ${recoveryRounds} 轮验收补偿` : `最多 ${baseRounds} 轮`;
+    }
     if (refreshStatus) {
       const updateTime = new Date().toLocaleTimeString('zh-CN', { hour12: false });
       refreshStatus.textContent = `已更新 ${updateTime}`;
@@ -87,6 +93,36 @@ async function loadAgentMemorySummary(showNotice = false) {
     if (refreshButton) {
       refreshButton.disabled = false;
       refreshButton.textContent = '刷新记忆状态';
+    }
+  }
+}
+
+async function clearAgentMemory() {
+  const askButton = document.getElementById('btnAskAgent');
+  const clearButton = document.getElementById('agentMemoryClearButton');
+  if (askButton?.disabled) return showToast('当前正在推理，请等待本轮完成后再清除', 'error');
+  if (!window.confirm('确定清除全部问答会话、推理轮次和问答证据吗？轨迹记忆与先验库不会删除。')) return;
+  try {
+    if (clearButton) {
+      clearButton.disabled = true;
+      clearButton.textContent = '清除中…';
+    }
+    const result = await apiFetch('/api/agent/memory', {method: 'DELETE'});
+    resetThoughtStream();
+    const answer = document.getElementById('agentAnswer');
+    if (answer) {
+      answer.className = 'agent-answer empty-state';
+      answer.textContent = '问答记忆已清除，可以开始新的查询。';
+    }
+    renderEvidence(null, null, 'No evidence available');
+    await loadAgentMemorySummary(false);
+    showToast(result.message || '问答记忆已清除');
+  } catch (error) {
+    showToast(`问答记忆清除失败：${error.message || '服务不可用'}`, 'error');
+  } finally {
+    if (clearButton) {
+      clearButton.disabled = false;
+      clearButton.textContent = '清除问答记忆';
     }
   }
 }
@@ -908,9 +944,11 @@ async function streamAgentQuery(question) {
 async function askAgent() {
   const question = document.getElementById('agentQuestion').value.trim();
   const button = document.getElementById('btnAskAgent');
+  const clearButton = document.getElementById('agentMemoryClearButton');
   if (!question) return showToast('请输入问题', 'error');
   try {
     button.disabled = true;
+    if (clearButton) clearButton.disabled = true;
     button.textContent = '推理中…';
     resetThoughtStream();
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
@@ -929,6 +967,8 @@ async function askAgent() {
   } finally {
     button.disabled = false;
     button.textContent = '执行闭环推理';
+    if (clearButton) clearButton.disabled = false;
+    await loadAgentMemorySummary(false);
   }
 }
 
@@ -945,3 +985,4 @@ document.addEventListener('DOMContentLoaded', () => {
 window.useQuestion = useQuestion;
 window.askAgent = askAgent;
 window.loadAgentMemorySummary = loadAgentMemorySummary;
+window.clearAgentMemory = clearAgentMemory;

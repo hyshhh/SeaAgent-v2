@@ -26,6 +26,7 @@ class AgentController:
         self.reflector = Reflector(self.llm)
         settings = self.config["pipeline"]["agent"]
         self.max_rounds = int(settings.get("max_rounds", 3))
+        self.acceptance_recovery_rounds = int(settings.get("acceptance_recovery_rounds", 2))
         self.display_limit = int(settings.get("display_limit", 3))
         self.plan_mode = str(settings.get("plan_mode", "guided")).strip().lower()
         if self.plan_mode not in {"guided", "autonomous"}:
@@ -106,10 +107,12 @@ class AgentController:
         if self.plan_mode not in {"guided", "autonomous"}:
             self.plan_mode = "guided"
         self.max_rounds = int(agent_settings.get("max_rounds", self.max_rounds))
+        self.acceptance_recovery_rounds = int(agent_settings.get("acceptance_recovery_rounds", self.acceptance_recovery_rounds))
         self.display_limit = int(agent_settings.get("display_limit", self.display_limit))
         self.retrieval_page_size = int(agent_settings.get("retrieval_page_size", getattr(self, "retrieval_page_size", 60)))
         self.meta["planMode"] = self.plan_mode
         self.meta["maxRounds"] = self.max_rounds
+        self.meta["acceptanceRecoveryRounds"] = self.acceptance_recovery_rounds
         self.meta["retrievalPageSize"] = self.retrieval_page_size
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
         self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（PlanAgent规划，ObserveAgent执行）'}", planMode=self.plan_mode)
@@ -964,9 +967,28 @@ class AgentController:
         final_state = "uncertain"
         final_reason = "自主规划未形成充分证据"
         last_round: dict[str, Any] | None = None
-        while len(self.rounds) < self.max_rounds:
+        total_round_limit = self.max_rounds + max(0, self.acceptance_recovery_rounds)
+        while len(self.rounds) < total_round_limit:
             history = self._autonomous_history()
-            round_result = self._round_autonomous(history)
+            forced_plan = None
+            if len(self.rounds) >= self.max_rounds:
+                acceptance = build_acceptance_progress(self.meta, self.working_scope)
+                self.working_scope["acceptance"] = acceptance
+                recovery_calls = self._acceptance_fallback_calls(acceptance)
+                if acceptance.get("acceptanceSatisfied") or not recovery_calls:
+                    break
+                forced_plan = {
+                    "goal": "完成尚未满足的验收步骤",
+                    "intent": self.meta,
+                    "calls": recovery_calls,
+                    "proposedState": "replan",
+                    "reason": acceptance.get("nextAction") or "执行验收补偿工具",
+                    "evidenceGap": "、".join(acceptance.get("pendingRequirementLabels") or []),
+                    "answerHint": "",
+                    "planMode": "autonomous",
+                    "planRepair": "常规轮次已用完，控制器按初始验收目标补充执行必要工具",
+                }
+            round_result = self._round_autonomous(history, forced_plan=forced_plan)
             last_round = round_result
             state = str(round_result.get("reflection", {}).get("state") or "uncertain")
             reason = str(round_result.get("reflection", {}).get("reason") or final_reason)
@@ -974,9 +996,9 @@ class AgentController:
             if state == "replan":
                 continue
             break
-        if final_state == "replan" and len(self.rounds) >= self.max_rounds:
+        if final_state == "replan" and len(self.rounds) >= total_round_limit:
             final_state = "uncertain"
-            final_reason = f"已达到最大推理轮次 {self.max_rounds}，仍未满足验收标准"
+            final_reason = f"已达到常规轮次 {self.max_rounds} 与验收补偿轮次 {self.acceptance_recovery_rounds}，仍未满足验收标准"
         return self._finish_autonomous(last_round, final_state, final_reason)
 
     def _acceptance_fallback_calls(self, acceptance: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1200,8 +1222,9 @@ class AgentController:
         repaired["planRepair"] = "原计划未落实初始验收缺口，已按 ReflectAgent 下一步调整"
         return repaired
 
-    def _round_autonomous(self, history: list[dict[str, Any]]) -> dict[str, Any]:
-        if len(self.rounds) >= self.max_rounds:
+    def _round_autonomous(self, history: list[dict[str, Any]], forced_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+        total_round_limit = self.max_rounds + max(0, self.acceptance_recovery_rounds)
+        if len(self.rounds) >= total_round_limit:
             raise RuntimeError("达到最大问答轮次")
         round_number = len(self.rounds) + 1
         acceptance = build_acceptance_progress(self.meta, self.working_scope)
@@ -1219,14 +1242,17 @@ class AgentController:
         )
         round_meta["acceptanceProgress"] = compact_acceptance(acceptance)
         self._emit("agent_start", "PlanAgent", "自主规划本轮工具调用", round=round_number, role="planner", planMode="autonomous")
-        plan = self.planner.decide_tools(
-            self.question,
-            round_meta,
-            history=history,
-            memory_scope=self.working_scope,
-            on_delta=lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta),
-        )
-        plan = self._align_plan_with_acceptance(plan, acceptance)
+        if forced_plan is None:
+            plan = self.planner.decide_tools(
+                self.question,
+                round_meta,
+                history=history,
+                memory_scope=self.working_scope,
+                on_delta=lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta),
+            )
+            plan = self._align_plan_with_acceptance(plan, acceptance)
+        else:
+            plan = forced_plan
         calls = plan.get("calls") or []
         public_plan = self._public_plan(plan, calls)
         public_plan["planMode"] = "autonomous"

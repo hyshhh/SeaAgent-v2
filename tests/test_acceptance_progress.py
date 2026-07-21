@@ -332,6 +332,35 @@ class AcceptanceProgressTest(unittest.TestCase):
         self.assertTrue(progress["acceptanceSatisfied"])
         self.assertEqual(progress["directConfirmedTrackIds"], ["3"])
 
+    def test_acceptance_recovery_executes_required_tool_after_regular_round_limit(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.max_rounds = 1
+        controller.acceptance_recovery_rounds = 2
+        controller.rounds = []
+        controller.working_scope = {}
+        controller.meta = dict(self.intent)
+        controller.retrieval_page_size = 60
+        forced_plans = []
+
+        def fake_round(history, forced_plan=None):
+            if forced_plan is None:
+                controller.working_scope.update(self._complete_tracks_scope())
+                record = {"reflection": {"state": "replan", "reason": "需要精确查库"}}
+            else:
+                forced_plans.append(forced_plan)
+                record = {"reflection": {"state": "sufficient", "reason": "已执行验收工具"}}
+            controller.rounds.append(record)
+            return record
+
+        controller._round_autonomous = fake_round
+        controller._finish_autonomous = lambda last_round, state, reason: {"state": state, "reason": reason}
+
+        result = controller._answer_autonomous()
+
+        self.assertEqual(result["state"], "sufficient")
+        self.assertEqual(forced_plans[0]["calls"][0]["tool"], "matchHull")
+        self.assertIn("验收", forced_plans[0]["planRepair"])
+
     def test_track_pagination_fallback_uses_unique_result_ids(self) -> None:
         controller = AgentController.__new__(AgentController)
         controller.meta = {"timeRange": None}
