@@ -134,6 +134,9 @@ prompts:
     4. 引用必须是 JSON 对象，不能写成字符串或数组字符串：{"$ref":"tracks.trackIds"}。
     5. 有 calls 时 proposedState 必须为 replan；PlanAgent 不负责决定最终停止。只有已有观察完全满足 successCriteria 且不需要工具时，calls 才能为空。
     6. 工具失败、依赖字段缺失、结果为空或 hasMore=true 时，不能把目标写成已确认；下一轮应改变分页、参数或证据来源。
+    7. 每轮先读取 intent.expectedOutcome、intent.successCriteria、intent.nextAgentFocus 和 availableResults.acceptance；上一轮 ReflectAgent 的 nextAction 是本轮首要规划方向，不能重新从无关步骤开始。
+    8. availableResults.acceptance 表示初始验收目标的实时进度。acceptanceSatisfied=false 时必须继续补 pendingRequirements；只有 acceptanceSatisfied=true 才能输出空 calls 并建议停止。
+    9. 在库/未在库查询不能在“轨迹读完”后停止：必须先 matchHull 精确查库，再对 acceptance.remainingTrackIds 读取关键帧并用完整库参考图 matchImage；listRegistry 只提供库证据，不等于完成关系判定。
 
     【可用工具】只能使用以下名称和参数：
     - getTrack(timeRange=null|[start,end], hullNumber=null|string, finalMatchType=null|string, offset=0, limit=0)：读取轨迹；返回 trackIds、tracks、hasMore、nextOffset。
@@ -150,13 +153,15 @@ prompts:
 
     【引用方法】
     - 已有结果：{"$ref":"tracks.trackIds"}、{"$ref":"frames.keyframes"}。
+    - 验收进度可直接引用：{"$ref":"acceptance.confirmedHullNumbers"}、{"$ref":"acceptance.remainingTrackIds"}、{"$ref":"acceptance.uncertainTrackIds"}。
     - 取匹配结果中的第一条轨迹：{"$ref":"matches.matches.0.matchedTrackId"}。
     - 只能引用已有结果或本轮更早工具的已声明字段；不能引用未来工具。
 
     【选择规则】
     - 描述查询：没有轨迹结果→getTrack；有轨迹但没有关键帧→getFrames；有关键帧→matchText；只有灰区才→verifyTarget。
     - 舷号查询：先 getTrack(hullNumber)；需要查库时再 getRegistry(hullNumber)；库项存在但轨迹未直接命中时，读取候选轨迹关键帧后用 matchImage。
-    - 在库/未在库/视频列表/数量统计：先按时间 getTrack；范围查询必须处理 hasMore，不能用 topK 截断完整列表。
+    - 在库/未在库：先完整 getTrack；再 matchHull(hullNumberArray={"$ref":"acceptance.confirmedHullNumbers"})；剩余轨迹调用 getFrames(trackIds={"$ref":"acceptance.remainingTrackIds"})，然后用 listRegistry.registryReferences 与关键帧执行 matchImage。
+    - 视频列表/数量统计：先按时间 getTrack；范围查询必须处理 hasMore，不能用 topK 截断完整列表。
     - getClip 只能在已有明确 trackId 后调用，不能写 null；showEvidence 只能使用真实返回的编号。
 
     【错误示例】
@@ -219,6 +224,8 @@ prompts:
     8. 状态与动作必须一致：动作以“下一轮”“继续”“重新规划”或“补充”开头时，状态只能是 replan；状态为 uncertain 时，动作必须写“停止并返回结果”，且明确说明不存在可执行的下一步工具。
     9. 工具失败、依赖失败、证据未嵌入或 hasMore=true 时不能 sufficient；空结果只有在查询范围完整、工具成功且没有未检索候选时才能作为“未找到”。
     10. 同一工具链失败后，下一轮必须改变参数、分页位置或证据来源，不得原样重复；若没有合法替代路径才返回 uncertain。
+    11. acceptanceProgress 是初始意图验收目标的代码级进度：acceptanceSatisfied=false 时禁止 sufficient；必须将 pendingRequirements 写入“缺口”，并把 acceptanceProgress.nextAction 原样落实为下一轮动作。
+    12. 在库/未在库查询中，完整轨迹列表和完整先验库只是输入证据；未执行 matchHull 与剩余轨迹 matchImage 时，绝不能判定验收完成。
   verify_description: |
     判断给定船舶图像是否符合目标描述“{description}”。
     图像可能来自轨迹关键帧、视频片段，也可能是先验库参考图。

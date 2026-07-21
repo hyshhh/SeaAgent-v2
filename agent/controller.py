@@ -8,6 +8,7 @@ from memory import MemoryRepository
 from services import AgentLLMService, QwenMultimodalEmbedder
 from tools import ToolService
 from vector_store import VectorCatalog
+from .acceptance import build_acceptance_progress, compact_acceptance
 from .observer import Observer
 from .planner import Planner
 from .reflector import Reflector
@@ -956,18 +957,173 @@ class AgentController:
             final_reason = f"已达到最大推理轮次 {self.max_rounds}，仍未满足验收标准"
         return self._finish_autonomous(last_round, final_state, final_reason)
 
+    def _acceptance_fallback_calls(self, acceptance: dict[str, Any]) -> list[dict[str, Any]]:
+        """根据 ReflectAgent 的验收缺口生成最小下一步计划。"""
+        pending = list(acceptance.get("pendingRequirements") or [])
+        if not pending:
+            return []
+        requirement = str(pending[0])
+        if requirement == "complete_track_scope":
+            pages = [
+                value for value in self.working_scope.values()
+                if isinstance(value, dict) and "trackIds" in value and "hasMore" in value
+            ]
+            next_offsets = [
+                int(value["nextOffset"])
+                for value in pages
+                if value.get("hasMore") and value.get("nextOffset") is not None
+            ]
+            offset = max(next_offsets) if next_offsets else 0
+            total = acceptance.get("expectedTrackCount")
+            covered = int(acceptance.get("trackCount") or 0)
+            remaining = max(1, int(total) - covered) if isinstance(total, int) else self.retrieval_page_size
+            return [{
+                "id": "nextTracks",
+                "tool": "getTrack",
+                "arguments": {
+                    "timeRange": self.meta.get("timeRange"),
+                    "offset": offset,
+                    "limit": min(200, remaining),
+                },
+            }]
+        if requirement == "exact_hull_classification":
+            calls = [{
+                "id": "exactHull",
+                "tool": "matchHull",
+                "arguments": {"hullNumberArray": {"$ref": "acceptance.confirmedHullNumbers"}},
+            }]
+            if not acceptance.get("registryLoaded"):
+                calls.append({"id": "registryCatalog", "tool": "listRegistry", "arguments": {}})
+            return calls
+        if requirement == "registry_catalog":
+            return [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}]
+        if requirement == "keyframe_evidence":
+            calls = [{
+                "id": "remainingFrames",
+                "tool": "getFrames",
+                "arguments": {"trackIds": {"$ref": "acceptance.remainingTrackIds"}},
+            }]
+            registry_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict) and "registryReferences" in value and "hullNumber" not in value
+            ), None)
+            if registry_id:
+                calls.append({
+                    "id": "registryImageMatch",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": "remainingFrames.keyframes"},
+                        "galleryImages": {"$ref": f"{registry_id}.registryReferences"},
+                        "topK": 3,
+                    },
+                })
+            return calls
+        if requirement == "registry_image_classification":
+            frame_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict) and value.get("keyframes")
+            ), None)
+            registry_id = next((
+                str(key) for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict) and "registryReferences" in value and "hullNumber" not in value
+            ), None)
+            if frame_id and registry_id:
+                return [{
+                    "id": "registryImageMatch",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": f"{frame_id}.keyframes"},
+                        "galleryImages": {"$ref": f"{registry_id}.registryReferences"},
+                        "topK": 3,
+                    },
+                }]
+        return []
+
+    def _align_plan_with_acceptance(
+        self,
+        plan: dict[str, Any],
+        acceptance: dict[str, Any],
+    ) -> dict[str, Any]:
+        """确保 PlanAgent 落实 ReflectAgent 根据初始验收目标给出的下一步。"""
+        if acceptance.get("acceptanceSatisfied"):
+            return plan
+        pending = list(acceptance.get("pendingRequirements") or [])
+        expected_tools = {
+            "complete_track_scope": {"getTrack"},
+            "exact_hull_classification": {"matchHull"},
+            "registry_catalog": {"listRegistry"},
+            "keyframe_evidence": {"getFrames"},
+            "registry_image_classification": {"matchImage"},
+            "gray_verification": {"verifyTarget", "getClip"},
+        }.get(str(pending[0]) if pending else "", set())
+        current_calls = list(plan.get("calls") or [])
+        current_tools = {str(call.get("tool")) for call in current_calls}
+        requirement = str(pending[0]) if pending else ""
+        if expected_tools and current_tools.intersection(expected_tools):
+            repaired = dict(plan)
+            if requirement == "exact_hull_classification" and not acceptance.get("registryLoaded") and "listRegistry" not in current_tools:
+                repaired["calls"] = current_calls + [{"id": "registryCatalog", "tool": "listRegistry", "arguments": {}}]
+                repaired["planRepair"] = "按验收目标补充读取完整先验库"
+                return repaired
+            if requirement == "keyframe_evidence" and "matchImage" not in current_tools:
+                frame_call = next((call for call in current_calls if call.get("tool") == "getFrames"), None)
+                registry_id = next((
+                    str(key) for key, value in reversed(list(self.working_scope.items()))
+                    if isinstance(value, dict) and "registryReferences" in value and "hullNumber" not in value
+                ), None)
+                if frame_call and registry_id:
+                    repaired["calls"] = current_calls + [{
+                        "id": "registryImageMatch",
+                        "tool": "matchImage",
+                        "arguments": {
+                            "queryImages": {"$ref": f"{frame_call['id']}.keyframes"},
+                            "galleryImages": {"$ref": f"{registry_id}.registryReferences"},
+                            "topK": 3,
+                        },
+                    }]
+                    repaired["planRepair"] = "按验收目标补充剩余轨迹的库图匹配"
+                    return repaired
+            return plan
+        fallback_calls = self._acceptance_fallback_calls(acceptance)
+        if not fallback_calls:
+            return plan
+        repaired = dict(plan)
+        repaired["calls"] = fallback_calls
+        repaired["proposedState"] = "replan"
+        repaired["reason"] = acceptance.get("nextAction") or plan.get("reason")
+        repaired["evidenceGap"] = "、".join(
+            str(value) for value in acceptance.get("pendingRequirementLabels") or pending
+        )
+        repaired["planRepair"] = "原计划未落实初始验收缺口，已按 ReflectAgent 下一步调整"
+        return repaired
+
     def _round_autonomous(self, history: list[dict[str, Any]]) -> dict[str, Any]:
         if len(self.rounds) >= self.max_rounds:
             raise RuntimeError("达到最大问答轮次")
         round_number = len(self.rounds) + 1
+        acceptance = build_acceptance_progress(self.meta, self.working_scope)
+        self.working_scope["acceptance"] = acceptance
+        round_meta = dict(self.meta)
+        pending_text = "、".join(
+            str(value)
+            for value in acceptance.get("pendingRequirementLabels")
+            or acceptance.get("pendingRequirements")
+            or []
+        )
+        focus = acceptance.get("nextAction") or self.meta.get("nextAgentFocus")
+        round_meta["nextAgentFocus"] = (
+            f"{focus} 当前验收剩余：{pending_text}" if focus and pending_text else focus
+        )
+        round_meta["acceptanceProgress"] = compact_acceptance(acceptance)
         self._emit("agent_start", "PlanAgent", "自主规划本轮工具调用", round=round_number, role="planner", planMode="autonomous")
         plan = self.planner.decide_tools(
             self.question,
-            self.meta,
+            round_meta,
             history=history,
             memory_scope=self.working_scope,
             on_delta=lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta),
         )
+        plan = self._align_plan_with_acceptance(plan, acceptance)
         calls = plan.get("calls") or []
         public_plan = self._public_plan(plan, calls)
         public_plan["planMode"] = "autonomous"
@@ -993,8 +1149,11 @@ class AgentController:
             on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
             on_tool_event=lambda event: self._emit("agent_tool", "ObserveAgent", "", round=round_number, role="observer", **event),
         )
-        # 累积结果供后续 $ref
+        # 累积结果供后续 $ref，并重新计算初始验收目标的完成进度
         self.working_scope.update(observed.get("scope") or {})
+        acceptance = build_acceptance_progress(self.meta, self.working_scope)
+        self.working_scope["acceptance"] = acceptance
+        observed["summary"]["acceptanceProgress"] = compact_acceptance(acceptance)
         self._emit(
             "agent_end",
             "ObserveAgent",
@@ -1020,8 +1179,9 @@ class AgentController:
             autonomous=True,
             expected_outcome=self.meta.get("expectedOutcome"),
             success_criteria=self.meta.get("successCriteria"),
-            next_agent_focus=self.meta.get("nextAgentFocus"),
+            next_agent_focus=acceptance.get("nextAction") or self.meta.get("nextAgentFocus"),
             previous_rounds=history,
+            acceptance_context=compact_acceptance(acceptance),
         )
         # 首轮无有效观察时不能确认；后续空调用可基于历史证据正常结束。
         if reflection.get("state") == "sufficient" and not history and not self._has_successful_observation(observed):
@@ -1054,6 +1214,9 @@ class AgentController:
             modelSummary=reflection.get("modelReflection"),
             fallback=reflection.get("modelFallback"),
             nextAction=reflection.get("nextAction"),
+            acceptanceGoal=acceptance.get("expectedOutcome"),
+            acceptanceSatisfied=acceptance.get("acceptanceSatisfied"),
+            pendingRequirements=acceptance.get("pendingRequirements") or [],
         )
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
@@ -1064,6 +1227,7 @@ class AgentController:
             "observed": observed["summary"],
             "reflection": reflection,
             "scope": observed.get("scope") or {},
+            "acceptance": compact_acceptance(acceptance),
             "answerHint": plan.get("answerHint") or "",
         }
         self.rounds.append(record)
@@ -1085,6 +1249,7 @@ class AgentController:
                     "reason": (item.get("reflection") or {}).get("reason"),
                     "evidenceGap": (item.get("reflection") or {}).get("evidenceGap"),
                     "nextAction": (item.get("reflection") or {}).get("nextAction"),
+                    "acceptance": item.get("acceptance") or {},
                 }
             )
         return history
@@ -1110,6 +1275,61 @@ class AgentController:
             answer_hint = str(last_round.get("answerHint") or "").strip()
             plan = last_round.get("plan") or {}
             answer_hint = answer_hint or str(plan.get("answerHint") or "").strip()
+
+        relation = str(self.meta.get("registryRelation") or "any")
+        if relation in {"in", "out"} and self.meta.get("targetScope") != "registry":
+            acceptance = build_acceptance_progress(self.meta, self.working_scope)
+            selected_ids = set(
+                (
+                    acceptance.get("inRegistryTrackIds")
+                    if relation == "in"
+                    else acceptance.get("outOfRegistryTrackIds")
+                )
+                or []
+            )
+            track_map = {str(item.get("trackId")): item for item in tracks if item.get("trackId") is not None}
+            match_map: dict[str, dict[str, Any]] = {}
+            for match in matches:
+                track_id = str(match.get("matchedTrackId") or match.get("trackId") or "")
+                if not track_id:
+                    continue
+                current = match_map.get(track_id)
+                if current is None or float(match.get("embeddingScore") or -1) > float(current.get("embeddingScore") or -1):
+                    match_map[track_id] = match
+            selected_tracks = []
+            for track_id in selected_ids:
+                track = track_map.get(track_id) or {"trackId": track_id}
+                match = match_map.get(track_id)
+                selected_tracks.append(self._with_match(track, match) if match else track)
+            unresolved_ids = acceptance.get("unresolvedTrackIds") or []
+            completed = bool(acceptance.get("acceptanceSatisfied"))
+            result_state = "conflict" if state == "conflict" else "sufficient" if completed else "uncertain"
+            relation_name = "在库" if relation == "in" else "未在库"
+            conclusion = f"{relation_name}船舶 {len(selected_tracks)} 条" if selected_tracks else f"未发现已确认的{relation_name}船舶"
+            if unresolved_ids:
+                conclusion = f"部分确认：{conclusion}"
+            relation_reason = (
+                f"验收目标：{self.meta.get('successCriteria') or '完成在库/未在库判定并得到轨迹列表'}；"
+                f"范围轨迹 {acceptance.get('trackCount', 0)} 条，"
+                f"已确认在库 {len(acceptance.get('inRegistryTrackIds') or [])} 条，"
+                f"已确认未在库 {len(acceptance.get('outOfRegistryTrackIds') or [])} 条，"
+                f"未完成分类 {len(unresolved_ids)} 条。"
+            )
+            return self._finish(
+                conclusion,
+                selected_tracks,
+                answer_hint or relation_reason,
+                result_state,
+                extra={
+                    "planMode": "autonomous",
+                    "acceptanceProgress": compact_acceptance(acceptance),
+                    "inRegistryTrackIds": acceptance.get("inRegistryTrackIds") or [],
+                    "outOfRegistryTrackIds": acceptance.get("outOfRegistryTrackIds") or [],
+                    "unresolvedTrackIds": unresolved_ids,
+                    "registryItems": registry_items,
+                },
+                display={"tracks": selected_tracks, "includeClips": True, "includeRegistry": True},
+            )
 
         if matches:
             supported_matches = [item for item in matches if item.get("scoreBand") != "mismatch"]

@@ -405,6 +405,7 @@ function compactAgentText(event) {
   }
   if (event.role === 'reflector') {
     return [
+      event.acceptanceGoal ? `验收：${compactAgentValue(event.acceptanceGoal, 110)}` : '',
       `判断：${stateLabel(event.state)}`,
       event.evidenceGap ? `缺口：${compactAgentValue(event.evidenceGap, 100)}` : '',
       event.nextAction ? `下一步：${compactAgentValue(event.nextAction, 110)}` : '',

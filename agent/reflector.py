@@ -38,6 +38,7 @@ class Reflector:
         success_criteria: str | None = None,
         next_agent_focus: str | None = None,
         previous_rounds: list[dict[str, Any]] | None = None,
+        acceptance_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if autonomous:
             return self._review_autonomous(
@@ -50,6 +51,7 @@ class Reflector:
                 success_criteria,
                 next_agent_focus,
                 previous_rounds,
+                acceptance_context,
             )
         return self._review_guided(default_state, reason, observation_summary, evidence_gap, on_delta)
 
@@ -90,6 +92,7 @@ class Reflector:
         success_criteria: str | None,
         next_agent_focus: str | None,
         previous_rounds: list[dict[str, Any]] | None,
+        acceptance_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """自主规划模式由 ReflectAgent 读取观察事实并实际决定下一轮状态。"""
         task = observation_summary.get("task") if isinstance(observation_summary.get("task"), dict) else {}
@@ -102,6 +105,7 @@ class Reflector:
             "nextAgentFocus": next_agent_focus,
             "observation": observation_summary,
             "previousRounds": previous_rounds or [],
+            "acceptanceProgress": acceptance_context or {},
             "evidenceGap": evidence_gap,
         }
         reflection = {"state": "uncertain", "reason": planner_reason, "evidenceGap": evidence_gap}
@@ -113,16 +117,61 @@ class Reflector:
             else:
                 raw = self.llm.complete_text(request)
             parsed = self._parse_autonomous_review(raw)
+            parsed = self._enforce_acceptance(parsed, acceptance_context)
             reflection.update(parsed)
             summary = raw.strip()
             if parsed.get("stateCorrection"):
                 summary = f"{summary}\n\n[状态一致性修正] {parsed['stateCorrection']}"
+            if parsed.get("acceptanceOverride"):
+                summary = (
+                    f"{summary}\n\n[验收目标约束] {parsed.get('reason')} "
+                    f"下一步：{parsed.get('nextAction')}"
+                )
             reflection["modelReflection"] = {"summary": summary}
         except Exception as error:
             reflection["reason"] = "ReflectAgent 未返回有效审计结果"
             reflection["evidenceGap"] = evidence_gap or "缺少可用的反思结论"
             reflection["modelFallback"] = str(error)
+            reflection = self._enforce_acceptance(reflection, acceptance_context)
         return reflection
+
+    @staticmethod
+    def _enforce_acceptance(
+        reflection: dict[str, Any],
+        acceptance_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """以初始意图的验收清单约束退出状态，并生成下一轮证据方向。"""
+        if not acceptance_context:
+            return reflection
+        result = dict(reflection)
+        satisfied = bool(acceptance_context.get("acceptanceSatisfied"))
+        pending = [str(value) for value in acceptance_context.get("pendingRequirements") or []]
+        pending_labels = [str(value) for value in acceptance_context.get("pendingRequirementLabels") or pending]
+        next_action = str(acceptance_context.get("nextAction") or "").strip()
+        expected = str(acceptance_context.get("expectedOutcome") or "").strip()
+        if satisfied:
+            if result.get("state") != "conflict":
+                result["state"] = "sufficient"
+                result["reason"] = f"已满足初始验收目标：{expected or '当前任务验收条件'}"
+                result["evidenceGap"] = None
+                result["nextAction"] = "停止并返回满足验收目标的结果"
+            return result
+        if not pending:
+            return result
+        gap = "、".join(pending_labels)
+        result["evidenceGap"] = gap
+        result["reason"] = (
+            f"尚未满足初始验收目标“{expected or '当前任务'}”；"
+            f"仍缺少：{gap}。"
+        )
+        if next_action.startswith(("下一轮", "继续", "重新规划", "补充")):
+            result["state"] = "replan"
+            result["nextAction"] = next_action
+        else:
+            result["state"] = "uncertain"
+            result["nextAction"] = "停止并返回当前证据不足的结果"
+        result["acceptanceOverride"] = True
+        return result
 
     @classmethod
     def _parse_autonomous_review(cls, text: str) -> dict[str, Any]:

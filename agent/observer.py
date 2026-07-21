@@ -236,7 +236,10 @@ class Observer:
         if "matches" in result and isinstance(matches, list):
             summary["matchCount"] = len(matches)
             summary["matches"] = [{key: cls._short(item.get(key)) for key in ("matchedTrackId", "matchedRegistryId", "embeddingScore", "scoreBand", "matchedKeyframeIds", "matchedRegistryReferenceIds") if item.get(key) not in (None, "", [])} for item in matches[:5]]
-        for key in ("queryScope", "searchable", "found", "decision", "matchMode", "trackIds", "keyframeIds", "unsearchableTrackIds", "discardedKeyframeIds", "missingKeyframeIds", "totalTrackCount", "returnedTrackCount", "offset", "limit", "hasMore", "nextOffset"):
+        exact_matches = result.get("exactMatches")
+        if isinstance(exact_matches, dict):
+            summary["exactMatchHullCount"] = len(exact_matches)
+        for key in ("queryScope", "searchable", "found", "decision", "matchMode", "trackIds", "keyframeIds", "matchedHullNumbers", "unmatchedHullNumbers", "unsearchableRegistryIds", "unsearchableTrackIds", "discardedKeyframeIds", "missingKeyframeIds", "missingRegistryReferenceIds", "totalTrackCount", "returnedTrackCount", "offset", "limit", "hasMore", "nextOffset"):
             value = result.get(key)
             if value not in (None, "", []):
                 summary[key] = cls._short(value)
