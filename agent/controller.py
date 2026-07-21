@@ -39,6 +39,7 @@ class AgentController:
         self.display_record: dict[str, Any] | None = None
         self.display_groups: list[dict[str, Any]] = []
         self.working_scope: dict[str, Any] = {}
+        self.plan_blueprint: list[dict[str, Any]] = []
         self.event_handler = event_handler
 
     def _emit(self, event_type: str, title: str, message: str, **payload: Any) -> None:
@@ -49,12 +50,32 @@ class AgentController:
         except Exception:
             pass
 
+    def _plan_step_id_for_tool(self, tool: Any) -> str | None:
+        tool_name = str(tool or "")
+        for step in self.plan_blueprint:
+            if tool_name in step.get("tools", []):
+                return str(step.get("stepId") or "") or None
+        return None
+
+    def _emit_observer_tool_event(self, round_number: int, event: dict[str, Any]) -> None:
+        self._emit(
+            "agent_tool",
+            "ObserveAgent",
+            "",
+            round=round_number,
+            role="observer",
+            planStepId=self._plan_step_id_for_tool(event.get("tool")),
+            **event,
+        )
+
     def answer(self, question: str) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = question.strip()
         self._emit("status", "IntentAgent", "正在按规则表解析用户意图")
         self.meta = self.planner.classify(self.question)
         self.meta = self._guard_meta(self.meta)
+        self.plan_blueprint = self.planner.build_execution_blueprint(self.meta)
+        self.meta["planBlueprint"] = self.plan_blueprint
         scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
         self._emit(
             "classification",
@@ -75,6 +96,7 @@ class AgentController:
             successCriteria=self.meta.get("successCriteria"),
             nextAgentFocus=self.meta.get("nextAgentFocus"),
             queryScope=scope,
+            planBlueprint=self.plan_blueprint,
         )
         self.rounds, self.tool_chain = [], []
         self.display_record, self.display_groups = None, []
@@ -1140,6 +1162,7 @@ class AgentController:
             planMode="autonomous",
             planOnly=True,
             executionOwner="ObserveAgent",
+            planBlueprint=self.plan_blueprint,
         )
 
         self._emit("agent_start", "ObserveAgent", "执行 PlanAgent 的工具计划", round=round_number, role="observer", executionOwner="ObserveAgent")
@@ -1147,7 +1170,7 @@ class AgentController:
             plan,
             context=self.working_scope,
             on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
-            on_tool_event=lambda event: self._emit("agent_tool", "ObserveAgent", "", round=round_number, role="observer", **event),
+            on_tool_event=lambda event: self._emit_observer_tool_event(round_number, event),
         )
         # 累积结果供后续 $ref，并重新计算初始验收目标的完成进度
         self.working_scope.update(observed.get("scope") or {})
@@ -1514,13 +1537,13 @@ class AgentController:
             guided_goal = f"{goal}｜验收：{self.meta.get('expectedOutcome')}"
         plan = self.planner.build(guided_goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
         public_plan = self._public_plan(plan, calls)
-        self._emit("agent_end", "PlanAgent", "规划完成，等待 ObserveAgent 执行", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"), planOnly=True, executionOwner="ObserveAgent")
+        self._emit("agent_end", "PlanAgent", "规划完成，等待 ObserveAgent 执行", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"), planOnly=True, executionOwner="ObserveAgent", planBlueprint=self.plan_blueprint)
 
         self._emit("agent_start", "ObserveAgent", "执行 PlanAgent 的工具计划", round=round_number, role="observer", executionOwner="ObserveAgent")
         observed = self.observer.execute(
             plan,
             on_delta=lambda delta: self._emit("agent_delta", "ObserveAgent", "", round=round_number, role="observer", delta=delta),
-            on_tool_event=lambda event: self._emit("agent_tool", "ObserveAgent", "", round=round_number, role="observer", **event),
+            on_tool_event=lambda event: self._emit_observer_tool_event(round_number, event),
         )
         self._emit("agent_end", "ObserveAgent", "工具执行完成", round=round_number, role="observer", calls=observed["summary"].get("calls", []), modelSummary=observed["summary"].get("modelObservation"), fallback=observed["summary"].get("modelFallback"), executionOwner="ObserveAgent")
 
@@ -1667,7 +1690,7 @@ class AgentController:
 
     def _public_plan(self, plan: dict[str, Any], calls: list[dict[str, Any]]) -> dict[str, Any]:
         public = {key: value for key, value in plan.items() if key != "calls"}
-        public["calls"] = [{"id": call["id"], "tool": call["tool"], "arguments": self._compact_arguments(call.get("arguments", {})), "condition": call.get("condition")} for call in calls]
+        public["calls"] = [{"id": call["id"], "tool": call["tool"], "arguments": self._compact_arguments(call.get("arguments", {})), "condition": call.get("condition"), "planStepId": self._plan_step_id_for_tool(call.get("tool"))} for call in calls]
         return public
 
     @staticmethod

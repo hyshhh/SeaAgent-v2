@@ -37,6 +37,63 @@ class Planner:
         self.llm = llm
         self.allowed_tools = allowed_tools
 
+    @staticmethod
+    def build_execution_blueprint(intent: dict[str, Any]) -> list[dict[str, Any]]:
+        """根据结构化意图一次生成稳定的完整执行计划。"""
+        steps: list[dict[str, Any]] = []
+
+        def add(step_id: str, title: str, tools: list[str], optional: bool = False) -> None:
+            if any(step["stepId"] == step_id for step in steps):
+                return
+            steps.append({
+                "stepId": step_id,
+                "title": title,
+                "tools": tools,
+                "optional": optional,
+                "status": "pending",
+            })
+
+        target_scope = str(intent.get("targetScope") or "track_memory")
+        target_kind = str(intent.get("targetKind") or "all")
+        operation = str(intent.get("operation") or "list")
+        relation = str(intent.get("registryRelation") or "any")
+        hull_number = str(intent.get("hullNumber") or "").strip()
+
+        if target_scope == "registry":
+            if hull_number:
+                add("plan-registry-query", "按舷号读取先验库项", ["getRegistry"])
+            else:
+                add("plan-registry-list", "读取完整先验库", ["listRegistry"])
+            return steps
+
+        add("plan-track-scope", "读取完整目标轨迹", ["getTrack"])
+
+        if operation == "count":
+            add("plan-keyframes", "读取计数轨迹的正式关键帧", ["getFrames"])
+            add("plan-deduplicate", "执行跨轨迹去重并统计数量", ["dedupTracks"])
+            return steps
+
+        if relation in {"in", "out"}:
+            add("plan-hull-exact", "使用稳定舷号精确匹配先验库", ["matchHull"])
+            add("plan-registry-catalog", "读取先验库及参考图", ["listRegistry"], optional=True)
+            add("plan-keyframes", "读取未精确命中轨迹的正式关键帧", ["getFrames"], optional=True)
+            add("plan-registry-match", "将轨迹关键帧与库参考图匹配", ["matchImage"], optional=True)
+            add("plan-gray-verify", "必要时核验灰区视觉证据", ["verifyTarget", "getClip"], optional=True)
+            return steps
+
+        if target_kind == "description":
+            add("plan-keyframes", "读取候选轨迹的正式关键帧", ["getFrames"])
+            add("plan-description-match", "将目标描述与关键帧进行特征匹配", ["matchText"])
+            add("plan-gray-verify", "必要时核验灰区视觉证据", ["verifyTarget", "getClip"], optional=True)
+            return steps
+
+        if target_kind == "hull" or hull_number:
+            add("plan-registry-query", "按舷号读取先验库项和参考图", ["getRegistry"], optional=True)
+            add("plan-keyframes", "读取候选轨迹的正式关键帧", ["getFrames"], optional=True)
+            add("plan-registry-match", "将库参考图与轨迹关键帧匹配", ["matchImage"], optional=True)
+
+        return steps
+
     def classify(self, question: str) -> dict[str, Any]:
         """优先让模型按提示词规则表判断；失败时才使用轻量兜底。"""
         text = question.strip()
@@ -416,6 +473,8 @@ class Planner:
             "previousRounds": history,
             "availableResultKeys": sorted(memory_scope.keys()),
             "availableResults": self._describe_available_results(memory_scope),
+            "planBlueprint": intent.get("planBlueprint") or self.build_execution_blueprint(intent),
+
             "allowedTools": sorted(self.allowed_tools),
         }
         model_plan, raw, request_error = self._request_autonomous_plan(payload, on_delta)

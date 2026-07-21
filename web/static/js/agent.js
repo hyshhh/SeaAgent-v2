@@ -444,6 +444,7 @@ function setThinkingState(text, state = '') {
 }
 
 let agentPlanItems = [];
+let agentPlanLocked = false;
 let activeAgentRound = 0;
 
 const toolActionLabels = {
@@ -464,6 +465,33 @@ function planStatusLabel(status) {
   return ({pending: '等待', running: '执行中', completed: '完成', failed: '失败', skipped: '跳过'})[status] || '等待';
 }
 
+function initializePlanBlueprint(blueprint) {
+  if (agentPlanLocked || !Array.isArray(blueprint) || !blueprint.length) return;
+  agentPlanItems = blueprint.map((step, index) => {
+    const tools = Array.isArray(step.tools) ? step.tools.map(String) : [];
+    return {
+      key: String(step.stepId || `plan-step-${index + 1}`),
+      stepId: String(step.stepId || `plan-step-${index + 1}`),
+      id: '',
+      title: String(step.title || toolActionLabels[tools[0]] || '执行计划步骤'),
+      tools,
+      tool: tools[0] || '',
+      round: 0,
+      status: 'pending',
+      optional: Boolean(step.optional),
+      detail: step.optional ? '条件步骤，证据进入灰区时执行' : '等待执行',
+    };
+  });
+  agentPlanLocked = true;
+  const round = document.getElementById('agentPlanRound');
+  const decision = document.getElementById('agentPlanDecision');
+  if (round) round.textContent = `完整计划 · ${agentPlanItems.length} 步`;
+  if (decision) {
+    decision.className = 'agent-plan-decision active';
+    decision.textContent = '完整计划已生成，后续各轮只更新原步骤状态。';
+  }
+  renderPlanProgress();
+}
 function renderPlanProgress() {
   const container = document.getElementById('agentPlanProgress');
   const meter = document.getElementById('agentPlanMeter');
@@ -478,13 +506,13 @@ function renderPlanProgress() {
   const visibleItems = agentPlanItems;
   container.innerHTML = visibleItems.map((item, index) => {
     const symbol = item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : item.status === 'skipped' ? '—' : '';
-    const action = toolActionLabels[item.tool] || '执行工具步骤';
+    const action = item.title || toolActionLabels[item.tool] || '执行工具步骤';
     const detail = item.detail ? `<small>${escapeHtml(compactAgentValue(item.detail, 90))}</small>` : `<small>第 ${item.round} 轮计划</small>`;
     return `
       <div class="agent-plan-step ${escapeHtml(item.status)}" data-plan-key="${escapeHtml(item.key)}">
         <span class="agent-plan-icon">${escapeHtml(symbol)}</span>
         <div class="agent-plan-copy"><strong>${escapeHtml(action)}</strong>${detail}</div>
-        <div class="agent-plan-tool"><code>${escapeHtml(item.tool)}</code><em>${escapeHtml(planStatusLabel(item.status))}</em></div>
+        <div class="agent-plan-tool"><code>${escapeHtml((item.tools || [item.tool]).filter(Boolean).join(" / "))}</code><em>${escapeHtml(planStatusLabel(item.status))}</em></div>
       </div>`;
   }).join('');
   const running = container.querySelector('.agent-plan-step.running');
@@ -493,6 +521,7 @@ function renderPlanProgress() {
 
 function resetPlanProgress() {
   agentPlanItems = [];
+  agentPlanLocked = false;
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
   if (round) round.textContent = '等待计划';
@@ -504,24 +533,41 @@ function resetPlanProgress() {
 }
 
 function syncPlanProgress(event) {
+  initializePlanBlueprint(event.planBlueprint);
   const roundNumber = Number(event.round || 1);
   const calls = Array.isArray(event.calls) ? event.calls : [];
-  const previous = agentPlanItems.filter((item) => item.round !== roundNumber);
-  const current = calls.map((call, index) => ({
-    key: `${roundNumber}:${call.id || call.tool || index}`,
-    id: String(call.id || ''),
-    tool: String(call.tool || call.id || '工具'),
-    round: roundNumber,
-    status: 'pending',
-    detail: call.summary || '',
-  }));
-  agentPlanItems = [...previous, ...current];
+  calls.forEach((call, index) => {
+    const stepId = String(call.planStepId || '');
+    const tool = String(call.tool || call.id || '工具');
+    let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
+    if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
+    if (!item && !agentPlanLocked) {
+      item = {
+        key: stepId || `fallback-step-${index + 1}`,
+        stepId: stepId || `fallback-step-${index + 1}`,
+        id: '',
+        title: toolActionLabels[tool] || '执行工具步骤',
+        tools: [tool],
+        tool,
+        round: 0,
+        status: 'pending',
+        optional: false,
+        detail: '等待执行',
+      };
+      agentPlanItems.push(item);
+    }
+    if (!item) return;
+    item.id = String(call.id || item.id || '');
+    item.round = roundNumber;
+    item.status = 'pending';
+    item.detail = `第 ${roundNumber} 轮等待执行`;
+  });
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
-  if (round) round.textContent = `第 ${roundNumber} 轮`;
+  if (round) round.textContent = `完整计划 · 第 ${roundNumber} 轮`;
   if (decision) {
     decision.className = 'agent-plan-decision active';
-    decision.textContent = calls.length ? `本轮共 ${calls.length} 个步骤，等待 ObserveAgent 执行。` : '本轮未生成可执行步骤，等待重新规划。';
+    decision.textContent = calls.length ? `ObserveAgent 正在执行第 ${roundNumber} 轮计划。` : '本轮没有可执行步骤，等待 ReflectAgent 判断。';
   }
   renderPlanProgress();
 }
@@ -529,27 +575,35 @@ function syncPlanProgress(event) {
 function updatePlanProgressFromTool(event) {
   const roundNumber = Number(event.round || activeAgentRound || 1);
   const id = String(event.id || '');
-  let item = agentPlanItems.find((entry) => entry.round === roundNumber && id && entry.id === id);
-  if (!item) item = agentPlanItems.find((entry) => entry.round === roundNumber && entry.tool === event.tool && entry.status === 'pending');
-  if (!item) {
+  const stepId = String(event.planStepId || '');
+  const tool = String(event.tool || event.id || '工具');
+  let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
+  if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
+  if (!item && !agentPlanLocked) {
     item = {
-      key: `${roundNumber}:${id || event.tool || agentPlanItems.length}`,
+      key: stepId || `fallback-step-${agentPlanItems.length + 1}`,
+      stepId: stepId || `fallback-step-${agentPlanItems.length + 1}`,
       id,
-      tool: String(event.tool || event.id || '工具'),
+      title: toolActionLabels[tool] || '执行工具步骤',
+      tools: [tool],
+      tool,
       round: roundNumber,
       status: 'pending',
+      optional: false,
       detail: '',
     };
     agentPlanItems.push(item);
   }
+  if (!item) return;
+  item.id = id || item.id;
+  item.round = roundNumber;
   if (event.phase === 'completed' && event.ok !== false) item.status = 'completed';
   else if (event.phase === 'failed' || event.ok === false) item.status = 'failed';
   else if (event.phase === 'skipped' || event.skipped) item.status = 'skipped';
   else item.status = 'running';
-  item.detail = event.error || event.summary || item.detail || '';
+  item.detail = event.error || event.summary || `第 ${roundNumber} 轮${planStatusLabel(item.status)}`;
   renderPlanProgress();
 }
-
 function updatePlanFromObservation(event) {
   (event.calls || []).forEach((call) => {
     updatePlanProgressFromTool({
@@ -566,6 +620,8 @@ function updatePlanReflection(event) {
   const state = String(event.state || 'uncertain');
   decision.className = `agent-plan-decision ${state}`;
   if (state === 'sufficient') {
+    agentPlanItems.forEach((item) => { if (!['failed', 'skipped'].includes(item.status)) item.status = item.optional && item.status === 'pending' ? 'skipped' : 'completed'; });
+    renderPlanProgress();
     decision.textContent = `第 ${event.round || activeAgentRound} 轮验收通过，正在生成最终回答。`;
   } else if (state === 'replan') {
     decision.textContent = `继续规划：${compactAgentValue(event.nextAction || event.evidenceGap || '需要补充证据', 150)}`;
@@ -709,6 +765,7 @@ function renderIntentAgentCard(event) {
       <span>置信度 ${escapeHtml(confidenceText)}</span>
     </div>`;
   if (state) state.textContent = '已识别';
+  initializePlanBlueprint(event.planBlueprint);
 }
 
 function updateObserverToolEvent(event) {

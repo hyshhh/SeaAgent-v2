@@ -426,6 +426,44 @@ class AutonomousPlannerTest(unittest.TestCase):
         self.assertEqual(result[0]["embeddingScore"], 0.91)
 
 
+    def test_execution_blueprint_is_complete_and_stable(self) -> None:
+        blueprint = Planner.build_execution_blueprint({
+            "targetScope": "track_memory",
+            "targetKind": "all",
+            "operation": "list",
+            "registryRelation": "out",
+        })
+
+        self.assertEqual(
+            [step["stepId"] for step in blueprint],
+            [
+                "plan-track-scope",
+                "plan-hull-exact",
+                "plan-registry-catalog",
+                "plan-keyframes",
+                "plan-registry-match",
+                "plan-gray-verify",
+            ],
+        )
+        self.assertEqual(len({step["stepId"] for step in blueprint}), len(blueprint))
+        self.assertTrue(blueprint[-1]["optional"])
+
+    def test_tool_event_maps_to_existing_blueprint_step(self) -> None:
+        controller = object.__new__(AgentController)
+        controller.plan_blueprint = Planner.build_execution_blueprint({
+            "targetScope": "track_memory",
+            "targetKind": "description",
+            "operation": "existence",
+            "registryRelation": "any",
+        })
+        events: list[dict[str, object]] = []
+        controller.event_handler = events.append
+
+        controller._emit_observer_tool_event(2, {"phase": "running", "id": "frames", "tool": "getFrames"})
+
+        self.assertEqual(events[0]["planStepId"], "plan-keyframes")
+        self.assertEqual(events[0]["round"], 2)
+
 class JsonExtractionTest(unittest.TestCase):
     def test_extracts_json_from_explanation_and_code_fence(self) -> None:
         value = _extract_json('说明文字\n```json\n{"goal":"读取轨迹","calls":[]}\n```')
