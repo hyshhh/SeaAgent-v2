@@ -696,3 +696,62 @@
     min-height: 400px;
   }
 }
+/* 三智能体区域宽度与字体平衡 */
+.agent-query-grid {
+  grid-template-columns: minmax(460px, .90fr) minmax(560px, 1.10fr);
+}
+.agent-thinking-panel .panel-head h2 {
+  font-size: 20px;
+}
+.agent-thinking-panel .eyebrow {
+  font-size: 11px;
+}
+.agent-thinking-panel .thought-notice {
+  font-size: 11px;
+  line-height: 1.65;
+}
+.agent-fixed-stack .agent-thought-card {
+  padding: 14px 15px;
+}
+.agent-fixed-stack .agent-stage > b {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+}
+.agent-fixed-stack .agent-thought-head strong {
+  font-size: 14px;
+}
+.agent-fixed-stack .agent-thought-head span {
+  font-size: 10px;
+}
+.agent-fixed-stack .agent-thought-head em {
+  padding: 3px 8px;
+  font-size: 9px;
+}
+.agent-fixed-stack .agent-card-round {
+  font-size: 9px !important;
+}
+.agent-fixed-stack .agent-thought-hint {
+  font-size: 11px;
+  line-height: 1.55;
+}
+.agent-fixed-stack .agent-stream-text {
+  padding: 11px 12px;
+  color: #c5dce7;
+  font-size: 12px;
+  line-height: 1.72;
+}
+.agent-fixed-stack .agent-thought-tags span {
+  padding: 4px 7px;
+  font-size: 9px;
+}
+@media (max-width: 1250px) {
+  .agent-query-grid {
+    grid-template-columns: minmax(430px, .94fr) minmax(500px, 1.06fr);
+  }
+}
+@media (max-width: 1120px) {
+  .agent-query-grid {
+    grid-template-columns: 1fr;
+  }
+}
