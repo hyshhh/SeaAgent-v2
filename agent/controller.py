@@ -1030,7 +1030,7 @@ class AgentController:
             offset = max(next_offsets) if next_offsets else 0
             total = acceptance.get("expectedTrackCount")
             covered = int(acceptance.get("trackCount") or 0)
-            remaining = max(1, int(total) - covered) if isinstance(total, int) else self.retrieval_page_size
+            remaining = max(1, int(total) - covered) if isinstance(total, int) else 200
             return [{
                 "id": f"tracksPage{offset}",
                 "tool": "getTrack",
@@ -1161,6 +1161,29 @@ class AgentController:
         current_calls = list(plan.get("calls") or [])
         current_tools = {str(call.get("tool")) for call in current_calls}
         requirement = str(pending[0]) if pending else ""
+        parameter_bound_requirements = {
+            "complete_track_scope",
+            "hull_lookup",
+            "hull_track_scope",
+            "hull_keyframe_evidence",
+            "hull_image_classification",
+            "exact_hull_classification",
+            "registry_catalog",
+            "keyframe_evidence",
+            "registry_image_classification",
+        }
+        if requirement in parameter_bound_requirements:
+            fallback_calls = self._acceptance_fallback_calls(acceptance)
+            if fallback_calls:
+                repaired = dict(plan)
+                repaired["calls"] = fallback_calls
+                repaired["proposedState"] = "replan"
+                repaired["reason"] = acceptance.get("nextAction") or plan.get("reason")
+                repaired["evidenceGap"] = "、".join(
+                    str(value) for value in acceptance.get("pendingRequirementLabels") or pending
+                )
+                repaired["planRepair"] = "已按当前验收步骤重新绑定工具参数和依赖结果"
+                return repaired
         plan_covers_requirement = bool(expected_tools and current_tools.intersection(expected_tools))
         if requirement == "hull_lookup":
             plan_covers_requirement = expected_tools.issubset(current_tools)

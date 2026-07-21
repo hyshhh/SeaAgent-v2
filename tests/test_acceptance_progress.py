@@ -332,6 +332,66 @@ class AcceptanceProgressTest(unittest.TestCase):
         self.assertTrue(progress["acceptanceSatisfied"])
         self.assertEqual(progress["directConfirmedTrackIds"], ["3"])
 
+    def test_hull_track_scope_rebinds_filtered_get_track_to_full_scope(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.meta = {"hullNumber": "无极", "timeRange": None}
+        controller.working_scope = {}
+        controller.retrieval_page_size = 60
+        acceptance = {
+            "acceptanceSatisfied": False,
+            "pendingRequirements": ["hull_track_scope"],
+            "pendingRequirementLabels": ["舷号回退检索的完整轨迹范围"],
+            "expectedTrackCount": None,
+            "trackCount": 0,
+            "nextAction": "读取完整轨迹范围",
+        }
+        plan = {
+            "calls": [{
+                "id": "wrongFilteredTracks",
+                "tool": "getTrack",
+                "arguments": {"hullNumber": "无极", "offset": 0, "limit": 60},
+            }],
+            "proposedState": "replan",
+        }
+
+        repaired = controller._align_plan_with_acceptance(plan, acceptance)
+
+        self.assertEqual(repaired["calls"][0]["id"], "tracksPage0")
+        self.assertNotIn("hullNumber", repaired["calls"][0]["arguments"])
+        self.assertEqual(repaired["calls"][0]["arguments"]["limit"], 200)
+
+    def test_hull_keyframe_step_binds_all_tracks_and_appends_match_image(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.meta = {"hullNumber": "无极", "timeRange": None}
+        controller.retrieval_page_size = 60
+        controller.working_scope = {
+            "targetHullRegistry": {
+                "hullNumber": "无极",
+                "registryReferences": [{"referenceId": "ref-1"}],
+            }
+        }
+        acceptance = {
+            "acceptanceSatisfied": False,
+            "pendingRequirements": ["hull_keyframe_evidence"],
+            "pendingRequirementLabels": ["舷号回退检索的正式关键帧"],
+            "hullSearchTrackIds": ["1", "2"],
+            "nextAction": "读取关键帧并匹配",
+        }
+        plan = {
+            "calls": [{
+                "id": "wrongFrames",
+                "tool": "getFrames",
+                "arguments": {"trackIds": ["1"]},
+            }],
+            "proposedState": "replan",
+        }
+
+        repaired = controller._align_plan_with_acceptance(plan, acceptance)
+
+        self.assertEqual([call["tool"] for call in repaired["calls"]], ["getFrames", "matchImage"])
+        self.assertEqual(repaired["calls"][0]["arguments"]["trackIds"], {"$ref": "acceptance.hullSearchTrackIds"})
+        self.assertEqual(repaired["calls"][1]["arguments"]["galleryImages"], {"$ref": "hullSearchFrames.keyframes"})
+
     def test_acceptance_recovery_executes_required_tool_after_regular_round_limit(self) -> None:
         controller = AgentController.__new__(AgentController)
         controller.max_rounds = 1
