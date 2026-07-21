@@ -136,7 +136,7 @@ prompts:
     6. 工具失败、依赖字段缺失、结果为空或 hasMore=true 时，不能把目标写成已确认；下一轮应改变分页、参数或证据来源。
     7. 每轮先读取 intent.expectedOutcome、intent.successCriteria、intent.nextAgentFocus 和 availableResults.acceptance；上一轮 ReflectAgent 的 nextAction 是本轮首要规划方向，不能重新从无关步骤开始。
     8. availableResults.acceptance 表示初始验收目标的实时进度。acceptanceSatisfied=false 时必须继续补 pendingRequirements；只有 acceptanceSatisfied=true 才能输出空 calls 并建议停止。
-  9. planBlueprint 是首轮已经确定的完整计划骨架。不得重新生成或扩展计划步骤；每轮只从该骨架中选择当前可执行工具，后续由 ObserveAgent 更新原步骤状态。
+    9. planBlueprint 是首轮已经确定的完整计划骨架。不得重新生成或扩展计划步骤；每轮只从该骨架中选择当前可执行工具，后续由 ObserveAgent 更新原步骤状态。
     9. 在库/未在库查询不能在“轨迹读完”后停止：必须先 matchHull 精确查库，再对 acceptance.remainingTrackIds 读取关键帧并用完整库参考图 matchImage；listRegistry 只提供库证据，不等于完成关系判定。
 
     【可用工具】只能使用以下名称和参数：
