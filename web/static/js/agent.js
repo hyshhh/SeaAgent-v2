@@ -137,7 +137,22 @@ function renderRegistryHits(result) {
   return `<div class="answer-tracks">${rows}</div>`;
 }
 
+function showAgentProcessView() {
+  const processView = document.getElementById('agentProcessView');
+  const finalView = document.getElementById('agentFinalView');
+  if (processView) processView.hidden = false;
+  if (finalView) finalView.hidden = true;
+}
+
+function showAgentFinalView() {
+  const processView = document.getElementById('agentProcessView');
+  const finalView = document.getElementById('agentFinalView');
+  if (processView) processView.hidden = true;
+  if (finalView) finalView.hidden = false;
+}
+
 function renderAgentAnswer(result) {
+  showAgentFinalView();
     const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
   const chain = (result.toolChain || []).map((item) => `<span class="tool-tag">${escapeHtml(item)}</span>`).join('');
   document.getElementById('agentAnswer').className = 'agent-answer';
@@ -460,9 +475,9 @@ function renderPlanProgress() {
     container.innerHTML = '<div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示待执行步骤。</div>';
     return;
   }
-  const visibleItems = agentPlanItems.slice(-12);
+  const visibleItems = agentPlanItems;
   container.innerHTML = visibleItems.map((item, index) => {
-    const symbol = item.status === 'completed' ? '✓' : item.status === 'running' ? '↻' : item.status === 'failed' ? '!' : item.status === 'skipped' ? '—' : String(index + 1);
+    const symbol = item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : item.status === 'skipped' ? '—' : '';
     const action = toolActionLabels[item.tool] || '执行工具步骤';
     const detail = item.detail ? `<small>${escapeHtml(compactAgentValue(item.detail, 90))}</small>` : `<small>第 ${item.round} 轮计划</small>`;
     return `
@@ -500,7 +515,7 @@ function syncPlanProgress(event) {
     status: 'pending',
     detail: call.summary || '',
   }));
-  agentPlanItems = [...previous, ...current].slice(-12);
+  agentPlanItems = [...previous, ...current];
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
   if (round) round.textContent = `第 ${roundNumber} 轮`;
@@ -526,7 +541,6 @@ function updatePlanProgressFromTool(event) {
       detail: '',
     };
     agentPlanItems.push(item);
-    agentPlanItems = agentPlanItems.slice(-12);
   }
   if (event.phase === 'completed' && event.ok !== false) item.status = 'completed';
   else if (event.phase === 'failed' || event.ok === false) item.status = 'failed';
@@ -603,6 +617,7 @@ function prepareAgentRound(roundNumber) {
 }
 
 function resetThoughtStream() {
+  showAgentProcessView();
   resetFixedAgentCards();
   resetPlanProgress();
   const intent = document.getElementById('agentIntentResult');
@@ -848,6 +863,7 @@ async function askAgent() {
     renderAgentAnswer(result);
     renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
+    showAgentFinalView();
     setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
     document.getElementById('agentAnswer').textContent = `执行失败：${error.message}`;

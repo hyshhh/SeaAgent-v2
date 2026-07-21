@@ -579,3 +579,120 @@
     display: none;
   }
 }
+/* 左侧单一动态结果框：推理阶段显示意图与计划，完成后仅显示答案 */
+.agent-response-panel {
+  flex: 1;
+  min-height: 430px;
+  margin: 0 18px 18px;
+  overflow: hidden;
+  border: 1px solid rgba(55, 111, 141, .72);
+  border-radius: 14px;
+  background: linear-gradient(155deg, rgba(7, 29, 44, .96), rgba(3, 18, 28, .98));
+  box-shadow: inset 0 1px 0 rgba(109, 194, 218, .04);
+}
+.agent-process-view,
+.agent-final-view {
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+}
+.agent-response-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.agent-response-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.agent-response-head span {
+  color: #e5f5fb;
+  font-size: 14px;
+  font-weight: 800;
+}
+.agent-response-head em {
+  color: #66879a;
+  font-size: 9px;
+  font-style: normal;
+}
+.agent-response-head b {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid rgba(64, 170, 195, .45);
+  border-radius: 999px;
+  background: rgba(25, 119, 145, .13);
+  color: #73d4e5;
+  font-size: 9px;
+}
+.agent-process-intent,
+.agent-process-plan {
+  padding: 0 2px;
+}
+.agent-process-intent .intent-agent-card {
+  margin: 0;
+  padding: 2px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.agent-process-divider {
+  height: 1px;
+  margin: 14px 0;
+  background: linear-gradient(90deg, transparent, rgba(55, 113, 143, .68) 8%, rgba(55, 113, 143, .68) 92%, transparent);
+}
+.agent-process-plan .agent-section-heading {
+  margin-bottom: 9px;
+}
+.agent-response-panel .agent-plan-list {
+  max-height: 325px;
+}
+.agent-response-panel .agent-plan-decision {
+  margin-bottom: 0;
+}
+.agent-response-panel .agent-answer {
+  min-height: 350px;
+  max-height: none;
+  margin: 0;
+  padding: 4px 2px;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.agent-response-panel .agent-answer.empty-state {
+  min-height: 350px;
+}
+.agent-plan-step.pending .agent-plan-icon,
+.agent-plan-step.running .agent-plan-icon {
+  border: 2px solid rgba(62, 132, 158, .38);
+  border-top-color: #45d4e7;
+  background: transparent;
+  color: transparent;
+  animation: agentPlanSpin .8s linear infinite;
+}
+.agent-plan-step.pending {
+  border-color: rgba(45, 91, 116, .72);
+}
+.agent-plan-step.pending .agent-plan-tool em {
+  color: #6d93a7;
+}
+.agent-plan-step.running .agent-plan-tool em {
+  color: #68d8e8;
+}
+@keyframes agentPlanSpin {
+  to { transform: rotate(360deg); }
+}
+@media (max-width: 680px) {
+  .agent-response-head > div {
+    display: grid;
+    gap: 2px;
+  }
+  .agent-response-panel {
+    min-height: 400px;
+  }
+}

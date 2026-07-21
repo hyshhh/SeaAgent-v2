@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=22">
+<link rel="stylesheet" href="/static/css/style.css?v=23">
 </head>
 <body>
 <header class="app-header">
@@ -154,24 +154,30 @@
           <div class="question-actions"><span>按控制键与回车键快速提交</span><button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button></div>
         </div>
 
-        <section class="agent-intent-section">
-          <div class="agent-section-heading"><div><span>意图识别结果</span><em>查询目标与验收条件</em></div><b id="agentIntentState">等待识别</b></div>
-          <div id="agentIntentResult" class="intent-agent-card pending compact">
-            <div class="intent-agent-body"><p>提交问题后，这里将显示目标、查询范围、推理路径与验收标准。</p></div>
+        <section class="agent-response-panel">
+          <div id="agentProcessView" class="agent-process-view">
+            <div class="agent-response-head"><div><span>智能体执行过程</span><em>意图识别与完整计划</em></div><b id="agentIntentState">等待识别</b></div>
+            <div class="agent-process-intent">
+              <div class="agent-section-heading"><div><span>意图识别结果</span><em>查询目标与验收条件</em></div></div>
+              <div id="agentIntentResult" class="intent-agent-card pending compact">
+                <div class="intent-agent-body"><p>提交问题后，这里将显示目标、查询范围、推理路径与验收标准。</p></div>
+              </div>
+            </div>
+            <div class="agent-process-divider"></div>
+            <div class="agent-process-plan">
+              <div class="agent-section-heading"><div><span>执行计划</span><em>未完成步骤持续旋转，完成后自动打勾</em></div><b id="agentPlanRound">等待计划</b></div>
+              <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
+              <div id="agentPlanProgress" class="agent-plan-list">
+                <div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示全部步骤。</div>
+              </div>
+              <div id="agentPlanDecision" class="agent-plan-decision">等待 ReflectAgent 验收当前计划。</div>
+            </div>
+          </div>
+          <div id="agentFinalView" class="agent-final-view" hidden>
+            <div class="agent-response-head"><div><span>最终回答</span><em>结论、候选轨迹与工具链</em></div><b>已完成</b></div>
+            <div id="agentAnswer" class="agent-answer empty-state">正在基于轨迹记忆生成回答…</div>
           </div>
         </section>
-
-        <section class="agent-plan-panel">
-          <div class="agent-section-heading"><div><span>执行计划</span><em>持续更新每个步骤的完成状态</em></div><b id="agentPlanRound">等待计划</b></div>
-          <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
-          <div id="agentPlanProgress" class="agent-plan-list">
-            <div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示待执行步骤。</div>
-          </div>
-          <div id="agentPlanDecision" class="agent-plan-decision">等待 ReflectAgent 验收当前计划。</div>
-        </section>
-
-        <div class="answer-section-title"><span>最终回答</span><em>结论、候选轨迹与工具链</em></div>
-        <div id="agentAnswer" class="agent-answer empty-state">输入问题后，智能体将基于当前轨迹记忆生成回答。</div>
       </section>
 
       <section class="panel agent-thinking-panel">
@@ -388,7 +394,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=31"></script>
+<script src="/static/js/agent.js?v=32"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>
