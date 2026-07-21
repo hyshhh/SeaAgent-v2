@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=21">
+<link rel="stylesheet" href="/static/css/style.css?v=22">
 </head>
 <body>
 <header class="app-header">
@@ -150,25 +150,60 @@
           <button onclick="useQuestion('从15:30到15:40一共出现多少艘船？')">数量统计</button>
         </div>
         <div class="question-box agent-question-box">
-          <textarea id="agentQuestion" rows="4" placeholder="例如：视频中有没有出现一个黄色的无人艇？"></textarea>
+          <textarea id="agentQuestion" rows="3" placeholder="例如：视频中有没有出现一个黄色的无人艇？"></textarea>
           <div class="question-actions"><span>按控制键与回车键快速提交</span><button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button></div>
         </div>
+
+        <section class="agent-intent-section">
+          <div class="agent-section-heading"><div><span>意图识别结果</span><em>查询目标与验收条件</em></div><b id="agentIntentState">等待识别</b></div>
+          <div id="agentIntentResult" class="intent-agent-card pending compact">
+            <div class="intent-agent-body"><p>提交问题后，这里将显示目标、查询范围、推理路径与验收标准。</p></div>
+          </div>
+        </section>
+
+        <section class="agent-plan-panel">
+          <div class="agent-section-heading"><div><span>执行计划</span><em>持续更新每个步骤的完成状态</em></div><b id="agentPlanRound">等待计划</b></div>
+          <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
+          <div id="agentPlanProgress" class="agent-plan-list">
+            <div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示待执行步骤。</div>
+          </div>
+          <div id="agentPlanDecision" class="agent-plan-decision">等待 ReflectAgent 验收当前计划。</div>
+        </section>
+
         <div class="answer-section-title"><span>最终回答</span><em>结论、候选轨迹与工具链</em></div>
         <div id="agentAnswer" class="agent-answer empty-state">输入问题后，智能体将基于当前轨迹记忆生成回答。</div>
       </section>
 
       <section class="panel agent-thinking-panel">
         <div class="panel-head">
-          <div><span class="eyebrow">实时推理轨迹</span><h2>三智能体协同过程</h2></div>
+          <div><span class="eyebrow">实时协同状态</span><h2>三智能体执行过程</h2></div>
           <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
         </div>
-        <div class="thought-notice">仅展示关键摘要：PlanAgent 负责规划，ObserveAgent 负责执行工具，ReflectAgent 负责判断是否继续。</div>
-        <div id="agentThoughtStream" class="thought-stream" aria-live="polite">
-          <div class="thought-empty"><span>⌁</span><strong>三智能体协同过程将在这里逐轮展开</strong><p>意图识别 → 规划 → 执行 → 反思 → 回答</p></div>
+        <div class="thought-notice"><span id="agentPlanMode">PlanAgent 负责规划，ObserveAgent 负责执行，ReflectAgent 负责验收。</span></div>
+        <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
+          <div class="agent-fixed-stack">
+            <article class="agent-thought-card planner" data-role="planner" data-round="0">
+              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>规划智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
+              <p class="agent-thought-hint">理解验收缺口并生成本轮工具计划</p>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待规划…</span></div>
+              <div class="agent-thought-tags"></div>
+            </article>
+            <article class="agent-thought-card observer" data-role="observer" data-round="0">
+              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>观察智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
+              <p class="agent-thought-hint">执行计划中的工具并返回结构化结果</p>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待执行…</span></div>
+              <div class="agent-thought-tags"></div>
+            </article>
+            <article class="agent-thought-card reflector" data-role="reflector" data-round="0">
+              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>反思智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
+              <p class="agent-thought-hint">对照验收目标判断继续、结束或不确定</p>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待验收…</span></div>
+              <div class="agent-thought-tags"></div>
+            </article>
+          </div>
         </div>
       </section>
     </div>
-
     <section class="panel evidence-panel evidence-panel-wide">
       <div class="panel-head"><div><span class="eyebrow">Evidence Workspace</span><h3>Multimodal Evidence</h3></div><span class="round-limit">Top 3 Tracks</span></div>
       <div id="evidenceGallery" class="evidence-columns">
@@ -353,7 +388,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=30"></script>
+<script src="/static/js/agent.js?v=31"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>
