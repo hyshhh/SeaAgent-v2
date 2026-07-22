@@ -316,6 +316,29 @@ function evidenceColumn(title, subtitle, items, emptyText) {
   return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle} · ${count}</span></div><div class="evidence-column-media">${content}</div></section>`;
 }
 
+function evidenceTrackCell(title, subtitle, item) {
+  return `<section class="evidence-track-cell"><div class="evidence-track-cell-head"><strong>${title}</strong><span>${subtitle}</span></div>${evidenceCard(item)}</section>`;
+}
+
+function evidenceTrackRow(group, index) {
+  const trackId = group.trackId ?? index + 1;
+  const clip = group.shipSegmentIds?.[0]
+    ? evidenceItem('video', group.shipSegmentIds[0], trackId)
+    : group.clipTrackId
+      ? evidenceItem('video', group.clipTrackId, trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange})
+      : group.clipError
+        ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId, label: `Track ${trackId} · Clip Evidence`}
+        : missingEvidence(trackId, 'clip');
+  const keyframe = group.keyframeIds?.[0]
+    ? evidenceItem('keyframe', group.keyframeIds[0], trackId)
+    : missingEvidence(trackId, 'keyframe');
+  const database = group.registryReferenceIds?.[0]
+    ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
+    : missingEvidence(trackId, 'registry');
+  const hull = String(group.hullNumber || '').trim();
+  return `<article class="evidence-track-row"><div class="evidence-track-row-head"><div><span>Track Evidence</span><strong>Track ${escapeHtml(trackId)}</strong></div>${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}</div><div class="evidence-track-row-media">${evidenceTrackCell('Clip', 'Target Vessel Segment', clip)}${evidenceTrackCell('Keyframe', 'Recognition Frame', keyframe)}${evidenceTrackCell('Registry', 'Database Reference', database)}</div></article>`;
+}
+
 function representativeRegistryEvidence(registryItems) {
   const seen = new Set();
   const items = [];
@@ -374,44 +397,27 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     return;
   }
 
-  let clips;
-  let keyframes;
-  let database;
-  if (groups.length) {
-    clips = groups.map((group) => {
-      if (group.shipSegmentIds?.[0]) return evidenceItem('video', group.shipSegmentIds[0], group.trackId);
-      if (group.clipTrackId) return evidenceItem('video', group.clipTrackId, group.trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange});
-      if (group.clipError) return {type: 'unavailable', reason: clipErrorText(group.clipError), trackId: group.trackId, label: `Track ${group.trackId} · Clip Evidence`};
-      return missingEvidence(group.trackId, 'clip');
-    });
-    keyframes = groups.map((group) => group.keyframeIds?.[0]
-      ? evidenceItem('keyframe', group.keyframeIds[0], group.trackId)
-      : missingEvidence(group.trackId, 'keyframe'));
-    database = groups.map((group) => group.registryReferenceIds?.[0]
-      ? evidenceItem('registry', group.registryReferenceIds[0], group.trackId, {label: `Track ${group.trackId} · Database Reference`})
-      : missingEvidence(group.trackId, 'registry'));
-  } else {
+  let rows = groups;
+  if (!rows.length) {
     const rawClips = evidence?.shipSegmentIds || [];
     const rawKeyframes = evidence?.keyframeIds || [];
     const rawDatabase = evidence?.registryReferenceIds || [];
     const rowCount = Math.max(rawClips.length, rawKeyframes.length, rawDatabase.length);
-    clips = Array.from({length: rowCount}, (_, index) => rawClips[index]
-      ? evidenceItem('video', rawClips[index]) : missingEvidence(index + 1, 'clip'));
-    keyframes = Array.from({length: rowCount}, (_, index) => rawKeyframes[index]
-      ? evidenceItem('keyframe', rawKeyframes[index]) : missingEvidence(index + 1, 'keyframe'));
-    database = Array.from({length: rowCount}, (_, index) => rawDatabase[index]
-      ? evidenceItem('registry', rawDatabase[index]) : missingEvidence(index + 1, 'registry'));
+    rows = Array.from({length: rowCount}, (_, index) => ({
+      trackId: index + 1,
+      shipSegmentIds: rawClips[index] ? [rawClips[index]] : [],
+      keyframeIds: rawKeyframes[index] ? [rawKeyframes[index]] : [],
+      registryReferenceIds: rawDatabase[index] ? [rawDatabase[index]] : [],
+    }));
   }
 
-  container.className = 'evidence-columns';
-  container.innerHTML = [
-    evidenceColumn('Clip Evidence', 'Target Vessel Clips', clips, emptyText),
-    evidenceColumn('Keyframe Evidence', 'Recognition Frames', keyframes, emptyText),
-    evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText),
-  ].join('');
-  synchronizeEvidenceColumns(container);
+  container.className = 'evidence-track-list';
+  container.innerHTML = rows.length
+    ? rows.map((group, index) => evidenceTrackRow(group, index)).join('')
+    : `<div class="evidence-track-empty">${escapeHtml(emptyText)}</div>`;
   observeEvidenceVideos(container);
 }
+
 function modelSummaryText(value) {
   if (!value) return '';
   if (typeof value === 'string') return value;
