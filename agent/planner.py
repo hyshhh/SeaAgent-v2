@@ -9,6 +9,7 @@ from typing import Any, Callable
 from services import AgentLLMService
 from services.vlm_service import _extract_json as _extract_json_response
 from .time_normalizer import has_time_expression, normalize_time_range, parse_model_time_range
+from .target_parser import extract_target_items, normalize_target_items
 
 
 class Planner:
@@ -59,6 +60,10 @@ class Planner:
         operation = str(intent.get("operation") or "list")
         relation = str(intent.get("registryRelation") or "any")
         hull_number = str(intent.get("hullNumber") or "").strip()
+        target_items = intent.get("targetItems") if isinstance(intent.get("targetItems"), list) else []
+        if len(target_items) > 1:
+            add("plan-multi-target", "按目标逐项检索，不合并多个船舶目标", ["getTrack", "getRegistry", "getFrames", "matchText", "matchImage"])
+            return steps
 
         if target_scope == "registry":
             if hull_number:
@@ -111,6 +116,7 @@ class Planner:
             "timeSource": "rule" if parsed_time_range is not None else None,
             "timeParseError": None,
             "hullNumber": self._extract_hull(text),
+            "targetItems": [],
             "description": None,
             "selectedRules": [],
             "intentConfidence": None,
@@ -138,7 +144,10 @@ class Planner:
                 base["timeSource"] = "model" if model_time_range is not None else "rule"
         if base.get("timeRange") is None and has_time_expression(text):
             base["timeParseError"] = "检测到时间条件，但无法转换为具体监控时间；请补充日期、时段或钟点。"
-        base = self._validate_spec(text, base)
+        rule_target_items = extract_target_items(text)
+        if len(rule_target_items) > 1:
+            base["targetItems"] = rule_target_items
+        base = self._validate_spec(text, base)
         base = self._fill_acceptance(text, base)
         base["strategy"] = self._strategy(base)
         base["questionType"] = self._question_type(base)
@@ -206,6 +215,7 @@ class Planner:
             reference_time,
         )
         time_expression = str(inferred.get("timeExpression") or inferred.get("time_expression") or "").strip() or None
+        target_items = normalize_target_items(inferred.get("targets") or inferred.get("targetItems"))
 
         return {
             "targetScope": scope,
@@ -216,6 +226,7 @@ class Planner:
             "hullNumber": hull,
             "modelTimeRange": model_time_range,
             "timeExpression": time_expression,
+            "targetItems": target_items,
             "selectedRules": selected,
             "intentConfidence": confidence,
             "explicitScope": True,
@@ -291,7 +302,16 @@ class Planner:
         if spec.get("operation") not in self._OPERATIONS:
             spec["operation"] = "list"
         if spec.get("registryRelation") not in self._REGISTRY_RELATIONS:
-            spec["registryRelation"] = "any"
+            spec["registryRelation"] = "any"
+
+        target_items = normalize_target_items(spec.get("targetItems"))
+        if len(target_items) > 1:
+            spec["targetItems"] = target_items
+            spec["targetKind"] = "all"
+            spec["hullNumber"] = None
+            spec["description"] = None
+            return spec
+        spec["targetItems"] = []
 
         description = str(spec.get("description") or "").strip()
         if description in self._WEAK_TARGETS:

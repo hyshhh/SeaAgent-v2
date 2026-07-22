@@ -6,6 +6,7 @@ from agent.controller import AgentController
 from agent.observer import Observer
 from agent.planner import Planner
 from agent.reflector import Reflector
+from agent.target_parser import extract_target_items
 from services.vlm_service import _extract_json
 
 
@@ -591,6 +592,60 @@ class PlannerTimeRangeTest(unittest.TestCase):
         self.assertIn("2026-07-20T10:58:23+08:00", llm.request)
         self.assertEqual(datetime.fromtimestamp(result["modelTimeRange"][0], self.timezone), datetime(2026, 7, 21, 15, 0, tzinfo=self.timezone))
         self.assertEqual(datetime.fromtimestamp(result["modelTimeRange"][1], self.timezone), datetime(2026, 7, 21, 16, 0, tzinfo=self.timezone))
+
+
+class MultiTargetControllerTest(unittest.TestCase):
+    def test_each_hull_target_gets_its_own_tool_calls(self) -> None:
+        controller = object.__new__(AgentController)
+        controller.meta = {
+            "targetItems": [
+                {"label": "003", "kind": "hull", "hullNumber": "003"},
+                {"label": "0123", "kind": "hull", "hullNumber": "0123"},
+            ],
+            "timeRange": None,
+        }
+        controller.query_top_k = 3
+        captured: list[dict] = []
+
+        def run_round(goal: str, calls: list[dict], *_: object) -> dict:
+            captured.extend(calls)
+            scope = {}
+            for call in calls:
+                if call["tool"] == "getTrack":
+                    scope[call["id"]] = {"tracks": []}
+                elif call["tool"] == "getRegistry":
+                    scope[call["id"]] = {"found": False, "searchable": False}
+            return {"scope": scope}
+
+        controller._round = run_round
+        controller._finish = lambda conclusion, tracks, reason, state, extra=None, display=None: {"conclusion": conclusion, "tracks": tracks, "reason": reason, "state": state, **(extra or {})}
+
+        result = controller._answer_multiple_targets()
+
+        get_track_hulls = [call["arguments"].get("hullNumber") for call in captured if call["tool"] == "getTrack"]
+        get_registry_hulls = [call["arguments"].get("hullNumber") for call in captured if call["tool"] == "getRegistry"]
+        self.assertEqual(get_track_hulls, ["003", "0123"])
+        self.assertEqual(get_registry_hulls, ["003", "0123"])
+        self.assertEqual([item["label"] for item in result["targetResults"]], ["003", "0123"])
+
+
+class MultiTargetParserTest(unittest.TestCase):
+    def test_comma_separated_hulls_are_independent(self) -> None:
+        items = extract_target_items("帮我查一下003、0123、A01是否出现")
+
+        self.assertEqual([item["label"] for item in items], ["003", "0123", "A01"])
+        self.assertEqual([item["kind"] for item in items], ["hull", "hull", "hull"])
+
+    def test_named_targets_are_not_merged_into_one_hull(self) -> None:
+        planner = Planner(None, set())
+        result = planner.classify("帮我查一下小黑 003,小黄 003,小白 003是否出现/存在")
+
+        self.assertEqual([item["label"] for item in result["targetItems"]], ["小黑 003", "小黄 003", "小白 003"])
+        self.assertEqual([item["kind"] for item in result["targetItems"]], ["description", "description", "description"])
+        self.assertIsNone(result["hullNumber"])
+        self.assertEqual(result["targetKind"], "all")
+        blueprint = Planner.build_execution_blueprint(result)
+        self.assertEqual(blueprint[0]["stepId"], "plan-multi-target")
 
 if __name__ == "__main__":
     unittest.main()

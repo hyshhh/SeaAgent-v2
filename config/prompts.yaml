@@ -45,6 +45,13 @@ prompts:
     【弱目标降级】
     若目标只有“船/船舶/目标/在库船/未在库船/库里的船”，不得使用 description。
 
+    【多目标拆分】
+    - 用户用逗号、顿号、分号或“和/及/以及”并列多个船舶目标时，必须将它们视为多个独立目标，绝不能把整段文字拼成一个 hullNumber 或 targetText。
+    - 此时输出 targets 数组；数组中每项只保留一个目标，并分别填写 label、targetKind、hullNumber 或 targetText。
+    - 纯字母数字舷号（如 003、0123、A01）可标为 hull；含颜色、外观、名称或其他中文描述的目标标为 description。
+    - 例如“查找 003、0123、A01 是否出现”必须输出三个 hull 目标；“查找小黑003、小黄003、小白003是否出现”必须输出三个独立 description 目标。
+    - 多目标时根级 hullNumber 与 targetText 必须为空字符串；根级 targetKind 可填 all。每个目标后续都要独立取证、独立报告，不得用一个目标的结果替代另一个目标。
+
     【规则速查】选最匹配 1 条主规则，可选 0-2 条辅规则
     R01 只列库：数据库有哪些船 → registry + all + list
     R02 库舷号：库里有没有 0857 → registry + hull + existence/list
@@ -110,6 +117,7 @@ prompts:
       "operation":"list",
       "registryRelation":"in",
       "hullNumber":"",
+      "targets":[],
       "timeExpression":"",
       "timeRange":null,
       "confidence":0.0,

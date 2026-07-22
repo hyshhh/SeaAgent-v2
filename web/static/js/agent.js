@@ -950,7 +950,10 @@ function renderIntentAgentCard(event) {
   if (!card) return;
   const timeScope = event.timeParseError ? `解析失败：${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
   const rules = Array.isArray(event.selectedRules) && event.selectedRules.length ? event.selectedRules.join(' / ') : '模型判定';
-  const targetText = event.hullNumber || event.description || targetKindLabel(event.targetKind);
+  const targetItems = Array.isArray(event.targetItems) ? event.targetItems.filter((item) => item && item.label) : [];
+  const targetText = targetItems.length > 1
+    ? targetItems.map((item) => item.label).join('、')
+    : event.hullNumber || event.description || targetKindLabel(event.targetKind);
   const confidence = Number(event.intentConfidence);
   const confidenceText = Number.isFinite(confidence) ? confidence.toFixed(2) : '—';
   const route = `${scopeLabel(event.targetScope)} · ${operationLabel(event.operation)} · ${relationLabel(event.registryRelation)}`;

@@ -91,6 +91,7 @@ class AgentController:
             registryRelation=self.meta.get("registryRelation"),
             description=self.meta.get("description"),
             hullNumber=self.meta.get("hullNumber"),
+            targetItems=self.meta.get("targetItems") or [],
             selectedRules=self.meta.get("selectedRules") or [],
             intentSource=self.meta.get("intentSource"),
             intentConfidence=self.meta.get("intentConfidence"),
@@ -130,6 +131,11 @@ class AgentController:
             return result
         self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（PlanAgent规划，ObserveAgent执行）'}", planMode=self.plan_mode)
         try:
+            if len(self.meta.get("targetItems") or []) > 1:
+                result = self._answer_multiple_targets()
+                result = self._finalize_answer(result)
+                self.repository.finish_session(self.session_id, self._session_audit_result(result))
+                return result
             if self.plan_mode == "autonomous":
                 result = self._answer_autonomous()
                 result = self._finalize_answer(result)
@@ -549,6 +555,119 @@ class AgentController:
         if result.get("answerText"):
             result["answerText"] = f"{result['answerText']}；筛选条件：{description}"
         return result
+
+    def _answer_multiple_targets(self) -> dict[str, Any]:
+        target_items = [item for item in self.meta.get("targetItems") or [] if isinstance(item, dict)]
+        hull_items = [item for item in target_items if item.get("kind") == "hull" and item.get("hullNumber")]
+        description_items = [item for item in target_items if item.get("kind") == "description" and item.get("description")]
+        calls: list[dict[str, Any]] = []
+        for index, item in enumerate(hull_items):
+            calls.extend([
+                {"id": f"multiHullTracks{index}", "tool": "getTrack", "arguments": {"hullNumber": item["hullNumber"], "timeRange": self.meta.get("timeRange")}},
+                {"id": f"multiHullRegistry{index}", "tool": "getRegistry", "arguments": {"hullNumber": item["hullNumber"]}},
+            ])
+        if description_items:
+            calls.extend([
+                {"id": "multiDescriptionTracks", "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange")}},
+                {"id": "multiDescriptionFrames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "multiDescriptionTracks.trackIds"}}},
+            ])
+            for index, item in enumerate(description_items):
+                calls.append({
+                    "id": f"multiDescriptionMatch{index}",
+                    "tool": "matchText",
+                    "arguments": {"description": item["description"], "galleryImages": {"$ref": "multiDescriptionFrames.keyframes"}, "topK": self.query_top_k},
+                })
+        first = self._round("拆分多个船舶目标并分别检索", calls, "replan", "每个逗号或顿号分隔的目标独立调用工具，不合并为单一舷号")
+        target_results: list[dict[str, Any]] = []
+        tracks_by_id: dict[str, dict[str, Any]] = {}
+        pending_hulls: list[tuple[int, dict[str, Any]]] = []
+
+        for index, item in enumerate(hull_items):
+            tracks_result = self._result(first, f"multiHullTracks{index}")
+            registry_result = self._result(first, f"multiHullRegistry{index}")
+            direct_tracks = tracks_result.get("tracks", [])
+            confirmed = [track for track in direct_tracks if track.get("finalMatchType") == "confirmed"]
+            candidates = [track for track in direct_tracks if track.get("finalMatchType") in {"candidate", "conflict"}]
+            if confirmed:
+                for track in confirmed:
+                    tracks_by_id[str(track["trackId"])] = track
+                target_results.append({"label": item["label"], "kind": "hull", "status": "found", "trackCount": len(confirmed), "registryFound": bool(registry_result.get("found"))})
+            elif registry_result.get("searchable"):
+                pending_hulls.append((index, item))
+                target_results.append({"label": item["label"], "kind": "hull", "status": "pending", "trackCount": 0, "registryFound": True})
+            elif candidates:
+                for track in candidates:
+                    tracks_by_id[str(track["trackId"])] = track
+                target_results.append({"label": item["label"], "kind": "hull", "status": "uncertain", "trackCount": len(candidates), "registryFound": bool(registry_result.get("found"))})
+            else:
+                target_results.append({"label": item["label"], "kind": "hull", "status": "not_found", "trackCount": 0, "registryFound": bool(registry_result.get("found"))})
+
+        if description_items:
+            tracks_result = self._result(first, "multiDescriptionTracks")
+            frames_result = self._result(first, "multiDescriptionFrames")
+            track_map = {str(track["trackId"]): track for track in tracks_result.get("tracks", [])}
+            unsearchable = set(str(track_id) for track_id in frames_result.get("unsearchableTrackIds", []))
+            for index, item in enumerate(description_items):
+                matches = self._result(first, f"multiDescriptionMatch{index}").get("matches", [])
+                matched = [match for match in matches if match.get("scoreBand") == "match" and str(match.get("matchedTrackId")) in track_map]
+                uncertain = [match for match in matches if match.get("scoreBand") == "uncertain" and str(match.get("matchedTrackId")) in track_map]
+                for match in matched:
+                    track = self._with_match(track_map[str(match["matchedTrackId"])], match)
+                    tracks_by_id[str(track["trackId"])] = track
+                if matched:
+                    status = "found"
+                elif uncertain or unsearchable:
+                    status = "uncertain"
+                else:
+                    status = "not_found"
+                target_results.append({"label": item["label"], "kind": "description", "status": status, "trackCount": len(matched), "uncertainCount": len(uncertain)})
+
+        if pending_hulls:
+            second_calls: list[dict[str, Any]] = [
+                {"id": "multiHullAllTracks", "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange")}},
+                {"id": "multiHullAllFrames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "multiHullAllTracks.trackIds"}}},
+            ]
+            for index, _ in pending_hulls:
+                second_calls.append({
+                    "id": f"multiHullImageMatch{index}",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": f"multiHullRegistry{index}.registryReferences"},
+                        "galleryImages": {"$ref": "multiHullAllFrames.keyframes"},
+                        "topK": self.query_top_k,
+                    },
+                })
+            second = self._round("使用各自库参考图分别匹配候选轨迹", second_calls, "replan", "每个未直接命中的舷号只与自己的先验库参考图匹配")
+            all_tracks = {str(track["trackId"]): track for track in self._result(second, "multiHullAllTracks").get("tracks", [])}
+            for index, item in pending_hulls:
+                matches = self._result(second, f"multiHullImageMatch{index}").get("matches", [])
+                matched = [match for match in matches if match.get("scoreBand") == "match" and str(match.get("matchedTrackId")) in all_tracks]
+                uncertain = [match for match in matches if match.get("scoreBand") == "uncertain" and str(match.get("matchedTrackId")) in all_tracks]
+                for match in matched:
+                    track = self._with_match(all_tracks[str(match["matchedTrackId"])], match)
+                    tracks_by_id[str(track["trackId"])] = track
+                current = next(result for result in target_results if result["label"] == item["label"] and result["status"] == "pending")
+                current["status"] = "found" if matched else "uncertain" if uncertain else "not_found"
+                current["trackCount"] = len(matched)
+                current["uncertainCount"] = len(uncertain)
+
+        labels = {"found": "找到", "not_found": "未找到", "uncertain": "无法确认", "pending": "待匹配"}
+        ordered_tracks = list(tracks_by_id.values())
+        answer_parts = []
+        for item in target_results:
+            count_text = f"（{item['trackCount']} 条轨迹）" if item.get("trackCount") else ""
+            answer_parts.append(f"{item['label']}：{labels.get(item['status'], '无法确认')}{count_text}")
+        uncertain = any(item.get("status") in {"uncertain", "pending"} for item in target_results)
+        conclusion = "多目标查询完成" if not uncertain else "多目标查询部分无法确认"
+        reason = "；".join(answer_parts)
+        return self._finish(
+            conclusion,
+            ordered_tracks,
+            reason,
+            "uncertain" if uncertain else "sufficient",
+            extra={"targetResults": target_results},
+            display={"tracks": ordered_tracks, "includeClips": True, "includeRegistry": bool(hull_items)},
+        )
 
     def _answer_hull(self) -> dict[str, Any]:
         hull = self.meta.get("hullNumber")
@@ -1910,6 +2029,7 @@ class AgentController:
                 continue
             evidence_id = f"evidence-{uuid.uuid4().hex[:12]}"
             audit_result = Observer._summarize_observation(observation)
+            audit_result["arguments"] = self._compact_arguments(observation.get("arguments", {}))
             self.repository.add_evidence(evidence_id, record_id, audit_result, {"tool": observation["tool"], "callId": observation["id"]})
             self.tool_chain.append(f"{observation['tool']}({observation['id']})")
             self.tool_records.append({"round": round_number, **audit_result})
