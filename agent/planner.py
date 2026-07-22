@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from services import AgentLLMService
 from services.vlm_service import _extract_json as _extract_json_response
+from .time_normalizer import has_time_expression, normalize_time_range, parse_model_time_range
 
 
 class Planner:
@@ -97,13 +98,18 @@ class Planner:
     def classify(self, question: str) -> dict[str, Any]:
         """优先让模型按提示词规则表判断；失败时才使用轻量兜底。"""
         text = question.strip()
+        reference_time = datetime.now().astimezone()
+        parsed_time_range = self._time_range(text, now=reference_time)
         base = {
             "questionType": "",
             "targetScope": "track_memory",
             "targetKind": "all",
             "operation": "list",
             "registryRelation": "any",
-            "timeRange": self._time_range(text),
+            "timeRange": parsed_time_range,
+            "timeExpression": None,
+            "timeSource": "rule" if parsed_time_range is not None else None,
+            "timeParseError": None,
             "hullNumber": self._extract_hull(text),
             "description": None,
             "selectedRules": [],
@@ -114,7 +120,8 @@ class Planner:
             "successCriteria": None,
             "nextAgentFocus": None,
         }
-        model_spec = self._model_intent(text)
+        model_spec = self._model_intent(text, reference_time)
+        model_time_range = model_spec.pop("modelTimeRange", None) if model_spec else None
         if model_spec:
             base.update(model_spec)
             base["intentSource"] = "model"
@@ -125,14 +132,19 @@ class Planner:
         if not base.get("hullNumber"):
             base["hullNumber"] = self._extract_hull(text)
         if base.get("timeRange") is None:
-            base["timeRange"] = self._time_range(text)
+            fallback_time_range = model_time_range or self._time_range(text, now=reference_time)
+            if fallback_time_range is not None:
+                base["timeRange"] = fallback_time_range
+                base["timeSource"] = "model" if model_time_range is not None else "rule"
+        if base.get("timeRange") is None and has_time_expression(text):
+            base["timeParseError"] = "检测到时间条件，但无法转换为具体监控时间；请补充日期、时段或钟点。"
         base = self._validate_spec(text, base)
         base = self._fill_acceptance(text, base)
         base["strategy"] = self._strategy(base)
         base["questionType"] = self._question_type(base)
         return base
 
-    def _model_intent(self, question: str) -> dict[str, Any] | None:
+    def _model_intent(self, question: str, reference_time: datetime | None = None) -> dict[str, Any] | None:
         if not self.llm:
             return None
         try:
@@ -142,7 +154,11 @@ class Planner:
         if not prompt:
             return None
         try:
-            inferred = self.llm.complete_json(prompt + "\n用户问题：" + question)
+            reference = reference_time or datetime.now().astimezone()
+            reference_text = reference.isoformat(timespec="seconds")
+            inferred = self.llm.complete_json(
+                prompt + f"\n【当前参考时间】{reference_text}\n用户问题：" + question
+            )
         except Exception:
             return None
         if not isinstance(inferred, dict):
@@ -185,6 +201,11 @@ class Planner:
         expected_outcome = str(inferred.get("expectedOutcome") or inferred.get("expected_outcome") or "").strip() or None
         success_criteria = str(inferred.get("successCriteria") or inferred.get("success_criteria") or "").strip() or None
         next_focus = str(inferred.get("nextAgentFocus") or inferred.get("next_agent_focus") or "").strip() or None
+        model_time_range = parse_model_time_range(
+            inferred.get("timeRange") or inferred.get("normalizedTimeRange"),
+            reference_time,
+        )
+        time_expression = str(inferred.get("timeExpression") or inferred.get("time_expression") or "").strip() or None
 
         return {
             "targetScope": scope,
@@ -193,6 +214,8 @@ class Planner:
             "registryRelation": relation,
             "description": target_text or None,
             "hullNumber": hull,
+            "modelTimeRange": model_time_range,
+            "timeExpression": time_expression,
             "selectedRules": selected,
             "intentConfidence": confidence,
             "explicitScope": True,
@@ -1179,7 +1202,7 @@ class Planner:
                     "evidenceGap": evidence_gap,
                 },
                 on_delta,
-            )
+            )
             plan["modelPlan"] = model_plan
         except Exception as error:
             plan["modelFallback"] = str(error)
@@ -1187,107 +1210,4 @@ class Planner:
 
     @staticmethod
     def _time_range(question: str, now: datetime | None = None) -> tuple[float, float] | None:
-        """解析监控查询中的相对日期、时段和钟点范围。"""
-        cn_digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-        normalized = re.sub(r"[\s()（）\[\]【】]", "", question)
-        current = now or datetime.now().astimezone()
-        if current.tzinfo is None:
-            current = current.astimezone()
-
-        day_offset = 0
-        for tokens, offset in (
-            (("大前天",), -3),
-            (("前天",), -2),
-            (("昨天", "昨日"), -1),
-            (("今天", "今日", "当天"), 0),
-            (("后天",), 2),
-            (("明天", "明日"), 1),
-        ):
-            if any(token in normalized for token in tokens):
-                day_offset = offset
-                break
-        base_day = current + timedelta(days=day_offset)
-
-        def resolve_hour(hour: int, period: str | None) -> int | None:
-            if not 0 <= hour <= 23:
-                return None
-            if period in {"下午", "傍晚", "晚上", "晚间", "夜间"} and 1 <= hour < 12:
-                return hour + 12
-            if period == "中午" and 1 <= hour <= 5:
-                return hour + 12
-            if period in {"凌晨", "早上", "上午"} and hour == 12:
-                return 0
-            return hour
-
-        def build_range(
-            start_hour: int,
-            start_minute: int,
-            start_second: int,
-            end_hour: int,
-            end_minute: int,
-            end_second: int,
-            start_period: str | None,
-            end_period: str | None,
-        ) -> tuple[float, float] | None:
-            inherited_end_period = end_period or start_period
-            if not end_period and start_period in {"晚上", "晚间", "夜间"} and end_hour <= 5:
-                inherited_end_period = "凌晨"
-            normalized_start_hour = resolve_hour(start_hour, start_period)
-            normalized_end_hour = resolve_hour(end_hour, inherited_end_period)
-            if normalized_start_hour is None or normalized_end_hour is None:
-                return None
-            if not 0 <= start_minute <= 59 or not 0 <= end_minute <= 59:
-                return None
-            if not 0 <= start_second <= 59 or not 0 <= end_second <= 59:
-                return None
-            start = base_day.replace(hour=normalized_start_hour, minute=start_minute, second=start_second, microsecond=0)
-            end = base_day.replace(hour=normalized_end_hour, minute=end_minute, second=end_second, microsecond=0)
-            if end < start:
-                end += timedelta(days=1)
-            return start.timestamp(), end.timestamp()
-
-        def parse_amount(token: str) -> float | None:
-            token = token.strip()
-            if not token:
-                return None
-            if re.fullmatch(r"\d+(?:\.\d+)?", token):
-                return float(token)
-            if token == "半":
-                return 0.5
-            if token == "十":
-                return 10.0
-            if token.startswith("十") and len(token) == 2 and token[1] in cn_digits:
-                return 10.0 + cn_digits[token[1]]
-            if token.endswith("十") and len(token) == 2 and token[0] in cn_digits:
-                return cn_digits[token[0]] * 10.0
-            if len(token) == 1 and token in cn_digits:
-                return float(cn_digits[token])
-            return None
-
-        relative_match = re.search(r"最近([0-9一二两三四五六七八九十半]+(?:\.\d+)?)分(?:钟)?", normalized)
-        if relative_match:
-            amount = parse_amount(relative_match.group(1))
-            if amount is not None:
-                end = current.timestamp()
-                return end - amount * 60, end
-        clock_match = re.search(
-            r"(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:到|至|-|—|~)(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2}):(\d{2})(?::(\d{2}))?",
-            normalized,
-        )
-        if clock_match:
-            return build_range(
-                int(clock_match.group(2)), int(clock_match.group(3)), int(clock_match.group(4) or 0),
-                int(clock_match.group(6)), int(clock_match.group(7)), int(clock_match.group(8) or 0),
-                clock_match.group(1), clock_match.group(5),
-            )
-        hour_match = re.search(
-            r"(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2})点(?:(\d{1,2})分)?(?:到|至|-|—|~)(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜间)?(\d{1,2})点?(?:(\d{1,2})分)?",
-            normalized,
-        )
-        if hour_match:
-            return build_range(
-                int(hour_match.group(2)), int(hour_match.group(3) or 0), 0,
-                int(hour_match.group(5)), int(hour_match.group(6) or 0), 0,
-                hour_match.group(1), hour_match.group(4),
-            )
-        return None
+        return normalize_time_range(question, now=now)

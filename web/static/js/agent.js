@@ -948,14 +948,14 @@ function renderIntentAgentCard(event) {
   const card = document.getElementById('agentIntentResult');
   const state = document.getElementById('agentIntentState');
   if (!card) return;
-  const timeScope = event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
+  const timeScope = event.timeParseError ? `解析失败：${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
   const rules = Array.isArray(event.selectedRules) && event.selectedRules.length ? event.selectedRules.join(' / ') : '模型判定';
   const targetText = event.hullNumber || event.description || targetKindLabel(event.targetKind);
   const confidence = Number(event.intentConfidence);
   const confidenceText = Number.isFinite(confidence) ? confidence.toFixed(2) : '—';
   const route = `${scopeLabel(event.targetScope)} · ${operationLabel(event.operation)} · ${relationLabel(event.registryRelation)}`;
   const acceptance = event.successCriteria || event.expectedOutcome || '按查询目标返回可核验证据';
-  card.className = 'intent-agent-card ready compact';
+  card.className = event.timeParseError ? 'intent-agent-card pending compact' : 'intent-agent-card ready compact';
   card.innerHTML = `
     <div class="intent-agent-summary compact">
       <p><strong>目标：</strong>${escapeHtml(String(targetText))}</p>
@@ -966,9 +966,9 @@ function renderIntentAgentCard(event) {
     <div class="intent-agent-chips compact">
       <span>规则 ${escapeHtml(rules)}</span>
       <span>来源 ${escapeHtml(intentSourceLabel(event.intentSource))}</span>
-      <span>置信度 ${escapeHtml(confidenceText)}</span>
+      <span>置信度 ${escapeHtml(confidenceText)}</span>${event.timeSource ? `<span>时间来源 ${event.timeSource === 'model' ? '模型归一化' : '规则归一化'}</span>` : ''}
     </div>`;
-  if (state) state.textContent = '已识别';
+  if (state) state.textContent = event.timeParseError ? '需确认' : '已识别';
   initializePlanBlueprint(event.planBlueprint);
 }
 

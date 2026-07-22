@@ -512,6 +512,85 @@ class PlannerTimeRangeTest(unittest.TestCase):
             datetime(2026, 7, 21, 1, 0, tzinfo=self.timezone),
         )
 
+    def test_day_of_month_fuzzy_half_hour(self) -> None:
+        reference = datetime(2026, 7, 22, 10, 58, 23, tzinfo=self.timezone)
+        result = Planner._time_range("查找19号下午4点半左右出现的船", now=reference)
+
+        self.assertEqual(datetime.fromtimestamp(result[0], self.timezone), datetime(2026, 7, 19, 16, 0, tzinfo=self.timezone))
+        self.assertEqual(datetime.fromtimestamp(result[1], self.timezone), datetime(2026, 7, 19, 17, 0, tzinfo=self.timezone))
+
+    def test_absolute_date_with_chinese_clock(self) -> None:
+        self.assert_range(
+            "查找2026年7月19日下午四点一刻出现的船",
+            datetime(2026, 7, 19, 16, 15, tzinfo=self.timezone),
+            datetime(2026, 7, 19, 16, 16, tzinfo=self.timezone),
+        )
+
+    def test_explicit_relative_end_can_cross_day(self) -> None:
+        self.assert_range(
+            "今天晚上11点到明天凌晨1点有哪些船？",
+            datetime(2026, 7, 20, 23, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 21, 1, 0, tzinfo=self.timezone),
+        )
+
+    def test_weekday_period_is_concrete(self) -> None:
+        self.assert_range(
+            "上周三上午有哪些船？",
+            datetime(2026, 7, 15, 8, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 15, 12, 0, tzinfo=self.timezone),
+        )
+
+    def test_month_and_recent_duration_are_concrete(self) -> None:
+        self.assert_range(
+            "上个月有哪些船？",
+            datetime(2026, 6, 1, 0, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 1, 0, 0, tzinfo=self.timezone),
+        )
+        self.assert_range(
+            "最近90分钟有哪些船？",
+            datetime(2026, 7, 20, 9, 28, 23, tzinfo=self.timezone),
+            datetime(2026, 7, 20, 10, 58, 23, tzinfo=self.timezone),
+        )
+
+    def test_absolute_date_range_covers_complete_end_day(self) -> None:
+        self.assert_range(
+            "从7月19日到7月21日有哪些船？",
+            datetime(2026, 7, 19, 0, 0, tzinfo=self.timezone),
+            datetime(2026, 7, 22, 0, 0, tzinfo=self.timezone),
+        )
+
+    def test_model_time_range_uses_reference_time_prompt(self) -> None:
+        class TimeIntentLLM:
+            def __init__(self) -> None:
+                self.request = ""
+
+            def _prompt(self, key: str) -> str:
+                return "时间归一化测试"
+
+            def complete_json(self, prompt: str) -> dict:
+                self.request = prompt
+                return {
+                    "selectedRules": ["R13"],
+                    "targetScope": "track_memory",
+                    "targetKind": "all",
+                    "targetText": "",
+                    "operation": "list",
+                    "registryRelation": "any",
+                    "hullNumber": "",
+                    "timeExpression": "下次潮汐窗口",
+                    "timeRange": {
+                        "start": "2026-07-21T15:00:00+08:00",
+                        "end": "2026-07-21T16:00:00+08:00",
+                    },
+                }
+
+        llm = TimeIntentLLM()
+        planner = Planner(llm, set())
+        result = planner._model_intent("下次潮汐窗口有哪些船", self.now)
+
+        self.assertIn("2026-07-20T10:58:23+08:00", llm.request)
+        self.assertEqual(datetime.fromtimestamp(result["modelTimeRange"][0], self.timezone), datetime(2026, 7, 21, 15, 0, tzinfo=self.timezone))
+        self.assertEqual(datetime.fromtimestamp(result["modelTimeRange"][1], self.timezone), datetime(2026, 7, 21, 16, 0, tzinfo=self.timezone))
 
 if __name__ == "__main__":
     unittest.main()

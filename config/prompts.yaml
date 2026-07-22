@@ -27,6 +27,14 @@ prompts:
        - out：未在库/不在库/库外
        - any：未涉及在库关系
 
+    【时间归一化】必须完成
+    - 当前参考时间会随用户问题一并提供，所有相对时间必须以该时间为基准。
+    - 只要问题包含时间约束，无论是年月日、几号、星期、上午下午、点半、冒号时间、起止区间、最近多久、多久前后或“左右/前后”等模糊表达，都必须转为具体 timeRange。
+    - timeRange 固定输出本地时区的 start/end，格式为 YYYY-MM-DDTHH:MM:SS+08:00，且 end 必须晚于 start。
+    - 只有日期时覆盖整天；只有周或月时覆盖整周或整月；单个整点覆盖一小时；精确到分钟的单点覆盖一分钟；“左右/前后/大约”按前后各三十分钟展开。
+    - 无时间约束时 timeRange=null、timeExpression=""；不得把未识别的明确时间条件静默改成全部监控时间。
+    - timeExpression 保留用户时间原文并简要写出归一化含义。
+
     【targetText 清洗】
     - 仅当 targetKind=description 时填写；否则必须为空字符串。
     - 只保留外观/类型实体词，去掉问法与场景词。
@@ -102,6 +110,8 @@ prompts:
       "operation":"list",
       "registryRelation":"in",
       "hullNumber":"",
+      "timeExpression":"",
+      "timeRange":null,
       "confidence":0.0,
       "expectedOutcome":"返回视频中判定为在库的全部轨迹",
       "successCriteria":"获得时段内轨迹的在库/未在库判定结果，并可列出轨迹编号",

@@ -76,7 +76,7 @@ class AgentController:
         self._emit("status", "IntentAgent", "正在按规则表解析用户意图")
         self.meta = self.planner.classify(self.question)
         self.meta = self._guard_meta(self.meta)
-        self.plan_blueprint = self.planner.build_execution_blueprint(self.meta)
+        self.plan_blueprint = [] if self.meta.get("timeParseError") else self.planner.build_execution_blueprint(self.meta)
         self.meta["planBlueprint"] = self.plan_blueprint
         scope = list(self.meta["timeRange"]) if self.meta.get("timeRange") else None
         self._emit(
@@ -94,6 +94,9 @@ class AgentController:
             selectedRules=self.meta.get("selectedRules") or [],
             intentSource=self.meta.get("intentSource"),
             intentConfidence=self.meta.get("intentConfidence"),
+            timeExpression=self.meta.get("timeExpression"),
+            timeSource=self.meta.get("timeSource"),
+            timeParseError=self.meta.get("timeParseError"),
             expectedOutcome=self.meta.get("expectedOutcome"),
             successCriteria=self.meta.get("successCriteria"),
             nextAgentFocus=self.meta.get("nextAgentFocus"),
@@ -119,6 +122,12 @@ class AgentController:
         self.meta["retrievalPageSize"] = self.retrieval_page_size
         self.meta["retrievalTopK"] = self.query_top_k
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
+        if self.meta.get("timeParseError"):
+            error = str(self.meta["timeParseError"])
+            self._emit("status", "IntentAgent", error, timeParseError=error)
+            result = self._finish("时间条件无法解析", [], error, "uncertain", extra={"timeParseError": error})
+            self.repository.finish_session(self.session_id, self._session_audit_result(result))
+            return result
         self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（PlanAgent规划，ObserveAgent执行）'}", planMode=self.plan_mode)
         try:
             if self.plan_mode == "autonomous":
