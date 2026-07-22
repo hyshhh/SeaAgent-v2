@@ -950,21 +950,11 @@ class AgentController:
         extra = {"statistics": dedup}
         if not tracks:
             return self._finish("数量为 0", [], "查询范围内没有轨迹", "sufficient", extra=extra)
-        frame_groups = self._result(first, "countFrames").get("keyframesByTrack", {})
-        representatives = []
-        for group in dedup.get("highGroups", [])[:self.display_limit]:
-            if not group:
-                continue
-            track_id = group[0]
-            frames = frame_groups.get(track_id, {}).get("keyframes", [])
-            best = max(frames, key=lambda item: item.get("retentionScore", 0), default=None)
-            track = next((item for item in tracks if item["trackId"] == track_id), None)
-            if track:
-                representatives.append(dict(track, matchedKeyframeIds=[best["keyframeId"]] if best else []))
+        representatives = self._deduplication_representatives(tracks, dedup)
         conclusion = f"高阈值计数 {dedup.get('highThresholdShipCount', len(tracks))}，低阈值计数 {dedup.get('lowThresholdShipCount', len(tracks))}"
         uncertainty = "sufficient" if dedup.get("countStability") == "stable" else "uncertain"
         reason = f"计数状态为 {dedup.get('countStability', 'unknown')}，两种结果表示阈值敏感性"
-        return self._finish(conclusion, tracks, reason, uncertainty, extra=extra, display={"tracks": representatives})
+        return self._finish(conclusion, representatives, reason, uncertainty, extra=extra, display={"tracks": representatives, "includeClips": True})
 
     def _answer_autonomous(self) -> dict[str, Any]:
         """自主规划模式：PlanAgent 决定工具，ReflectAgent 根据证据决定是否继续。"""
@@ -1571,8 +1561,16 @@ class AgentController:
             return self._finish("未找到匹配目标", [], answer_hint or reason, state, extra=extra)
 
         if count_value is not None:
+            representatives = self._deduplication_representatives(tracks)
             conclusion = f"统计结果为 {count_value}"
-            return self._finish(conclusion, tracks, answer_hint or reason, state, extra={"count": count_value, "planMode": "autonomous"}, display={"tracks": tracks, "includeClips": False})
+            return self._finish(
+                conclusion,
+                representatives,
+                answer_hint or reason,
+                state,
+                extra={"count": count_value, "sourceTrackCount": len(tracks), "planMode": "autonomous"},
+                display={"tracks": representatives, "includeClips": True},
+            )
 
         if registry_items and not tracks:
             conclusion = "已查询先验库"
@@ -1668,6 +1666,72 @@ class AgentController:
                 return len(groups)
         return None
 
+    def _deduplication_representatives(
+        self,
+        tracks: list[dict[str, Any]],
+        deduplication: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        deduplication = deduplication or self._latest_deduplication_result()
+        groups = deduplication.get("highGroups") if isinstance(deduplication, dict) else None
+        if not isinstance(groups, list):
+            return []
+
+        track_map = {
+            str(track.get("trackId")): track
+            for track in tracks
+            if isinstance(track, dict) and track.get("trackId") is not None
+        }
+        keyframes_by_track = self._keyframes_by_track_from_scope()
+        representatives = []
+        for group in groups:
+            if not isinstance(group, list) or not group:
+                continue
+            group_ids = [str(track_id) for track_id in group]
+            representative: dict[str, Any] | None = None
+            best_frame: dict[str, Any] | None = None
+            best_score = float("-inf")
+            for track_id in group_ids:
+                track = track_map.get(track_id)
+                if track is None:
+                    continue
+                frames = keyframes_by_track.get(track_id, {}).get("keyframes", [])
+                frame = max(
+                    (item for item in frames if isinstance(item, dict)),
+                    key=lambda item: float(item.get("retentionScore") or 0),
+                    default=None,
+                )
+                score = float(frame.get("retentionScore") or 0) if frame else float("-inf")
+                if representative is None or score > best_score:
+                    representative = track
+                    best_frame = frame
+                    best_score = score
+            if representative is None:
+                continue
+            item = dict(representative, deduplicatedTrackIds=group_ids)
+            if best_frame and best_frame.get("keyframeId"):
+                item["matchedKeyframeIds"] = [best_frame["keyframeId"]]
+            representatives.append(item)
+        return representatives
+
+    def _latest_deduplication_result(self) -> dict[str, Any]:
+        for value in reversed(list(self.working_scope.values())):
+            if isinstance(value, dict) and isinstance(value.get("highGroups"), list):
+                return value
+        return {}
+
+    def _keyframes_by_track_from_scope(self) -> dict[str, dict[str, Any]]:
+        collected: dict[str, dict[str, Any]] = {}
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            groups = value.get("keyframesByTrack")
+            if not isinstance(groups, dict):
+                continue
+            for track_id, group in groups.items():
+                if isinstance(group, dict):
+                    collected[str(track_id)] = group
+        return collected
+
     def _tracks_from_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tracks = []
         for match in matches:
@@ -1751,9 +1815,17 @@ class AgentController:
         return record
 
     def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
-        if not tracks or self.display_record is not None:
+        if self.display_record is not None:
             return
         unique_tracks = list({str(item["trackId"]): item for item in tracks}.values())
+        if not unique_tracks:
+            self.display_record = {
+                "displayId": f"display-{uuid.uuid4().hex[:12]}",
+                "mode": "lazy",
+                "trackCount": 0,
+                "registryReferenceCount": 0,
+            }
+            return
         missing_frame_tracks = [
             str(track["trackId"])
             for track in unique_tracks
@@ -1844,8 +1916,12 @@ class AgentController:
                 self.tool_chain.append(f"{observation['tool']}({observation['id']})")
 
     def _finish(self, conclusion: str, tracks: list[dict[str, Any]], reason: str, state: str, extra: dict[str, Any] | None = None, display: dict[str, Any] | None = None) -> dict[str, Any]:
-        if display and display.get("tracks"):
-            self._display_tracks(display["tracks"], display.get("includeClips", True) is not False, bool(display.get("includeRegistry")))
+        display = display if display is not None else {"tracks": tracks}
+        self._display_tracks(
+            display.get("tracks") or [],
+            display.get("includeClips", True) is not False,
+            bool(display.get("includeRegistry")),
+        )
         primary = [item["trackId"] for item in tracks[:self.display_limit]]
         result = {"sessionId": self.session_id, "question": self.question, "questionType": self.meta.get("questionType"), "conclusion": conclusion, "answerText": f"{conclusion}。{reason}", "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None, "toolChain": self.tool_chain, "toolRecords": self.tool_records, "tracks": tracks, "evidence": self._collect_evidence(), "displayGroups": self.display_groups, "display": self._public_display(), "uncertainty": state, "primaryTrackIds": primary, "remainingTrackIds": [item["trackId"] for item in tracks[self.display_limit:]], "rounds": [{key: value for key, value in item.items() if key != "scope"} for item in self.rounds]}
         if extra:
@@ -1854,7 +1930,7 @@ class AgentController:
         return result
 
     def _collect_evidence(self) -> dict[str, list[str]]:
-        if self.display_groups:
+        if self.display_record is not None:
             return {key: list(dict.fromkeys(value for group in self.display_groups for value in group[key])) for key in ("keyframeIds", "shipSegmentIds", "registryReferenceIds")}
         collected = {"keyframeIds": [], "shipSegmentIds": [], "registryReferenceIds": []}
         key_map = {"keyframeIds": "keyframeIds", "queryKeyframeIds": "keyframeIds", "matchedKeyframeIds": "keyframeIds", "shipSegmentIds": "shipSegmentIds", "registryReferenceIds": "registryReferenceIds", "queryRegistryReferenceIds": "registryReferenceIds", "matchedRegistryReferenceIds": "registryReferenceIds"}

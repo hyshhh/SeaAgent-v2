@@ -421,6 +421,7 @@ function synchronizeEvidenceColumns(container) {
 
 function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
   const container = document.getElementById('evidenceGallery');
+  const resultCount = document.getElementById('evidenceResultCount');
   evidenceVideoObserver?.disconnect();
   visibleEvidenceVideos.forEach((video) => video.pause());
   visibleEvidenceVideos.clear();
@@ -431,6 +432,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     if (!database.length) {
       database = [...new Set(evidence?.registryReferenceIds || [])].map((id) => evidenceItem('registry', id));
     }
+    if (resultCount) resultCount.textContent = database.length ? `${database.length} 个库项` : '无库项证据';
     container.className = 'evidence-columns registry-only';
     container.innerHTML = evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText);
     return;
@@ -450,6 +452,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     }));
   }
 
+  if (resultCount) resultCount.textContent = rows.length ? `${rows.length} 条结果轨迹` : '无匹配轨迹';
   container.className = 'evidence-track-list';
   container.innerHTML = rows.length
     ? rows.map((group, index) => evidenceTrackRow(group, index)).join('')
