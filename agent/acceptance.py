@@ -310,24 +310,36 @@ def build_acceptance_progress(
         if acceptance_satisfied:
             next_action = "停止并按验收关系返回已经完成分类的轨迹列表。"
     elif operation == "count":
-        requirements = ["deduplicated_count"]
-        count_results = [result for result in results if "upperCount" in result]
-        acceptance_satisfied = bool(count_results)
-        if not acceptance_satisfied:
-            pending.append("deduplicated_count")
-            next_action = "下一轮读取目标轨迹关键帧并调用 dedupTracks，得到可审计数量。"
+        requirements = ["complete_track_scope", "deduplicated_count"]
+        if not track_scope_complete:
+            pending.append("complete_track_scope")
+            next_action = "下一轮调用 getTrack 读取当前查询范围的全部轨迹快照，直到 hasMore=false。"
+        else:
+            count_results = [
+                result
+                for result in results
+                if "highThresholdShipCount" in result and "lowThresholdShipCount" in result
+            ]
+            acceptance_satisfied = bool(count_results)
+            if not acceptance_satisfied:
+                pending.append("deduplicated_count")
+                next_action = "下一轮读取全部轨迹的正式关键帧并调用 dedupTracks，得到可审计数量。"
     elif target_kind == "description":
-        requirements = ["target_match"]
-        match_results = [
-            result
-            for result in results
-            if result.get("matchMode") in {"text_to_image", "text_to_registry"}
-            or result.get("targetType") in {"description", "description_registry"}
-        ]
-        acceptance_satisfied = bool(match_results)
-        if not acceptance_satisfied:
-            pending.append("target_match")
-            next_action = "下一轮获取正式关键帧并调用 matchText；只有灰区结果才调用 verifyTarget。"
+        requirements = ["target_match"] if target_scope == "registry" else ["complete_track_scope", "target_match"]
+        if target_scope != "registry" and not track_scope_complete:
+            pending.append("complete_track_scope")
+            next_action = "下一轮调用 getTrack 读取当前查询范围的全部轨迹快照，直到 hasMore=false。"
+        else:
+            match_results = [
+                result
+                for result in results
+                if result.get("matchMode") in {"text_to_image", "text_to_registry"}
+                or result.get("targetType") in {"description", "description_registry"}
+            ]
+            acceptance_satisfied = bool(match_results)
+            if not acceptance_satisfied:
+                pending.append("target_match")
+                next_action = "下一轮读取全部轨迹的正式关键帧并调用 matchText；只有灰区结果才调用 verifyTarget。"
     elif target_scope == "registry":
         requirements = ["registry_query"]
         acceptance_satisfied = any("registryItems" in result for result in results)

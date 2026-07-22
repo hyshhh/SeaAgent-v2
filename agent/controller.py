@@ -181,7 +181,7 @@ class AgentController:
     def _answer_description_count(self) -> dict[str, Any]:
         """按描述筛选轨迹，再对命中轨迹做跨轨迹去重统计。"""
         description = self.meta.get("description") or self._description_target()
-        page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+        page_size = 0
         offset, has_more = 0, True
         track_map: dict[str, dict[str, Any]] = {}
         confirmed_map: dict[str, dict[str, Any]] = {}
@@ -189,7 +189,7 @@ class AgentController:
         missing_track_ids: set[str] = set()
         searched_count = 0
         while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
-            page_number = offset // page_size + 1
+            page_number = 1 if page_size == 0 else offset // page_size + 1
             track_call = f"countDescTracks{page_number}"
             frame_call = f"countDescFrames{page_number}"
             match_call = f"countDescMatch{page_number}"
@@ -572,16 +572,16 @@ class AgentController:
 
     def _answer_description(self) -> dict[str, Any]:
         description = self.meta.get("description") or self._description_target()
-        page_size = max(1, int(self.config["pipeline"]["agent"].get("retrieval_page_size", 60)))
+        page_size = 0
         offset, has_more = 0, True
         track_map: dict[str, dict[str, Any]] = {}
         uncertain_by_track: dict[str, dict[str, Any]] = {}
         missing_track_ids: set[str] = set()
         searched_count = 0
         while has_more and len(self.rounds) < max(1, self.max_rounds - 1):
-            page_number = offset // page_size + 1
+            page_number = 1 if page_size == 0 else offset // page_size + 1
             track_call, frame_call, match_call = f"descriptionTracks{page_number}", f"descriptionFrames{page_number}", f"textMatch{page_number}"
-            current = self._round(f"读取第 {page_number} 页轨迹并执行描述检索", [
+            current = self._round("读取当前全部轨迹并执行描述检索", [
                 {"id": track_call, "tool": "getTrack", "arguments": {"timeRange": self.meta.get("timeRange"), "offset": offset, "limit": page_size}},
                 {"id": frame_call, "tool": "getFrames", "arguments": {"trackIds": {"$ref": f"{track_call}.trackIds"}}},
                 {"id": match_call, "tool": "matchText", "arguments": {"description": description, "galleryImages": {"$ref": f"{frame_call}.keyframes"}, "topK": 6}},
@@ -596,7 +596,7 @@ class AgentController:
             matched = [item for item in matches if item.get("scoreBand") == "match"]
             if matched:
                 tracks = [self._with_match(track_map[str(item["matchedTrackId"])], item) for item in matched[:self.display_limit] if str(item["matchedTrackId"]) in track_map]
-                return self._finish("确认出现", tracks, f"分页读取 {searched_count} 条轨迹后找到达到匹配阈值的证据", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": tracks, "includeClips": True})
+                return self._finish("确认出现", tracks, f"读取当前全部 {searched_count} 条轨迹后找到达到匹配阈值的证据", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": tracks, "includeClips": True})
             for item in matches:
                 if item.get("scoreBand") != "uncertain":
                     continue
@@ -641,10 +641,10 @@ class AgentController:
             elif track and final_decision == "uncertain":
                 unresolved.append(track)
         if verified:
-            return self._finish("确认出现", verified, "分页检索后的灰区视觉证据经模型核验后符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": verified, "includeClips": True})
+            return self._finish("确认出现", verified, "全量检索后的灰区视觉证据经模型核验后符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count}, display={"tracks": verified, "includeClips": True})
         if unresolved or missing_track_ids or has_more:
             return self._finish("无法确认", unresolved, "灰区证据、不可检索轨迹或未读取页面仍存在不确定性", "uncertain", extra={"searchedTrackCount": searched_count, "hasMore": has_more}, display={"tracks": unresolved, "includeClips": True})
-        return self._finish("未发现", [], "全部分页候选经视觉核验均不符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count})
+        return self._finish("未发现", [], "当前全部轨迹候选经视觉核验均不符合目标描述", "sufficient", extra={"searchedTrackCount": searched_count})
 
     def _answer_registry_description(self) -> dict[str, Any]:
         description = self.meta.get("description") or self._description_target()
@@ -1018,30 +1018,13 @@ class AgentController:
                 {"id": "targetHullRegistry", "tool": "getRegistry", "arguments": {"hullNumber": hull_number}},
             ]
         if requirement in {"complete_track_scope", "hull_track_scope"}:
-            pages = [
-                value for value in self.working_scope.values()
-                if isinstance(value, dict)
-                and "trackIds" in value
-                and "hasMore" in value
-                and not normalize_hull_number(value.get("queryHullNumber"))
-                and not value.get("queryFinalMatchType")
-            ]
-            next_offsets = [
-                int(value["nextOffset"])
-                for value in pages
-                if value.get("hasMore") and value.get("nextOffset") is not None
-            ]
-            offset = max(next_offsets) if next_offsets else 0
-            total = acceptance.get("expectedTrackCount")
-            covered = int(acceptance.get("trackCount") or 0)
-            remaining = max(1, int(total) - covered) if isinstance(total, int) else 200
             return [{
-                "id": f"tracksPage{offset}",
+                "id": "tracksSnapshot",
                 "tool": "getTrack",
                 "arguments": {
                     "timeRange": self.meta.get("timeRange"),
-                    "offset": offset,
-                    "limit": min(200, remaining),
+                    "offset": 0,
+                    "limit": 0,
                 },
             }]
         if requirement == "exact_hull_classification":
@@ -1120,6 +1103,63 @@ class AgentController:
                     },
                 })
             return calls
+        if requirement == "deduplicated_count":
+            track_result_id = next((
+                str(key)
+                for key, value in reversed(list(self.working_scope.items()))
+                if isinstance(value, dict)
+                and isinstance(value.get("tracks"), list)
+                and "trackIds" in value
+                and not normalize_hull_number(value.get("queryHullNumber"))
+                and not value.get("queryFinalMatchType")
+            ), None)
+            if not track_result_id:
+                return []
+            return [
+                {
+                    "id": "countFrames",
+                    "tool": "getFrames",
+                    "arguments": {"trackIds": {"$ref": f"{track_result_id}.trackIds"}},
+                },
+                {
+                    "id": "deduplicatedCount",
+                    "tool": "dedupTracks",
+                    "arguments": {
+                        "tracks": {"$ref": f"{track_result_id}.tracks"},
+                        "keyframesByTrack": {"$ref": "countFrames.keyframesByTrack"},
+                    },
+                },
+            ]
+        if requirement == "target_match":
+            description = self.meta.get("description") or self._description_target()
+            if self.meta.get("targetScope") == "registry":
+                return [
+                    {"id": "registryCatalog", "tool": "listRegistry", "arguments": {}},
+                    {
+                        "id": "descriptionMatch",
+                        "tool": "matchText",
+                        "arguments": {
+                            "description": description,
+                            "galleryImages": {"$ref": "registryCatalog.registryReferences"},
+                            "topK": self.query_top_k,
+                        },
+                    },
+                ]
+            track_ids = list(acceptance.get("trackIds") or [])
+            if not track_ids:
+                return []
+            return [
+                {"id": "descriptionFrames", "tool": "getFrames", "arguments": {"trackIds": track_ids}},
+                {
+                    "id": "descriptionMatch",
+                    "tool": "matchText",
+                    "arguments": {
+                        "description": description,
+                        "galleryImages": {"$ref": "descriptionFrames.keyframes"},
+                        "topK": self.query_top_k,
+                    },
+                },
+            ]
         if requirement == "registry_image_classification":
             frame_id = next((
                 str(key) for key, value in reversed(list(self.working_scope.items()))
@@ -1160,6 +1200,8 @@ class AgentController:
             "registry_catalog": {"listRegistry"},
             "keyframe_evidence": {"getFrames"},
             "registry_image_classification": {"matchImage"},
+            "deduplicated_count": {"dedupTracks"},
+            "target_match": {"matchText"},
             "gray_verification": {"verifyTarget", "getClip"},
         }.get(str(pending[0]) if pending else "", set())
         current_calls = list(plan.get("calls") or [])
@@ -1175,6 +1217,8 @@ class AgentController:
             "registry_catalog",
             "keyframe_evidence",
             "registry_image_classification",
+            "deduplicated_count",
+            "target_match",
         }
         if requirement in parameter_bound_requirements:
             fallback_calls = self._acceptance_fallback_calls(acceptance)
@@ -1282,6 +1326,18 @@ class AgentController:
             plan = forced_plan
         self._apply_query_top_k(plan)
         calls = plan.get("calls") or []
+        if not calls:
+            fallback_calls = self._acceptance_fallback_calls(acceptance)
+            if fallback_calls:
+                plan = dict(plan)
+                plan["calls"] = fallback_calls
+                plan["proposedState"] = "replan"
+                plan["reason"] = acceptance.get("nextAction") or plan.get("reason") or "按验收条件继续执行工具"
+                plan["evidenceGap"] = "、".join(acceptance.get("pendingRequirementLabels") or [])
+                repair = str(plan.get("planRepair") or "").strip()
+                plan["planRepair"] = f"{repair}；模型计划不可执行，已按验收条件生成工具调用".strip("；")
+                self._apply_query_top_k(plan)
+                calls = plan["calls"]
         public_plan = self._public_plan(plan, calls)
         public_plan["planMode"] = "autonomous"
         self._emit(
@@ -1601,13 +1657,13 @@ class AgentController:
         for value in reversed(list(self.working_scope.values())):
             if not isinstance(value, dict):
                 continue
-            for key in ("uniqueCount", "count", "dedupCount", "finalCount"):
+            for key in ("highThresholdShipCount", "uniqueCount", "count", "dedupCount", "finalCount"):
                 if value.get(key) is not None:
                     try:
                         return int(value[key])
                     except (TypeError, ValueError):
                         pass
-            groups = value.get("upperGroups") or value.get("groups") or value.get("mergedGroups")
+            groups = value.get("highGroups") or value.get("upperGroups") or value.get("groups") or value.get("mergedGroups")
             if isinstance(groups, list) and groups:
                 return len(groups)
         return None

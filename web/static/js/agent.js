@@ -955,12 +955,12 @@ function appendThoughtEvent(event) {
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
     const content = card.querySelector('.agent-stream-text');
+    const isPlanCard = event.role === 'planner' || event.planOnly;
+    const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
     const summaryText = event.role === 'observer' && card._toolLogs?.length
       ? card._toolLogs.map((entry) => entry.text).join('\n')
       : compactAgentText(event) || '';
-    const isPlanCard = event.role === 'planner' || event.planOnly;
-    const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
-    content.textContent = summaryText || planNote || event.fallback || '本轮没有可展示信息';
+    content.textContent = planNote || summaryText || event.fallback || '本轮没有可展示信息';
     card.classList.remove('active');
     const hasFailedCall = event.role === 'observer' && (event.calls || []).some((call) => call.skipped || call.ok === false);
     const markFailed = isPlanCard ? false : Boolean(event.fallback || hasFailedCall);

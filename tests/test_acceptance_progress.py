@@ -356,9 +356,9 @@ class AcceptanceProgressTest(unittest.TestCase):
 
         repaired = controller._align_plan_with_acceptance(plan, acceptance)
 
-        self.assertEqual(repaired["calls"][0]["id"], "tracksPage0")
+        self.assertEqual(repaired["calls"][0]["id"], "tracksSnapshot")
+        self.assertEqual(repaired["calls"][0]["arguments"]["limit"], 0)
         self.assertNotIn("hullNumber", repaired["calls"][0]["arguments"])
-        self.assertEqual(repaired["calls"][0]["arguments"]["limit"], 200)
 
     def test_hull_keyframe_step_binds_all_tracks_and_appends_match_image(self) -> None:
         controller = AgentController.__new__(AgentController)
@@ -421,39 +421,118 @@ class AcceptanceProgressTest(unittest.TestCase):
         self.assertEqual(forced_plans[0]["calls"][0]["tool"], "matchHull")
         self.assertIn("验收", forced_plans[0]["planRepair"])
 
-    def test_track_pagination_fallback_uses_unique_result_ids(self) -> None:
+    def test_track_snapshot_fallback_reads_all_current_tracks(self) -> None:
         controller = AgentController.__new__(AgentController)
         controller.meta = {"timeRange": None}
-        controller.retrieval_page_size = 60
         controller.working_scope = {
-            "tracksPage0": {
-                "trackIds": [str(value) for value in range(60)],
+            "partialTracks": {
+                "trackIds": ["1", "2"],
                 "tracks": [],
                 "queryHullNumber": None,
                 "queryFinalMatchType": None,
                 "hasMore": True,
-                "nextOffset": 60,
+                "nextOffset": 2,
             }
         }
         acceptance = {
             "pendingRequirements": ["complete_track_scope"],
-            "expectedTrackCount": 170,
-            "trackCount": 60,
+            "expectedTrackCount": 2,
+            "trackCount": 2,
         }
-        first = controller._acceptance_fallback_calls(acceptance)
-        self.assertEqual(first[0]["id"], "tracksPage60")
 
-        controller.working_scope["tracksPage60"] = {
-            "trackIds": [str(value) for value in range(60, 120)],
-            "tracks": [],
-            "queryHullNumber": None,
-            "queryFinalMatchType": None,
-            "hasMore": True,
-            "nextOffset": 120,
+        calls = controller._acceptance_fallback_calls(acceptance)
+
+        self.assertEqual(calls[0]["id"], "tracksSnapshot")
+        self.assertEqual(calls[0]["arguments"]["offset"], 0)
+        self.assertEqual(calls[0]["arguments"]["limit"], 0)
+
+    def test_count_acceptance_requires_snapshot_then_dedup(self) -> None:
+        intent = {
+            "targetScope": "track_memory",
+            "targetKind": "all",
+            "operation": "count",
+            "registryRelation": "any",
         }
-        acceptance["trackCount"] = 120
-        second = controller._acceptance_fallback_calls(acceptance)
-        self.assertEqual(second[0]["id"], "tracksPage120")
+        partial_scope = {
+            "tracks": {
+                "ok": True,
+                "tracks": [{"trackId": "1"}],
+                "trackIds": ["1"],
+                "totalTrackCount": 2,
+                "hasMore": True,
+            }
+        }
+        partial = build_acceptance_progress(intent, partial_scope)
+        self.assertEqual(partial["pendingRequirements"], ["complete_track_scope"])
+
+        full_scope = {
+            "tracksSnapshot": {
+                "ok": True,
+                "tracks": [{"trackId": "1"}, {"trackId": "2"}],
+                "trackIds": ["1", "2"],
+                "totalTrackCount": 2,
+                "hasMore": False,
+            }
+        }
+        before_dedup = build_acceptance_progress(intent, full_scope)
+        self.assertEqual(before_dedup["pendingRequirements"], ["deduplicated_count"])
+
+        full_scope["deduplicatedCount"] = {
+            "ok": True,
+            "highThresholdShipCount": 2,
+            "lowThresholdShipCount": 2,
+            "countStability": "stable",
+        }
+        after_dedup = build_acceptance_progress(intent, full_scope)
+        self.assertTrue(after_dedup["acceptanceSatisfied"])
+
+    def test_empty_count_plan_is_repaired_to_dedup_chain(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.meta = {"timeRange": None}
+        controller.working_scope = {
+            "tracksSnapshot": {
+                "ok": True,
+                "tracks": [{"trackId": "1"}],
+                "trackIds": ["1"],
+                "queryHullNumber": None,
+                "queryFinalMatchType": None,
+                "hasMore": False,
+            }
+        }
+        acceptance = {
+            "acceptanceSatisfied": False,
+            "pendingRequirements": ["deduplicated_count"],
+            "pendingRequirementLabels": ["跨轨迹去重数量"],
+            "nextAction": "读取全部轨迹关键帧并执行去重",
+        }
+
+        repaired = controller._align_plan_with_acceptance({"calls": [], "proposedState": "uncertain"}, acceptance)
+
+        self.assertEqual([call["tool"] for call in repaired["calls"]], ["getFrames", "dedupTracks"])
+        self.assertEqual(repaired["proposedState"], "replan")
+
+    def test_count_fallback_binds_snapshot_to_frames_and_dedup(self) -> None:
+        controller = AgentController.__new__(AgentController)
+        controller.meta = {"timeRange": None}
+        controller.working_scope = {
+            "tracksSnapshot": {
+                "ok": True,
+                "tracks": [{"trackId": "1"}, {"trackId": "2"}],
+                "trackIds": ["1", "2"],
+                "queryHullNumber": None,
+                "queryFinalMatchType": None,
+                "hasMore": False,
+            }
+        }
+        acceptance = {"pendingRequirements": ["deduplicated_count"]}
+
+        calls = controller._acceptance_fallback_calls(acceptance)
+
+        self.assertEqual([call["tool"] for call in calls], ["getFrames", "dedupTracks"])
+        self.assertEqual(calls[0]["arguments"]["trackIds"], {"$ref": "tracksSnapshot.trackIds"})
+        self.assertEqual(calls[1]["arguments"]["tracks"], {"$ref": "tracksSnapshot.tracks"})
+        self.assertEqual(calls[1]["arguments"]["keyframesByTrack"], {"$ref": "countFrames.keyframesByTrack"})
+
 
 
 if __name__ == "__main__":
