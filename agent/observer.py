@@ -137,6 +137,8 @@ class Observer:
             return
         try:
             payload = {"phase": phase, "id": observation.get("id"), "tool": observation.get("tool")}
+            if isinstance(observation.get("arguments"), dict):
+                payload["arguments"] = observation["arguments"]
             if observation.get("skipped"):
                 payload["skipped"] = True
                 payload["error"] = observation.get("skipReason")

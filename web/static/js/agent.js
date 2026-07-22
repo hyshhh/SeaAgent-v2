@@ -996,12 +996,34 @@ function toolResultText(call) {
   return '执行完成';
 }
 
+function formatToolArgumentValue(value) {
+  if (value == null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    const visible = value.slice(0, 10).map((item) => formatToolArgumentValue(item));
+    return `[${visible.join(', ')}${value.length > visible.length ? `, …+${value.length - visible.length}` : ''}]`;
+  }
+  if (typeof value === 'object') {
+    const fields = Object.entries(value).slice(0, 6)
+      .map(([key, item]) => `${key}:${formatToolArgumentValue(item)}`);
+    return `{${fields.join(', ')}${Object.keys(value).length > fields.length ? ', …' : ''}}`;
+  }
+  return String(value);
+}
+
+function formatToolArguments(argumentsValue) {
+  if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return '无参数';
+  const entries = Object.entries(argumentsValue);
+  if (!entries.length) return '无参数';
+  return entries.map(([key, value]) => `${key}=${formatToolArgumentValue(value)}`).join(', ');
+}
+
 function formatToolCall(round, call) {
   const roundNumber = Math.max(1, Number(round || call.round || 1));
   if (call.legacy) return `${roundNumber}-${call.legacy}-执行完成`;
   const tool = call.tool || 'tool';
-  const id = call.id || 'result';
-  return `${roundNumber}-${tool}(${id})-${toolResultText(call)}`;
+  return `${roundNumber}-${tool}(${formatToolArguments(call.arguments)})-${toolResultText(call)}`;
 }
 
 function updateObserverToolEvent(event) {
