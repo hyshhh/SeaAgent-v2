@@ -90,6 +90,114 @@ function selectedTopK() {
   return Math.max(1, Math.min(20, Number(input?.value) || 3));
 }
 
+const evidenceDisplayDefaults = Object.freeze({videoScale: 0.25, imageScale: 0.5, maxItems: 0});
+let latestEvidencePayload = null;
+
+function clampEvidenceValue(value, minimum, maximum, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, number)) : fallback;
+}
+
+function evidenceDisplaySettings() {
+  const videoScale = clampEvidenceValue(localStorage.getItem('seaagent-evidence-video-scale'), 0.25, 1, evidenceDisplayDefaults.videoScale);
+  const imageScale = clampEvidenceValue(localStorage.getItem('seaagent-evidence-image-scale'), 0.25, 1, evidenceDisplayDefaults.imageScale);
+  const maxItems = Math.round(clampEvidenceValue(localStorage.getItem('seaagent-evidence-max-items'), 0, 10000, evidenceDisplayDefaults.maxItems));
+  return {videoScale, imageScale, maxItems};
+}
+
+function updateEvidenceDisplayLabels() {
+  const video = document.getElementById('evidenceVideoScale');
+  const image = document.getElementById('evidenceImageScale');
+  const maximum = document.getElementById('evidenceMaxItems');
+  const videoLabel = document.getElementById('evidenceVideoScaleValue');
+  const imageLabel = document.getElementById('evidenceImageScaleValue');
+  const maximumLabel = document.getElementById('evidenceMaxItemsValue');
+  if (videoLabel && video) videoLabel.textContent = `${Math.round(Number(video.value) * 100)}%`;
+  if (imageLabel && image) imageLabel.textContent = `${Math.round(Number(image.value) * 100)}%`;
+  if (maximumLabel && maximum) maximumLabel.textContent = Number(maximum.value) > 0 ? `${maximum.value} 条` : '全部';
+}
+
+function renderLatestEvidence() {
+  if (!latestEvidencePayload) return;
+  renderEvidence(
+    latestEvidencePayload.evidence,
+    latestEvidencePayload.displayGroups,
+    latestEvidencePayload.emptyText,
+    latestEvidencePayload.registryItems,
+    latestEvidencePayload.result,
+  );
+}
+
+function saveEvidenceDisplaySettings() {
+  const video = document.getElementById('evidenceVideoScale');
+  const image = document.getElementById('evidenceImageScale');
+  const maximum = document.getElementById('evidenceMaxItems');
+  if (!video || !image || !maximum) return;
+  video.value = String(clampEvidenceValue(video.value, 0.25, 1, evidenceDisplayDefaults.videoScale));
+  image.value = String(clampEvidenceValue(image.value, 0.25, 1, evidenceDisplayDefaults.imageScale));
+  maximum.value = String(Math.round(clampEvidenceValue(maximum.value, 0, 10000, evidenceDisplayDefaults.maxItems)));
+  localStorage.setItem('seaagent-evidence-video-scale', video.value);
+  localStorage.setItem('seaagent-evidence-image-scale', image.value);
+  localStorage.setItem('seaagent-evidence-max-items', maximum.value);
+  updateEvidenceDisplayLabels();
+  renderLatestEvidence();
+}
+
+function initializeEvidenceDisplayControls() {
+  const video = document.getElementById('evidenceVideoScale');
+  const image = document.getElementById('evidenceImageScale');
+  const maximum = document.getElementById('evidenceMaxItems');
+  if (!video || !image || !maximum || video.dataset.initialized === 'true') return;
+  const settings = evidenceDisplaySettings();
+  video.value = String(settings.videoScale);
+  image.value = String(settings.imageScale);
+  maximum.value = String(settings.maxItems);
+  video.dataset.initialized = 'true';
+  updateEvidenceDisplayLabels();
+}
+
+function bindEvidenceDisplayControls() {
+  const video = document.getElementById('evidenceVideoScale');
+  const image = document.getElementById('evidenceImageScale');
+  const maximum = document.getElementById('evidenceMaxItems');
+  if (!video || !image || !maximum || video.dataset.bound === 'true') return;
+  [video, image].forEach((input) => input.addEventListener('input', updateEvidenceDisplayLabels));
+  [video, image, maximum].forEach((input) => input.addEventListener('change', saveEvidenceDisplaySettings));
+  maximum.addEventListener('input', updateEvidenceDisplayLabels);
+  video.dataset.bound = 'true';
+}
+
+function toggleEvidenceDisplaySettings() {
+  const panel = document.getElementById('evidenceDisplaySettings');
+  const button = document.getElementById('evidenceSettingsToggle');
+  if (!panel || !button) return;
+  panel.hidden = !panel.hidden;
+  button.setAttribute('aria-expanded', String(!panel.hidden));
+}
+
+function evidenceSimilarity(value) {
+  const score = Number(value?.embeddingScore ?? value?.score ?? value?.matchScore);
+  return Number.isFinite(score) ? score : null;
+}
+
+function sortEvidenceGroups(groups) {
+  return (groups || []).map((group, index) => ({group, index, score: evidenceSimilarity(group)})).sort((left, right) => {
+    if (left.score !== null && right.score !== null) return right.score - left.score || left.index - right.index;
+    if (left.score !== null) return -1;
+    if (right.score !== null) return 1;
+    return left.index - right.index;
+  }).map((item) => item.group);
+}
+
+function limitEvidenceItems(items) {
+  const maximum = evidenceDisplaySettings().maxItems;
+  return maximum > 0 ? items.slice(0, maximum) : items;
+}
+
+function evidenceCountText(shown, total, unit) {
+  return shown === total ? `${total} ${unit}` : `显示 ${shown} / ${total} ${unit}`;
+}
+
 async function loadAgentMemorySummary(showNotice = false) {
   const trackCount = document.getElementById('agentTrackCount');
   const registryStatus = document.getElementById('agentRegistryStatus');
@@ -244,15 +352,21 @@ function evidenceItem(type, id, trackId = null, options = {}) {
   const prefix = type === 'video' ? 'Clip' : type === 'keyframe' ? 'Keyframe' : 'Database Reference';
   const route = type === 'video' ? 'clips' : type === 'keyframe' ? 'keyframes' : 'registry';
   const owner = trackId == null ? '' : `Track ${trackId} · `;
-  const scope = Array.isArray(options.timeRange)
-    ? `?startTime=${encodeURIComponent(options.timeRange[0])}&endTime=${encodeURIComponent(options.timeRange[1])}`
-    : '';
+  const settings = evidenceDisplaySettings();
+  const videoQuery = new URLSearchParams();
+  if (Array.isArray(options.timeRange)) {
+    videoQuery.set('startTime', String(options.timeRange[0]));
+    videoQuery.set('endTime', String(options.timeRange[1]));
+  }
+  if (type === 'video' && options.trackClip) videoQuery.set('scale', String(settings.videoScale));
+  const videoScope = videoQuery.size ? `?${videoQuery.toString()}` : '';
+  const imageScope = `?scale=${encodeURIComponent(settings.imageScale)}`;
   const url = type === 'video' && options.trackClip
-    ? `/api/evidence/tracks/${encodeURIComponent(id)}/clip${scope}`
-    : `/api/evidence/${route}/${encodeURIComponent(id)}`;
+    ? `/api/evidence/tracks/${encodeURIComponent(id)}/clip${videoScope}`
+    : `/api/evidence/${route}/${encodeURIComponent(id)}${type === 'video' ? '' : imageScope}`;
   const posterUrl = type !== 'video' ? null : options.posterKeyframeId
-    ? `/api/evidence/keyframes/${encodeURIComponent(options.posterKeyframeId)}`
-    : `/api/evidence/clips/${encodeURIComponent(id)}/poster`;
+    ? `/api/evidence/keyframes/${encodeURIComponent(options.posterKeyframeId)}${imageScope}`
+    : `/api/evidence/clips/${encodeURIComponent(id)}/poster${imageScope}`;
   return {type, id, label: options.label || `${owner}${prefix} ${id}`, url, posterUrl};
 }
 
@@ -361,10 +475,11 @@ function evidenceTrackCell(title, subtitle, item) {
 
 function evidenceTrackRow(group, index) {
   const trackId = group.trackId ?? index + 1;
-  const clip = group.shipSegmentIds?.[0]
-    ? evidenceItem('video', group.shipSegmentIds[0], trackId)
-    : group.clipTrackId
-      ? evidenceItem('video', group.clipTrackId, trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange})
+  const score = evidenceSimilarity(group);
+  const clip = group.clipTrackId
+    ? evidenceItem('video', group.clipTrackId, trackId, {trackClip: true, posterKeyframeId: group.keyframeIds?.[0], timeRange: group.clipTimeRange})
+    : group.shipSegmentIds?.[0]
+      ? evidenceItem('video', group.shipSegmentIds[0], trackId)
       : group.clipError
         ? {type: 'unavailable', reason: clipErrorText(group.clipError), trackId, label: `Track ${trackId} · Clip Evidence`}
         : missingEvidence(trackId, 'clip');
@@ -375,7 +490,8 @@ function evidenceTrackRow(group, index) {
     ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
     : missingEvidence(trackId, 'registry');
   const hull = String(group.hullNumber || '').trim();
-  return `<article class="evidence-track-row"><div class="evidence-track-row-head"><div><span>Track Evidence</span><strong>Track ${escapeHtml(trackId)}</strong></div>${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}</div><div class="evidence-track-row-media">${evidenceTrackCell('Clip', 'Target Vessel Segment', clip)}${evidenceTrackCell('Keyframe', 'Recognition Frame', keyframe)}${evidenceTrackCell('Registry', 'Database Reference', database)}</div></article>`;
+  const badges = `${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>相似度 ${score.toFixed(3)}</em>`}`;
+  return `<article class="evidence-track-row"><div class="evidence-track-row-head"><div><span>Track Evidence</span><strong>Track ${escapeHtml(trackId)}</strong></div><div class="evidence-track-badges">${badges}</div></div><div class="evidence-track-row-media">${evidenceTrackCell('Clip', 'Target Vessel Segment', clip)}${evidenceTrackCell('Keyframe', 'Recognition Frame', keyframe)}${evidenceTrackCell('Registry', 'Database Reference', database)}</div></article>`;
 }
 
 function representativeRegistryEvidence(registryItems) {
@@ -420,21 +536,23 @@ function synchronizeEvidenceColumns(container) {
 }
 
 function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
+  latestEvidencePayload = {evidence, displayGroups, emptyText, registryItems, result};
   const container = document.getElementById('evidenceGallery');
   const resultCount = document.getElementById('evidenceResultCount');
   evidenceVideoObserver?.disconnect();
   visibleEvidenceVideos.forEach((video) => video.pause());
   visibleEvidenceVideos.clear();
-  const groups = displayGroups || [];
+  const groups = sortEvidenceGroups(displayGroups || []);
   const registryOnly = result?.targetScope === 'registry';
   if (registryOnly) {
     let database = representativeRegistryEvidence(registryItems);
     if (!database.length) {
       database = [...new Set(evidence?.registryReferenceIds || [])].map((id) => evidenceItem('registry', id));
     }
-    if (resultCount) resultCount.textContent = database.length ? `${database.length} 个库项` : '无库项证据';
+    const visibleDatabase = limitEvidenceItems(database);
+    if (resultCount) resultCount.textContent = evidenceCountText(visibleDatabase.length, database.length, '个库项');
     container.className = 'evidence-columns registry-only';
-    container.innerHTML = evidenceColumn('Database Evidence', 'Registry Reference Images', database, emptyText);
+    container.innerHTML = evidenceColumn('Database Evidence', 'Registry Reference Images', visibleDatabase, emptyText);
     return;
   }
 
@@ -452,7 +570,9 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
     }));
   }
 
-  if (resultCount) resultCount.textContent = rows.length ? `${rows.length} 条结果轨迹` : '无匹配轨迹';
+  const totalRows = rows.length;
+  rows = limitEvidenceItems(rows);
+  if (resultCount) resultCount.textContent = totalRows ? evidenceCountText(rows.length, totalRows, '条结果轨迹') : '无匹配轨迹';
   container.className = 'evidence-track-list';
   container.innerHTML = rows.length
     ? rows.map((group, index) => evidenceTrackRow(group, index)).join('')
@@ -1060,9 +1180,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   bindTopKControl();
+  initializeEvidenceDisplayControls();
+  bindEvidenceDisplayControls();
 });
 
 window.useQuestion = useQuestion;
 window.askAgent = askAgent;
 window.loadAgentMemorySummary = loadAgentMemorySummary;
 window.clearAgentMemory = clearAgentMemory;
+window.toggleEvidenceDisplaySettings = toggleEvidenceDisplaySettings;

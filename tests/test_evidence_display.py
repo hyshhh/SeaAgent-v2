@@ -1,5 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+import cv2
 import numpy as np
 
 from agent.controller import AgentController
@@ -70,6 +73,49 @@ class EvidenceDisplayTest(unittest.TestCase):
         self.assertEqual(len(controller.display_groups), len(tracks))
         self.assertEqual([item["clipTrackId"] for item in controller.display_groups], [str(index) for index in range(1, 99)])
         self.assertTrue(all(len(item["keyframeIds"]) == 1 for item in controller.display_groups))
+
+    def test_evidence_tracks_are_sorted_by_similarity(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {}
+        controller.display_record = None
+        controller.display_groups = []
+        tracks = [
+            {"trackId": "1", "embeddingScore": 0.42},
+            {"trackId": "2", "embeddingScore": 0.91},
+            {"trackId": "3", "embeddingScore": 0.73},
+        ]
+
+        controller._display_tracks(tracks, include_clips=False, include_registry=False)
+
+        self.assertEqual([item["trackId"] for item in controller.display_groups], ["2", "3", "1"])
+        self.assertEqual([item["embeddingScore"] for item in controller.display_groups], [0.91, 0.73, 0.42])
+
+    def test_track_clip_is_used_even_when_a_cached_segment_exists(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {}
+        controller.display_record = None
+        controller.display_groups = []
+
+        controller._display_tracks([{"trackId": "1", "shipSegmentIds": ["segment-1"]}], include_clips=True, include_registry=False)
+
+        self.assertEqual(controller.display_groups[0]["clipTrackId"], "1")
+
+    def test_image_preview_uses_requested_compression_scale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            preview_dir = root / "clips"
+            self.assertTrue(cv2.imwrite(str(source), np.full((100, 200, 3), 255, dtype=np.uint8)))
+            service = ToolService.__new__(ToolService)
+            service.config = {"paths": {"clip_dir": str(preview_dir)}, "pipeline": {"evidence": {}}}
+
+            preview = service.getImagePreview(source, 0.5)
+            image = cv2.imread(str(preview), cv2.IMREAD_COLOR)
+
+            self.assertEqual(image.shape[:2], (50, 100))
+            self.assertEqual(service.getImagePreview(source, 1.0), source)
 
     def test_each_track_keeps_its_own_registry_reference(self):
         controller = AgentController.__new__(AgentController)

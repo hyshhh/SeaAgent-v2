@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=26">
+<link rel="stylesheet" href="/static/css/style.css?v=27">
 </head>
 <body>
 <header class="app-header">
@@ -214,7 +214,12 @@
       </section>
     </div>
     <section class="panel evidence-panel evidence-panel-wide">
-      <div class="panel-head"><div><span class="eyebrow">Evidence Workspace</span><h3>Multimodal Evidence</h3></div><span id="evidenceResultCount" class="round-limit">等待查询</span></div>
+      <div class="panel-head evidence-panel-head"><div><span class="eyebrow">Evidence Workspace</span><h3>Multimodal Evidence</h3></div><div class="evidence-head-actions"><span id="evidenceResultCount" class="round-limit">等待查询</span><button id="evidenceSettingsToggle" class="btn ghost btn-sm" type="button" onclick="toggleEvidenceDisplaySettings()" aria-expanded="false" aria-controls="evidenceDisplaySettings">显示设置</button></div></div>
+      <div id="evidenceDisplaySettings" class="evidence-display-settings" hidden>
+        <label>视频压缩倍率<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output><small>按原视频证据分辨率缩放并单独缓存。</small></label>
+        <label>图片压缩倍率<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output><small>关键帧和先验库参考图按所选倍率生成预览图。</small></label>
+        <label>最多显示条数<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">全部</output><small>输入 0 表示显示当前结果的全部轨迹。</small></label>
+      </div>
       <div id="evidenceGallery" class="evidence-track-list"><div class="evidence-track-empty">No evidence available</div></div>
     </section>
   </div>
@@ -393,7 +398,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=38"></script>
+<script src="/static/js/agent.js?v=39"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>

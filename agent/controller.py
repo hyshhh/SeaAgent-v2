@@ -1814,10 +1814,27 @@ class AgentController:
         self.rounds.append(record)
         return record
 
+    @staticmethod
+    def _evidence_similarity(track: dict[str, Any]) -> float | None:
+        for key in ("embeddingScore", "score", "matchScore"):
+            value = track.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
         if self.display_record is not None:
             return
         unique_tracks = list({str(item["trackId"]): item for item in tracks}.values())
+        ranked_tracks = []
+        for index, track in enumerate(unique_tracks):
+            score = self._evidence_similarity(track)
+            ranked_tracks.append((score is not None, score if score is not None else 0.0, -index, track))
+        unique_tracks = [item[-1] for item in sorted(ranked_tracks, reverse=True)]
         if not unique_tracks:
             self.display_record = {
                 "displayId": f"display-{uuid.uuid4().hex[:12]}",
@@ -1850,9 +1867,10 @@ class AgentController:
             self.display_groups.append({
                 "trackId": track_id,
                 "hullNumber": track.get("finalHullNumber"),
+                "embeddingScore": self._evidence_similarity(track),
                 "keyframeIds": keyframe_ids[:1],
                 "shipSegmentIds": segment_ids,
-                "clipTrackId": track_id if include_clips and not segment_ids else None,
+                "clipTrackId": track_id if include_clips else None,
                 "clipTimeRange": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None,
                 "registryReferenceIds": reference_ids,
                 "clipError": None,

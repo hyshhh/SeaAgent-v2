@@ -22,6 +22,12 @@ def _controller(request: Request, event_handler=None) -> AgentController:
     )
 
 
+async def _evidence_image_response(request: Request, image_path: Path, scale: float):
+    preview_path = await run_in_threadpool(request.app.state.tool_service.getImagePreview, image_path, scale)
+    media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
+    return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
     return await run_in_threadpool(_controller(request).answer, body.question, body.top_k)
@@ -92,11 +98,11 @@ async def track_frames(track_id: str, request: Request):
     return request.app.state.tool_service.getFrames([track_id])
 
 @router.get("/api/evidence/keyframes/{keyframe_id}")
-async def keyframe_file(keyframe_id: str, request: Request):
+async def keyframe_file(keyframe_id: str, request: Request, scale: float = 1.0):
     item = request.app.state.repository.get_keyframe(keyframe_id)
     if not item or not Path(item["keyframePath"]).exists():
         raise HTTPException(404, "关键帧不存在")
-    return FileResponse(item["keyframePath"])
+    return await _evidence_image_response(request, Path(item["keyframePath"]), scale)
 
 @router.get("/api/evidence/clips/{segment_id}")
 async def clip_file(segment_id: str, request: Request):
@@ -108,7 +114,7 @@ async def clip_file(segment_id: str, request: Request):
     return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
 
 @router.get("/api/evidence/clips/{segment_id}/poster")
-async def clip_poster(segment_id: str, request: Request):
+async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
     if Path(segment_id).name != segment_id:
         raise HTTPException(400, "片段编号非法")
     clip_dir = Path(request.app.state.config["paths"]["clip_dir"])
@@ -119,23 +125,23 @@ async def clip_poster(segment_id: str, request: Request):
         await run_in_threadpool(request.app.state.tool_service._ensure_clip_poster, clip_path, path, quality)
     if not path.exists():
         raise HTTPException(404, "目标船片段封面不存在")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    return await _evidence_image_response(request, path, scale)
 
 @router.get("/api/evidence/tracks/{track_id}/clip")
-async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None):
+async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None, scale: float = 1.0):
     time_range = (startTime, endTime) if startTime is not None and endTime is not None else None
-    result = await run_in_threadpool(request.app.state.tool_service.getClip, track_id, time_range)
+    result = await run_in_threadpool(request.app.state.tool_service.getClip, track_id, time_range, scale)
     path = Path(result.get("segmentPath", ""))
     if not result.get("ok") or not result.get("found", True) or not path.is_file():
         raise HTTPException(404, result.get("error") or "目标船片段不存在")
     return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
 
 @router.get("/api/evidence/registry/{reference_id}")
-async def registry_file(reference_id: str, request: Request):
+async def registry_file(reference_id: str, request: Request, scale: float = 1.0):
     items = request.app.state.repository.references_by_ids([reference_id])
     if not items or not Path(items[0]["imagePath"]).exists():
         raise HTTPException(404, "先验库参考图不存在")
-    return FileResponse(items[0]["imagePath"])
+    return await _evidence_image_response(request, Path(items[0]["imagePath"]), scale)
 
 @router.get("/api/config")
 async def public_config(request: Request):

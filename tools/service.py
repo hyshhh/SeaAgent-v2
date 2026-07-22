@@ -47,7 +47,7 @@ class ToolService:
         frames = [frame for group in grouped.values() for frame in group["keyframes"]]
         return {"ok": True, "keyframeIds": [frame["keyframeId"] for frame in frames], "keyframes": frames, "keyframesByTrack": grouped, "discardedKeyframeIds": discarded, "unsearchableTrackIds": missing}
 
-    def getClip(self, trackId: str | int, timeRange: tuple[float, float] | None = None) -> dict[str, Any]:
+    def getClip(self, trackId: str | int, timeRange: tuple[float, float] | None = None, scale: float | None = None) -> dict[str, Any]:
         track = self.repository.get_track(trackId)
         if not track:
             return {"ok": False, "error": "track_not_found", "trackId": str(trackId)}
@@ -76,9 +76,10 @@ class ToolService:
             return {"ok": False, "error": "source_evidence_unavailable", "trackId": str(trackId)}
         box_map = {int(item["frameIndex"]): item["bbox"] for item in boxes}
         evidence = self.config["pipeline"].get("evidence", {})
+        media_scale = self._evidence_scale(scale)
         canvas_size = (
-            self._even_size(evidence.get("clip_width", 640)),
-            self._even_size(evidence.get("clip_height", 360)),
+            self._even_size(max(160, int(round(evidence.get("clip_width", 640) * media_scale)))),
+            self._even_size(max(90, int(round(evidence.get("clip_height", 360) * media_scale)))),
         )
         clip_fps = max(1.0, float(evidence.get("clip_fps", 15)))
         clip_crf = max(0, min(51, int(evidence.get("clip_crf", 31))))
@@ -147,6 +148,33 @@ class ToolService:
         codec = self._compress_evidence_clip(temporary_path, output_path, codec, clip_crf)
         self._write_poster(poster_path, poster_frame, poster_quality)
         return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "posterPath": str(poster_path) if poster_path.is_file() else None, "codec": codec, "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
+
+    def getImagePreview(self, sourcePath: str | Path, scale: float | None = None) -> Path:
+        source_path = Path(sourcePath)
+        media_scale = self._evidence_scale(scale)
+        if media_scale >= 0.999:
+            return source_path
+        source_stat = source_path.stat()
+        cache_key = f"image-preview-v1|{source_path.resolve()}|{source_stat.st_mtime_ns}|{source_stat.st_size}|{media_scale:.3f}"
+        cache_dir = Path(self.config["paths"]["clip_dir"]) / "image-previews"
+        preview_path = cache_dir / f"image-{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:16]}.jpg"
+        if preview_path.is_file() and preview_path.stat().st_size > 0:
+            return preview_path
+        image = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
+        if image is None or image.size == 0:
+            return source_path
+        height, width = image.shape[:2]
+        target_size = (max(1, int(round(width * media_scale))), max(1, int(round(height * media_scale))))
+        preview = cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        quality = max(1, min(100, int(self.config["pipeline"].get("evidence", {}).get("image_preview_quality", 82))))
+        temporary_path = preview_path.with_name(f"{preview_path.stem}-{uuid.uuid4().hex[:8]}.tmp.jpg")
+        try:
+            if cv2.imwrite(str(temporary_path), preview, [cv2.IMWRITE_JPEG_QUALITY, quality]):
+                temporary_path.replace(preview_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        return preview_path if preview_path.is_file() else source_path
 
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
         items = self.repository.registry_by_hull(hullNumber)
@@ -458,6 +486,14 @@ class ToolService:
             writer.release()
             path.unlink(missing_ok=True)
         return None, None
+
+    @staticmethod
+    def _evidence_scale(value: float | None) -> float:
+        try:
+            scale = float(value if value is not None else 1.0)
+        except (TypeError, ValueError):
+            scale = 1.0
+        return max(0.25, min(1.0, scale))
 
     @staticmethod
     def _even_size(value: int) -> int:
