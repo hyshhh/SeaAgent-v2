@@ -756,6 +756,39 @@
   }
 }
 
+/* 单次查询返回数量 */
+.agent-query-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.agent-query-title h2 { margin: 0; }
+.agent-topk-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid #2a536c;
+  border-radius: 9px;
+  background: rgba(12, 36, 53, .82);
+  color: #a9c8d8;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.agent-topk-control input[type="checkbox"] { accent-color: #29c6d8; }
+.agent-topk-control input[type="number"] {
+  width: 48px;
+  padding: 3px 5px;
+  border: 1px solid #315b72;
+  border-radius: 6px;
+  background: #0a1b29;
+  color: #e6f5fb;
+  text-align: center;
+}
+.agent-topk-control.disabled { opacity: .58; }
+
 /* 按轨迹组织的多模态证据 */
 .evidence-track-list {
   display: grid;

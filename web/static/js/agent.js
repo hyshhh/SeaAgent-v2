@@ -55,6 +55,41 @@ function questionTypeLabel(type) {
   })[type] || valueText(type);
 }
 
+function initializeTopKControl(defaultValue = 3) {
+  const enabled = document.getElementById('agentTopKEnabled');
+  const input = document.getElementById('agentTopKValue');
+  if (!enabled || !input || input.dataset.initialized === 'true') return;
+  const savedEnabled = localStorage.getItem('seaagent-topk-enabled');
+  const savedValue = Number(localStorage.getItem('seaagent-topk-value'));
+  enabled.checked = savedEnabled == null ? true : savedEnabled === 'true';
+  input.value = String(Number.isFinite(savedValue) && savedValue >= 1 && savedValue <= 20 ? savedValue : defaultValue);
+  input.disabled = !enabled.checked;
+  enabled.closest('.agent-topk-control')?.classList.toggle('disabled', !enabled.checked);
+  input.dataset.initialized = 'true';
+}
+
+function bindTopKControl() {
+  const enabled = document.getElementById('agentTopKEnabled');
+  const input = document.getElementById('agentTopKValue');
+  if (!enabled || !input) return;
+  enabled.addEventListener('change', () => {
+    input.disabled = !enabled.checked;
+    enabled.closest('.agent-topk-control')?.classList.toggle('disabled', !enabled.checked);
+    localStorage.setItem('seaagent-topk-enabled', String(enabled.checked));
+  });
+  input.addEventListener('change', () => {
+    input.value = String(Math.max(1, Math.min(20, Number(input.value) || 3)));
+    localStorage.setItem('seaagent-topk-value', input.value);
+  });
+}
+
+function selectedTopK() {
+  const enabled = document.getElementById('agentTopKEnabled');
+  const input = document.getElementById('agentTopKValue');
+  if (!enabled?.checked) return null;
+  return Math.max(1, Math.min(20, Number(input?.value) || 3));
+}
+
 async function loadAgentMemorySummary(showNotice = false) {
   const trackCount = document.getElementById('agentTrackCount');
   const registryStatus = document.getElementById('agentRegistryStatus');
@@ -75,6 +110,7 @@ async function loadAgentMemorySummary(showNotice = false) {
     if (registryStatus) registryStatus.textContent = `${numberOfRegistryItems} 个库项`;
     if (modelName) modelName.textContent = summary.recognitionModel || '模型已连接';
     if (qaMemoryCount) qaMemoryCount.textContent = `问答记忆 ${summary.qaSessionCount || 0} 条`;
+    initializeTopKControl(summary.retrievalTopK || 3);
     const limit = document.getElementById('agentRoundLimit');
     if (limit) {
       const baseRounds = summary.baseMaxRounds || summary.maxRounds || 3;
@@ -190,7 +226,10 @@ function showAgentFinalView() {
 function renderAgentAnswer(result) {
   showAgentFinalView();
     const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
-  const chain = (result.toolChain || []).map((item) => `<span class="tool-tag">${escapeHtml(item)}</span>`).join('');
+  const records = Array.isArray(result.toolRecords) && result.toolRecords.length
+    ? result.toolRecords
+    : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
+  const chain = records.map((item) => `<span class="tool-tag">${escapeHtml(formatToolCall(item.round, item))}</span>`).join('');
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
     <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
@@ -810,17 +849,46 @@ function renderIntentAgentCard(event) {
   initializePlanBlueprint(event.planBlueprint);
 }
 
+function toolResultText(call) {
+  if (call.phase === 'running') return '执行中';
+  if (call.phase === 'skipped' || call.skipped) return `跳过：${compactAgentValue(call.skipReason || '条件不满足', 70)}`;
+  if (call.error || call.phase === 'failed' || call.ok === false) return `失败：${compactAgentValue(call.error || '工具执行失败', 70)}`;
+  const summary = call.summary && typeof call.summary === 'object' ? call.summary : call;
+  if (summary.trackCount != null) return `${summary.trackCount} 条轨迹`;
+  if (summary.keyframeCount != null) return `${summary.keyframeCount} 张关键帧`;
+  if (summary.matchCount != null) return `${summary.matchCount} 条匹配结果`;
+  if (summary.registryCount != null) return `${summary.registryCount} 个先验库项`;
+  if (summary.exactMatchHullCount != null) return `${summary.exactMatchHullCount} 组精确匹配`;
+  if (summary.totalTrackCount != null) return `${summary.returnedTrackCount ?? summary.totalTrackCount} / ${summary.totalTrackCount} 条轨迹`;
+  if (Array.isArray(summary.trackIds)) return `${summary.trackIds.length} 个轨迹编号`;
+  if (Array.isArray(summary.keyframeIds)) return `${summary.keyframeIds.length} 个关键帧编号`;
+  if (Array.isArray(summary.matchedHullNumbers)) return `${summary.matchedHullNumbers.length} 个命中舷号`;
+  if (summary.highThresholdShipCount != null) return `${summary.lowThresholdShipCount}—${summary.highThresholdShipCount} 艘船`;
+  if (summary.shipSegmentId) return `片段 ${summary.shipSegmentId}`;
+  if (Array.isArray(summary.registryReferenceIds)) return `${summary.registryReferenceIds.length} 张库参考图`;
+  if (summary.found === true) return '已找到结果';
+  if (summary.found === false) return '未找到结果';
+  if (summary.decision) return String(summary.decision);
+  if (call.summary != null && typeof call.summary !== 'object') return compactAgentValue(call.summary, 90);
+  return '执行完成';
+}
+
+function formatToolCall(round, call) {
+  const roundNumber = Math.max(1, Number(round || call.round || 1));
+  if (call.legacy) return `${roundNumber}-${call.legacy}-执行完成`;
+  const tool = call.tool || 'tool';
+  const id = call.id || 'result';
+  return `${roundNumber}-${tool}(${id})-${toolResultText(call)}`;
+}
+
 function updateObserverToolEvent(event) {
   const card = ensureAgentCard(event.round, 'observer');
   if (!card) return;
   const logs = card._toolLogs || [];
   const index = logs.findIndex((item) => item.id === event.id);
-  const label = event.tool || event.id || '工具';
-  const status = event.phase === 'running' ? '执行中' : event.phase === 'skipped' || event.skipped ? '跳过' : event.ok === false || event.phase === 'failed' ? '失败' : '完成';
-  const detail = event.error ? `：${compactAgentValue(event.error, 70)}` : event.summary ? `：${compactAgentValue(event.summary, 90)}` : '';
-  const item = {id: event.id, text: `${label} · ${status}${detail}`};
+  const item = {id: event.id, text: formatToolCall(event.round, event)};
   if (index >= 0) logs[index] = item; else logs.push(item);
-  card._toolLogs = logs.slice(-6);
+  card._toolLogs = logs;
   const content = card.querySelector('.agent-stream-text');
   if (content) content.textContent = card._toolLogs.map((entry) => entry.text).join('\n');
   updatePlanProgressFromTool(event);
@@ -887,7 +955,9 @@ function appendThoughtEvent(event) {
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
     const content = card.querySelector('.agent-stream-text');
-    const summaryText = compactAgentText(event) || '';
+    const summaryText = event.role === 'observer' && card._toolLogs?.length
+      ? card._toolLogs.map((entry) => entry.text).join('\n')
+      : compactAgentText(event) || '';
     const isPlanCard = event.role === 'planner' || event.planOnly;
     const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
     content.textContent = summaryText || planNote || event.fallback || '本轮没有可展示信息';
@@ -907,11 +977,11 @@ function appendThoughtEvent(event) {
     appendSystemThought(event);
   }
 }
-async function streamAgentQuery(question) {
+async function streamAgentQuery(question, topK = null) {
   const response = await fetch('/api/agent/query/stream', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question}),
+    body: JSON.stringify({question, top_k: topK}),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -960,7 +1030,7 @@ async function askAgent() {
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
     document.getElementById('agentAnswer').textContent = '正在基于轨迹记忆生成回答…';
     renderEvidence(null, null, 'Collecting evidence...');
-    const result = await streamAgentQuery(question);
+    const result = await streamAgentQuery(question, selectedTopK());
     renderAgentAnswer(result);
     renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
@@ -986,6 +1056,7 @@ document.addEventListener('DOMContentLoaded', () => {
       askAgent();
     }
   });
+  bindTopKControl();
 });
 
 window.useQuestion = useQuestion;

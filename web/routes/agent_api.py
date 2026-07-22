@@ -24,7 +24,7 @@ def _controller(request: Request, event_handler=None) -> AgentController:
 
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
-    return await run_in_threadpool(_controller(request).answer, body.question)
+    return await run_in_threadpool(_controller(request).answer, body.question, body.top_k)
 
 
 @router.post("/api/agent/query/stream")
@@ -39,7 +39,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
 
         async def execute() -> None:
             try:
-                result = await run_in_threadpool(_controller(request, emit).answer, body.question)
+                result = await run_in_threadpool(_controller(request, emit).answer, body.question, body.top_k)
                 await event_queue.put({"type": "complete", "title": "闭环推理完成", "message": "最终回答与视觉证据已生成", "result": result})
             except Exception as error:
                 await event_queue.put({"type": "error", "title": "闭环推理失败", "message": str(error)})
@@ -84,6 +84,7 @@ async def memory_summary(request: Request):
         "maxRounds": int(config["pipeline"]["agent"]["max_rounds"]) + recovery_rounds,
         "baseMaxRounds": config["pipeline"]["agent"]["max_rounds"],
         "acceptanceRecoveryRounds": recovery_rounds,
+        "retrievalTopK": int(config["pipeline"]["retrieval"].get("top_k", 3)),
     }
 
 @router.get("/api/memory/tracks/{track_id}/frames")

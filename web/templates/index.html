@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=25">
+<link rel="stylesheet" href="/static/css/style.css?v=26">
 </head>
 <body>
 <header class="app-header">
@@ -141,7 +141,10 @@
 
     <div class="agent-query-grid">
       <section class="panel agent-query-panel">
-        <div class="panel-head"><div><span class="eyebrow">自然语言查询</span><h2>向当前监控记忆提问</h2></div><span class="round-limit" id="agentRoundLimit">最多三轮</span></div>
+        <div class="panel-head">
+          <div><span class="eyebrow">自然语言查询</span><div class="agent-query-title"><h2>向当前监控记忆提问</h2><label class="agent-topk-control"><input id="agentTopKEnabled" type="checkbox" checked><span>启用 TopK</span><input id="agentTopKValue" type="number" min="1" max="20" value="3" aria-label="TopK 返回数量"></label></div></div>
+          <span class="round-limit" id="agentRoundLimit">最多三轮</span>
+        </div>
         <div class="question-examples agent-example-grid">
           <button onclick="useQuestion('舷号 0857 有没有在视频中出现？')">舷号查询</button>
           <button onclick="useQuestion('视频中有没有出现一个黄色的无人艇？')">描述查询</button>
@@ -390,7 +393,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=35"></script>
+<script src="/static/js/agent.js?v=36"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>

@@ -37,6 +37,7 @@ class AgentController:
         self.meta: dict[str, Any] = {}
         self.rounds: list[dict[str, Any]] = []
         self.tool_chain: list[str] = []
+        self.tool_records: list[dict[str, Any]] = []
         self.display_record: dict[str, Any] | None = None
         self.display_groups: list[dict[str, Any]] = []
         self.working_scope: dict[str, Any] = {}
@@ -69,7 +70,7 @@ class AgentController:
             **event,
         )
 
-    def answer(self, question: str) -> dict[str, Any]:
+    def answer(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = question.strip()
         self._emit("status", "IntentAgent", "正在按规则表解析用户意图")
@@ -99,7 +100,7 @@ class AgentController:
             queryScope=scope,
             planBlueprint=self.plan_blueprint,
         )
-        self.rounds, self.tool_chain = [], []
+        self.rounds, self.tool_chain, self.tool_records = [], [], []
         self.display_record, self.display_groups = None, []
         self.working_scope = {}
         agent_settings = self.config.get("pipeline", {}).get("agent", {})
@@ -110,10 +111,13 @@ class AgentController:
         self.acceptance_recovery_rounds = int(agent_settings.get("acceptance_recovery_rounds", self.acceptance_recovery_rounds))
         self.display_limit = int(agent_settings.get("display_limit", self.display_limit))
         self.retrieval_page_size = int(agent_settings.get("retrieval_page_size", getattr(self, "retrieval_page_size", 60)))
+        default_top_k = int(self.config.get("pipeline", {}).get("retrieval", {}).get("top_k", 3))
+        self.query_top_k = max(1, min(20, int(top_k if top_k is not None else default_top_k)))
         self.meta["planMode"] = self.plan_mode
         self.meta["maxRounds"] = self.max_rounds
         self.meta["acceptanceRecoveryRounds"] = self.acceptance_recovery_rounds
         self.meta["retrievalPageSize"] = self.retrieval_page_size
+        self.meta["retrievalTopK"] = self.query_top_k
         self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
         self._emit("status", "PlanAgent", f"当前规划模式：{'硬编码辅助' if self.plan_mode == 'guided' else '自主规划（PlanAgent规划，ObserveAgent执行）'}", planMode=self.plan_mode)
         try:
@@ -1276,6 +1280,7 @@ class AgentController:
             plan = self._align_plan_with_acceptance(plan, acceptance)
         else:
             plan = forced_plan
+        self._apply_query_top_k(plan)
         calls = plan.get("calls") or []
         public_plan = self._public_plan(plan, calls)
         public_plan["planMode"] = "autonomous"
@@ -1373,7 +1378,7 @@ class AgentController:
         )
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
-        self._store_observations(round_id, observed)
+        self._store_observations(round_id, observed, round_number)
         record = {
             "roundId": round_id,
             "plan": public_plan,
@@ -1666,6 +1671,8 @@ class AgentController:
         if self.meta.get("expectedOutcome") and self.meta.get("expectedOutcome") not in guided_goal:
             guided_goal = f"{goal}｜验收：{self.meta.get('expectedOutcome')}"
         plan = self.planner.build(guided_goal, calls, self.meta.get("timeRange"), evidence_gap, lambda delta: self._emit("agent_delta", "PlanAgent", "", round=round_number, role="planner", delta=delta), intent=self.meta)
+        self._apply_query_top_k(plan)
+        calls = plan.get("calls") or []
         public_plan = self._public_plan(plan, calls)
         self._emit("agent_end", "PlanAgent", "规划完成，等待 ObserveAgent 执行", round=round_number, role="planner", calls=public_plan["calls"], modelSummary=plan.get("modelPlan"), fallback=plan.get("modelFallback"), planOnly=True, executionOwner="ObserveAgent", planBlueprint=self.plan_blueprint)
 
@@ -1682,7 +1689,7 @@ class AgentController:
         self._emit("agent_end", "ReflectAgent", reflection.get("reason", reason), round=round_number, role="reflector", state=reflection.get("state"), evidenceGap=reflection.get("evidenceGap"), modelSummary=reflection.get("modelReflection"), fallback=reflection.get("modelFallback"), nextAction=reflection.get("nextAction"))
         round_id = f"round-{uuid.uuid4().hex[:12]}"
         self.repository.add_round(round_id, self.session_id, public_plan, reflection)
-        self._store_observations(round_id, observed)
+        self._store_observations(round_id, observed, round_number)
         record = {"roundId": round_id, "plan": public_plan, "observation": observed["summary"], "reflection": reflection, "scope": observed["scope"]}
         self.rounds.append(record)
         return record
@@ -1742,7 +1749,7 @@ class AgentController:
         except Exception as error:
             self.display_record = {"ok": False, "error": str(error), "scope": {}}
 
-    def _store_observations(self, record_id: str, observed: dict[str, Any]) -> None:
+    def _store_observations(self, record_id: str, observed: dict[str, Any], round_number: int) -> None:
         for observation in observed["observations"]:
             if observation.get("skipped"):
                 continue
@@ -1750,6 +1757,7 @@ class AgentController:
             audit_result = Observer._summarize_observation(observation)
             self.repository.add_evidence(evidence_id, record_id, audit_result, {"tool": observation["tool"], "callId": observation["id"]})
             self.tool_chain.append(f"{observation['tool']}({observation['id']})")
+            self.tool_records.append({"round": round_number, **audit_result})
 
     @staticmethod
     def _session_audit_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -1769,6 +1777,7 @@ class AgentController:
             "trackCount": len(tracks),
             "tracks": compact_tracks,
             "toolChain": result.get("toolChain", [])[:30],
+            "toolRecords": result.get("toolRecords", [])[:30],
             "evidence": result.get("evidence", {}),
             "roundCount": len(result.get("rounds", [])),
         }
@@ -1782,7 +1791,7 @@ class AgentController:
         if display and display.get("tracks"):
             self._display_tracks(display["tracks"], display.get("includeClips", True) is not False, bool(display.get("includeRegistry")))
         primary = [item["trackId"] for item in tracks[:self.display_limit]]
-        result = {"sessionId": self.session_id, "question": self.question, "questionType": self.meta.get("questionType"), "conclusion": conclusion, "answerText": f"{conclusion}。{reason}", "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None, "toolChain": self.tool_chain, "tracks": tracks, "evidence": self._collect_evidence(), "displayGroups": self.display_groups, "display": self._public_display(), "uncertainty": state, "primaryTrackIds": primary, "remainingTrackIds": [item["trackId"] for item in tracks[self.display_limit:]], "rounds": [{key: value for key, value in item.items() if key != "scope"} for item in self.rounds]}
+        result = {"sessionId": self.session_id, "question": self.question, "questionType": self.meta.get("questionType"), "conclusion": conclusion, "answerText": f"{conclusion}。{reason}", "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None, "toolChain": self.tool_chain, "toolRecords": self.tool_records, "tracks": tracks, "evidence": self._collect_evidence(), "displayGroups": self.display_groups, "display": self._public_display(), "uncertainty": state, "primaryTrackIds": primary, "remainingTrackIds": [item["trackId"] for item in tracks[self.display_limit:]], "rounds": [{key: value for key, value in item.items() if key != "scope"} for item in self.rounds]}
         if extra:
             result.update(extra)
         self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(tracks))
@@ -1807,6 +1816,13 @@ class AgentController:
         for round_item in self.rounds:
             visit(round_item.get("scope", {}))
         return {key: list(dict.fromkeys(values)) for key, values in collected.items()}
+
+    def _apply_query_top_k(self, plan: dict[str, Any]) -> None:
+        top_k = max(1, min(20, int(getattr(self, "query_top_k", 3))))
+        for call in plan.get("calls") or []:
+            if call.get("tool") not in {"matchText", "matchImage"}:
+                continue
+            call.setdefault("arguments", {})["topK"] = top_k
 
     def _public_display(self) -> dict[str, Any] | None:
         if not self.display_record:
