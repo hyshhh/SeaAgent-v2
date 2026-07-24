@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from services import AgentLLMService
 from tools import ToolService
+from tools.target_parser import infer_intent_fields, normalize_target_items
 
 from .lc_tools import build_intent_tools, build_load_skill_tool, build_observe_tools
 from .llm_adapter import build_chat_model
@@ -531,38 +532,72 @@ def build_sea_agent_graph(
         )
         handoff = out.get("handoff") or {}
         intent = handoff.get("intent") if isinstance(handoff.get("intent"), dict) else {}
+        inferred = infer_intent_fields(question)
+        used_fallback = not intent
+
         if not intent:
-            # 从工具结果 / 问题文本兜底拼装意图，保证链路不中断
-            hull_match = re.search(r"(?:舷号\s*)?([0-9A-Za-z]{2,12})", question or "")
-            guessed_hull = (hull_match.group(1) if hull_match else "") or ""
-            if guessed_hull and not any(ch.isdigit() for ch in guessed_hull):
-                guessed_hull = ""
             intent = {
-                "targetScope": "track_memory",
-                "targetKind": "hull" if guessed_hull else "all",
-                "operation": "existence" if any(token in (question or "") for token in ("有没有", "是否", "出现", "存在")) else "list",
-                "registryRelation": "any",
-                "hullNumber": guessed_hull or None,
+                **inferred,
                 "question": question,
-                "expectedOutcome": f"确认舷号 {guessed_hull} 是否出现" if guessed_hull else "返回相关轨迹",
-                "successCriteria": "工具结果足以回答",
-                "nextAgentFocus": f"getTrack(hullNumber={guessed_hull}) 与 matchHull" if guessed_hull else "先筛选轨迹",
                 "intentSource": "langgraph_fallback",
             }
-            for record in out.get("tool_records") or []:
-                result = record.get("result") or {}
-                if record.get("tool") == "parseTime" and result.get("timeRange"):
-                    intent["timeRange"] = result.get("timeRange")
-                    intent["timeExpression"] = result.get("expression")
-                    intent["timeSource"] = "tool"
-                if record.get("tool") == "parseTargets" and result.get("targetItems"):
-                    intent["targetItems"] = result.get("targetItems")
-                if record.get("tool") == "extractHull" and result.get("hullNumber"):
-                    intent["hullNumber"] = result.get("hullNumber")
-                    intent["targetKind"] = "hull"
+        else:
+            intent = dict(intent)
+            intent["intentSource"] = intent.get("intentSource") or "langgraph_react"
+
+        # 工具结果优先写入时间/多目标/舷号
+        for record in out.get("tool_records") or []:
+            result = record.get("result") or {}
+            if record.get("tool") == "parseTime" and result.get("timeRange"):
+                intent["timeRange"] = result.get("timeRange")
+                intent["timeExpression"] = result.get("expression")
+                intent["timeSource"] = "tool"
+            if record.get("tool") == "parseTargets" and result.get("targetItems"):
+                intent["targetItems"] = result.get("targetItems")
+            if record.get("tool") == "extractHull" and result.get("hullNumber"):
+                intent["hullNumber"] = result.get("hullNumber")
+                intent["targetKind"] = "hull"
+
+        # 模型 handoff 残缺时，用规则补全 description / operation 等
+        if not intent.get("hullNumber") and inferred.get("hullNumber"):
+            intent["hullNumber"] = inferred["hullNumber"]
+        if not intent.get("description") and inferred.get("description"):
+            intent["description"] = inferred["description"]
+        if not intent.get("targetItems") and inferred.get("targetItems"):
+            intent["targetItems"] = inferred["targetItems"]
+        if intent.get("targetItems"):
+            intent["targetItems"] = normalize_target_items(intent.get("targetItems"))
+        if not intent.get("operation") or intent.get("operation") not in {
+            "existence", "list", "time", "count", "explain",
+        }:
+            intent["operation"] = inferred.get("operation") or "list"
+        if not intent.get("targetKind") or intent.get("targetKind") == "all":
+            if intent.get("hullNumber"):
+                intent["targetKind"] = "hull"
+            elif intent.get("description"):
+                intent["targetKind"] = "description"
+            else:
+                intent["targetKind"] = inferred.get("targetKind") or "all"
+        if not intent.get("targetScope"):
+            intent["targetScope"] = inferred.get("targetScope") or "track_memory"
+        if not intent.get("registryRelation"):
+            intent["registryRelation"] = inferred.get("registryRelation") or "any"
+        if not intent.get("expectedOutcome"):
+            intent["expectedOutcome"] = inferred.get("expectedOutcome")
+        if not intent.get("successCriteria"):
+            intent["successCriteria"] = inferred.get("successCriteria") or "工具结果足以回答用户问题"
+        if not intent.get("nextAgentFocus"):
+            intent["nextAgentFocus"] = inferred.get("nextAgentFocus")
+        if not intent.get("questionType"):
+            intent["questionType"] = inferred.get("questionType")
+        if intent.get("intentConfidence") is None:
+            intent["intentConfidence"] = inferred.get("intentConfidence")
+        if used_fallback and intent.get("description"):
+            # 描述类兜底比纯 all 更可信
+            intent["intentConfidence"] = max(float(intent.get("intentConfidence") or 0), 0.72)
+
         intent.setdefault("question", question)
         intent["selectedSkills"] = out.get("skill_ids") or []
-        intent["intentSource"] = intent.get("intentSource") or "langgraph_react"
         if intent.get("timeRange") and not intent.get("queryScope"):
             intent["queryScope"] = intent.get("timeRange")
         _emit(
@@ -675,7 +710,8 @@ def build_sea_agent_graph(
                 "workingScopeKeys": list((state.get("working_scope") or {}).keys()),
                 "rules": [
                     "先 getTrack 再 getFrames",
-                    "描述匹配用 matchText，图像用 matchImage",
+                    "描述匹配用 matchText(description=...)，galleryImages 可省略（自动用本轮 getFrames 关键帧）",
+                    "图像匹配用 matchImage，query/gallery 可省略",
                     f"matchText/matchImage 的 topK 默认 {top_k}",
                     "计数用 dedupTracks",
                     "不要伪造轨迹",

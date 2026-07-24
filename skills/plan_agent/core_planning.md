@@ -17,7 +17,8 @@
 - 无法继续规划 → `handoff_to_reflect(summary, evidenceGap, proposedState)`
 
 `planHint` 写清建议工具顺序与关键参数，例如：
-`先 getTrack(hullNumber=0857)，再 getFrames，必要时 matchHull`
+- 舷号：`先 getTrack(hullNumber=0857)，再 getFrames，必要时 matchHull`
+- 描述：`先 getTrack，再 getFrames，然后 matchText(description=黄色无人艇)（galleryImages 可省略，系统自动用关键帧）`
 
 ## 禁止
 - 禁止不调用 handoff 就结束

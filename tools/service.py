@@ -200,10 +200,12 @@ class ToolService:
         searchable_ids = {item["registryId"] for item in valid}
         return {"ok": True, "registryItems": items, "registryReferenceIds": [item["referenceId"] for item in valid], "registryReferences": valid, "discardedReferenceIds": discarded, "unsearchableRegistryIds": [item["registryId"] for item in items if item["registryId"] not in searchable_ids]}
 
-    def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None, topK: int | None = None) -> dict[str, Any]:
+    def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
         if not description.strip():
             return {"ok": False, "error": "description_required", "matches": []}
         galleryImages = self._flatten_image_records(galleryImages)
+        if not galleryImages:
+            return {"ok": False, "error": "galleryImages_required", "matches": [], "hint": "请先 getFrames 或 listRegistry，再把 keyframes/registryReferences 作为 galleryImages"}
         registry_images = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
         if registry_images:
             query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
@@ -269,7 +271,7 @@ class ToolService:
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
         return {"ok": True, "matchMode": "text_to_image", "matches": matches[:topK] if topK else matches, "missingKeyframeIds": missing}
 
-    def matchImage(self, queryImages: list[dict[str, Any]] | dict[str, Any] | None, galleryImages: list[dict[str, Any]] | dict[str, Any] | None, topK: int | None = None) -> dict[str, Any]:
+    def matchImage(self, queryImages: list[dict[str, Any]] | dict[str, Any] | None = None, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
         queryImages = self._flatten_image_records(queryImages)
         galleryImages = self._flatten_image_records(galleryImages)
         if not queryImages or not galleryImages:

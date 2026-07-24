@@ -113,6 +113,140 @@ def extract_hull(question: str) -> dict[str, Any]:
     return {"ok": True, "hullNumber": extract_hull_number(question)}
 
 
+def extract_description(question: str) -> str | None:
+    """从问题中抽取外观/类别描述（非舷号查询时的规则兜底）。"""
+    text = re.sub(r"\s+", " ", str(question or "")).strip()
+    if not text:
+        return None
+    if extract_hull_number(text):
+        # 明确舷号问句时不把整句当描述
+        if re.search(r"[舷弦]号", text):
+            return None
+    # 去掉常见问句壳子，保留外观短语
+    cleaned = text
+    for pattern in (
+        r"^[请问]+",
+        r"视频中?",
+        r"监控(?:画面|视频|记录)?中?",
+        r"轨迹记忆中?",
+        r"画面中?",
+        r"有没有",
+        r"是否有?",
+        r"有无",
+        r"能不能看到",
+        r"能不能找到",
+        r"出现过?",
+        r"存在",
+        r"出现",
+        r"看到",
+        r"找到",
+        r"查询",
+        r"检索",
+        r"统计",
+        r"多少艘?",
+        r"几艘",
+        r"一个",
+        r"一条",
+        r"一艘",
+        r"这[个艘条]?",
+        r"那[个艘条]?",
+        r"[？?。！!]+$",
+    ):
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n：:，,、；;的了吗呢啊呀")
+    # 去掉残留「有/是」等单字
+    cleaned = re.sub(r"^(?:有|是|为)\s*", "", cleaned).strip()
+    if len(cleaned) < 2:
+        return None
+    # 纯数字/短舷号形态不当描述
+    if re.fullmatch(r"[0-9A-Za-z-]{2,12}", cleaned):
+        return None
+    return cleaned
+
+
+def infer_intent_fields(question: str) -> dict[str, Any]:
+    """规则推断意图字段，供 Intent 未 handoff 或字段残缺时补全。"""
+    text = str(question or "").strip()
+    hull = extract_hull_number(text)
+    description = None if hull and re.search(r"[舷弦]号", text) else extract_description(text)
+    if hull and description and description.upper() == hull:
+        description = None
+
+    existence_tokens = ("有没有", "是否", "有无", "出现", "存在", "看到", "找到")
+    count_tokens = ("多少", "几艘", "数量", "几个", "计数")
+    if any(token in text for token in count_tokens):
+        operation = "count"
+    elif any(token in text for token in existence_tokens):
+        operation = "existence"
+    else:
+        operation = "list"
+
+    if "未在库" in text or "不在库" in text or "库外" in text:
+        registry_relation = "out"
+    elif "在库" in text or "库内" in text or "先验库" in text:
+        registry_relation = "in"
+    else:
+        registry_relation = "any"
+
+    if hull:
+        target_kind = "hull"
+    elif description:
+        target_kind = "description"
+    else:
+        target_kind = "all"
+
+    if "先验库" in text and "轨迹" not in text and "视频" not in text and "监控" not in text:
+        target_scope = "registry"
+    elif "先验库" in text or "在库" in text or "未在库" in text:
+        target_scope = "both"
+    else:
+        target_scope = "track_memory"
+
+    items = extract_target_items(text)
+    if not items and (hull or description):
+        if hull:
+            items = [{
+                "targetId": "target-1",
+                "label": hull,
+                "kind": "hull",
+                "hullNumber": hull,
+                "description": None,
+            }]
+        else:
+            items = [{
+                "targetId": "target-1",
+                "label": description,
+                "kind": "description",
+                "hullNumber": None,
+                "description": description,
+            }]
+
+    if target_kind == "hull" and hull:
+        expected = f"确认舷号 {hull} 是否出现" if operation == "existence" else f"返回舷号 {hull} 相关结果"
+        focus = f"getTrack(hullNumber={hull})，必要时 matchHull/getFrames/showEvidence"
+    elif target_kind == "description" and description:
+        expected = f"确认是否存在「{description}」" if operation == "existence" else f"返回与「{description}」匹配的轨迹"
+        focus = f"getTrack → getFrames → matchText(description={description})"
+    else:
+        expected = "返回相关轨迹"
+        focus = "先 getTrack 筛选轨迹，再按需匹配"
+
+    return {
+        "targetScope": target_scope,
+        "targetKind": target_kind,
+        "operation": operation,
+        "registryRelation": registry_relation,
+        "hullNumber": hull,
+        "description": description,
+        "targetItems": items,
+        "expectedOutcome": expected,
+        "successCriteria": "工具结果足以回答用户问题",
+        "nextAgentFocus": focus,
+        "questionType": f"{target_kind}_{operation}",
+        "intentConfidence": 0.72 if (hull or description) else 0.35,
+    }
+
+
 def _build_item(value: str, index: int) -> dict[str, str | None]:
     cfg = _compiled()
     label = cfg["leading"].sub("", str(value or "")).strip(cfg["trim_chars"])

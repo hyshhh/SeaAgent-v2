@@ -65,14 +65,23 @@ class MatchHullArgs(BaseModel):
 
 
 class MatchTextArgs(BaseModel):
-    description: str
-    galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None
+    description: str = Field(description="外观/类别描述，如黄色无人艇")
+    galleryImages: list[dict[str, Any]] | dict[str, Any] | None = Field(
+        default=None,
+        description="可选。关键帧列表或 getFrames 结果；省略时自动使用本轮最近 getFrames/listRegistry 结果",
+    )
     topK: int | None = None
 
 
 class MatchImageArgs(BaseModel):
-    queryImages: list[dict[str, Any]] | dict[str, Any] | None = None
-    galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None
+    queryImages: list[dict[str, Any]] | dict[str, Any] | None = Field(
+        default=None,
+        description="可选。查询侧图像；省略时自动用最近 getFrames/listRegistry",
+    )
+    galleryImages: list[dict[str, Any]] | dict[str, Any] | None = Field(
+        default=None,
+        description="可选。图库侧图像；省略时自动用最近另一侧结果",
+    )
     topK: int | None = None
 
 
@@ -150,7 +159,68 @@ def build_observe_tools(
     tools_service: Any,
     on_tool: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> list[StructuredTool]:
-    """业务检索工具：绑定 ToolService.execute。"""
+    """业务检索工具：绑定 ToolService.execute。
+
+    兼容旧版 $ref 行为：本轮 getFrames / listRegistry / getRegistry 的结果会缓存，
+    matchText/matchImage 未传 galleryImages/queryImages 时自动注入。
+    """
+    # 本轮观察会话缓存（单次 ObserveAgent 内共享）
+    session: dict[str, Any] = {
+        "keyframes": None,
+        "registryReferences": None,
+        "tracks": None,
+        "keyframesByTrack": None,
+    }
+
+    def _remember(name: str, result: dict[str, Any]) -> None:
+        if not isinstance(result, dict) or result.get("ok") is False:
+            return
+        if name == "getFrames":
+            if result.get("keyframes") is not None:
+                session["keyframes"] = result.get("keyframes")
+            if result.get("keyframesByTrack") is not None:
+                session["keyframesByTrack"] = result.get("keyframesByTrack")
+        elif name in {"listRegistry", "getRegistry"}:
+            if result.get("registryReferences") is not None:
+                session["registryReferences"] = result.get("registryReferences")
+        elif name == "getTrack":
+            if result.get("tracks") is not None:
+                session["tracks"] = result.get("tracks")
+
+    def _auto_fill(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        args = dict(arguments)
+        if name == "matchText" and args.get("galleryImages") is None:
+            # 描述匹配轨迹关键帧优先；否则用先验库参考图
+            if session.get("keyframes") is not None:
+                args["galleryImages"] = session["keyframes"]
+            elif session.get("registryReferences") is not None:
+                args["galleryImages"] = session["registryReferences"]
+        if name == "matchImage":
+            if args.get("queryImages") is None and session.get("keyframes") is not None:
+                args["queryImages"] = session["keyframes"]
+            if args.get("galleryImages") is None and session.get("registryReferences") is not None:
+                args["galleryImages"] = session["registryReferences"]
+            # 反过来：查询库图、匹配轨迹
+            if args.get("queryImages") is None and session.get("registryReferences") is not None:
+                args["queryImages"] = session["registryReferences"]
+            if args.get("galleryImages") is None and session.get("keyframes") is not None:
+                args["galleryImages"] = session["keyframes"]
+        if name == "dedupTracks":
+            if args.get("tracks") is None and session.get("tracks") is not None:
+                args["tracks"] = session["tracks"]
+            if args.get("keyframesByTrack") is None and session.get("keyframesByTrack") is not None:
+                args["keyframesByTrack"] = session["keyframesByTrack"]
+        if name == "showEvidence":
+            # 未指定证据 ID 时，从最近关键帧取一批展示
+            if not args.get("keyframeIds") and isinstance(session.get("keyframes"), list):
+                ids = [
+                    str(item.get("keyframeId"))
+                    for item in session["keyframes"][:12]
+                    if isinstance(item, dict) and item.get("keyframeId") is not None
+                ]
+                if ids:
+                    args["keyframeIds"] = ids
+        return args
 
     def _wrap(name: str, schema: type[BaseModel], description: str) -> StructuredTool:
         def _run(**kwargs: Any) -> str:
@@ -160,12 +230,20 @@ def build_observe_tools(
                 tr = arguments["timeRange"]
                 if len(tr) == 2:
                     arguments["timeRange"] = (float(tr[0]), float(tr[1]))
+            arguments = _auto_fill(name, arguments)
             result = tools_service.execute(name, arguments)
             if not isinstance(result, dict):
                 result = {"ok": False, "error": "tool_result_invalid", "tool": name}
+            _remember(name, result)
             if on_tool:
                 try:
-                    on_tool(name, arguments, result)
+                    # 事件里不塞完整关键帧大对象，只报模型实际传入的关键参数
+                    event_args = {k: v for k, v in arguments.items() if k not in {"galleryImages", "queryImages", "keyframesByTrack"} or not isinstance(v, (list, dict))}
+                    if "galleryImages" in arguments and "galleryImages" not in event_args:
+                        event_args["galleryImages"] = f"<auto:{len(arguments.get('galleryImages') or []) if isinstance(arguments.get('galleryImages'), list) else 'obj'}>"
+                    if "queryImages" in arguments and "queryImages" not in event_args:
+                        event_args["queryImages"] = f"<auto:{len(arguments.get('queryImages') or []) if isinstance(arguments.get('queryImages'), list) else 'obj'}>"
+                    on_tool(name, event_args, result)
                 except Exception:
                     pass
             return _dump(result)
@@ -177,23 +255,42 @@ def build_observe_tools(
             args_schema=schema,
         )
 
+    def _list_registry(dummy: str | None = None) -> str:
+        result = tools_service.execute("listRegistry", {})
+        if isinstance(result, dict):
+            _remember("listRegistry", result)
+        if on_tool:
+            try:
+                on_tool("listRegistry", {}, result if isinstance(result, dict) else {})
+            except Exception:
+                pass
+        return _dump(result)
+
     return [
         _wrap("getTrack", GetTrackArgs, "按时间/舷号分页检索轨迹"),
-        _wrap("getFrames", GetFramesArgs, "按轨迹取关键帧"),
+        _wrap("getFrames", GetFramesArgs, "按轨迹取关键帧；结果会自动供给后续 matchText"),
         _wrap("getClip", GetClipArgs, "生成轨迹片段"),
         _wrap("getRegistry", GetRegistryArgs, "按舷号查先验库"),
         StructuredTool.from_function(
             name="listRegistry",
-            description="列出先验库全部条目",
-            func=lambda dummy: _dump(tools_service.execute("listRegistry", {})),
+            description="列出先验库全部条目；结果可自动供给 matchText/matchImage",
+            func=_list_registry,
             args_schema=ListRegistryArgs,
         ),
         _wrap("matchHull", MatchHullArgs, "舷号精确匹配先验库"),
-        _wrap("matchText", MatchTextArgs, "文本描述匹配关键帧"),
-        _wrap("matchImage", MatchImageArgs, "图像相似度匹配"),
+        _wrap(
+            "matchText",
+            MatchTextArgs,
+            "文本描述匹配关键帧或库图。galleryImages 可省略：默认用本轮 getFrames 的 keyframes",
+        ),
+        _wrap(
+            "matchImage",
+            MatchImageArgs,
+            "图像相似度匹配。queryImages/galleryImages 可省略，自动用本轮关键帧与库参考图",
+        ),
         _wrap("verifyTarget", VerifyTargetArgs, "VLM 核验目标"),
         _wrap("showEvidence", ShowEvidenceArgs, "汇总展示证据 ID"),
-        _wrap("dedupTracks", DedupTracksArgs, "跨轨迹去重计数"),
+        _wrap("dedupTracks", DedupTracksArgs, "跨轨迹去重计数；tracks/keyframes 可省略用本轮缓存"),
     ]
 
 
