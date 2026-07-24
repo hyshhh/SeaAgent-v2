@@ -1048,6 +1048,20 @@ function updateObserverToolEvent(event) {
   updatePlanProgressFromTool(event);
 }
 
+function compactAgentErrorMessage(raw) {
+  const text = String(raw || '未知错误').replace(/\s+/g, ' ').trim();
+  if (/GRAPH_RECURSION_LIMIT|Recursion limit/i.test(text)) {
+    return '规划步骤过多已自动收敛，请重试或简化问题';
+  }
+  if (/allowed-local-media-path|Cannot load local files/i.test(text)) {
+    return '视觉模型拒绝本地媒体路径，请确认服务端已用 data URL 传图';
+  }
+  if (/chat\/completions|Internal Server Error|HTTPStatusError/i.test(text)) {
+    return '视觉/语言模型服务暂时不可用，请稍后重试';
+  }
+  return text.length > 180 ? `${text.slice(0, 180)}…` : text;
+}
+
 function appendThoughtEvent(event) {
   if (event.type === 'complete') {
     setThinkingState('推理完成', 'completed');
@@ -1063,8 +1077,14 @@ function appendThoughtEvent(event) {
     const decision = document.getElementById('agentPlanDecision');
     if (decision) {
       decision.className = 'agent-plan-decision conflict';
-      decision.textContent = `执行失败：${event.message || '未知错误'}`;
+      decision.textContent = `执行失败：${compactAgentErrorMessage(event.message)}`;
     }
+    document.querySelectorAll('.agent-thought-card.active').forEach((card) => {
+      card.classList.remove('active');
+      card.classList.add('failed');
+      const state = card.querySelector('.agent-thought-head em');
+      if (state) state.textContent = '中断';
+    });
     return;
   }
   if (event.type === 'agent_start') {
@@ -1191,9 +1211,9 @@ async function askAgent() {
     showAgentFinalView();
     setThinkingState('推理失败', 'failed');
     document.getElementById('agentAnswer').className = 'agent-answer empty-state';
-    document.getElementById('agentAnswer').textContent = `执行失败：${error.message}`;
+    document.getElementById('agentAnswer').textContent = `执行失败：${compactAgentErrorMessage(error.message)}`;
     renderEvidence(null, null);
-    showToast(error.message, 'error');
+    showToast(compactAgentErrorMessage(error.message), 'error');
   } finally {
     button.disabled = false;
     button.textContent = '执行闭环推理';

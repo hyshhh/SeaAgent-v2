@@ -43,8 +43,9 @@ INTENT_RESPONSIBILITY = (
 )
 
 PLAN_RESPONSIBILITY = (
-    "根据意图与历史证据规划下一步：说明本轮目标与建议工具调用；"
-    "完成后调用 handoff_to_observe；若无法继续则 handoff_to_reflect。"
+    "根据意图与历史证据规划本轮检索步骤，用 planHint 写清工具顺序与参数要点；"
+    "规划完成后必须调用 handoff_to_observe；若无法继续则 handoff_to_reflect。"
+    "不要反复 loadSkill；最多查阅一次细则后立即移交。"
 )
 
 OBSERVE_RESPONSIBILITY = (

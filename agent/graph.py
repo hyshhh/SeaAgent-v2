@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
@@ -337,11 +338,27 @@ def build_sea_agent_graph(
             system_prompt=prompt,
             name=name,
         )
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=user_content)]},
-            config={"recursion_limit": recursion_limit},
-        )
-        messages = result.get("messages") or []
+        invoke_error = ""
+        try:
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=user_content)]},
+                config={"recursion_limit": recursion_limit},
+            )
+            messages = result.get("messages") or []
+        except Exception as error:
+            # 内层 ReAct 触顶或模型异常时不炸穿外层图，交给节点级 handoff 兜底
+            invoke_error = str(error)
+            messages = []
+            _emit(
+                event_handler,
+                {
+                    "type": "status",
+                    "title": title,
+                    "message": f"{title} 提前结束：{invoke_error[:160]}",
+                    "role": role,
+                    "round": round_number,
+                },
+            )
         tool_chain: list[str] = []
         tool_records: list[dict[str, Any]] = []
         handoff: dict[str, Any] | None = None
@@ -389,6 +406,8 @@ def build_sea_agent_graph(
                 })
 
         text = _last_ai_text(messages)
+        if invoke_error and not text:
+            text = f"{title} 未正常结束：{invoke_error[:200]}"
         if text:
             _emit(
                 event_handler,
@@ -411,7 +430,7 @@ def build_sea_agent_graph(
                 "modelSummary": {
                     "summary": text[:500] if text else "",
                     "goal": (handoff or {}).get("goal") or (handoff or {}).get("planHint") or "",
-                    "reason": (handoff or {}).get("reason") or "",
+                    "reason": (handoff or {}).get("reason") or invoke_error or "",
                     "answerHint": (handoff or {}).get("answerHint") or "",
                 },
                 "calls": plan_calls if role == "planner" else [
@@ -448,6 +467,8 @@ def build_sea_agent_graph(
                     }
                     for i, call in enumerate(end_event["calls"])
                 ]
+                if invoke_error and not handoff:
+                    end_event["fallback"] = "规划超时，已使用默认检索计划"
             if role == "reflector":
                 end_event["state"] = (handoff or {}).get("state") or (
                     "replan" if (handoff or {}).get("handoff") == "plan" or (handoff or {}).get("replan") else "uncertain"
@@ -468,6 +489,7 @@ def build_sea_agent_graph(
             "scope_updates": scope_updates,
             "skill_ids": skill_ids,
             "plan_calls": plan_calls,
+            "invoke_error": invoke_error,
         }
 
     def intent_node(state: AgentState) -> Command:
@@ -510,16 +532,21 @@ def build_sea_agent_graph(
         handoff = out.get("handoff") or {}
         intent = handoff.get("intent") if isinstance(handoff.get("intent"), dict) else {}
         if not intent:
-            # 从工具结果兜底拼装意图，保证链路不中断
+            # 从工具结果 / 问题文本兜底拼装意图，保证链路不中断
+            hull_match = re.search(r"(?:舷号\s*)?([0-9A-Za-z]{2,12})", question or "")
+            guessed_hull = (hull_match.group(1) if hull_match else "") or ""
+            if guessed_hull and not any(ch.isdigit() for ch in guessed_hull):
+                guessed_hull = ""
             intent = {
                 "targetScope": "track_memory",
-                "targetKind": "all",
-                "operation": "list",
+                "targetKind": "hull" if guessed_hull else "all",
+                "operation": "existence" if any(token in (question or "") for token in ("有没有", "是否", "出现", "存在")) else "list",
                 "registryRelation": "any",
+                "hullNumber": guessed_hull or None,
                 "question": question,
-                "expectedOutcome": "返回相关轨迹",
+                "expectedOutcome": f"确认舷号 {guessed_hull} 是否出现" if guessed_hull else "返回相关轨迹",
                 "successCriteria": "工具结果足以回答",
-                "nextAgentFocus": "先筛选轨迹",
+                "nextAgentFocus": f"getTrack(hullNumber={guessed_hull}) 与 matchHull" if guessed_hull else "先筛选轨迹",
                 "intentSource": "langgraph_fallback",
             }
             for record in out.get("tool_records") or []:
@@ -597,13 +624,23 @@ def build_sea_agent_graph(
             user,
             role="planner",
             round_number=round_number,
-            recursion_limit=8,
+            recursion_limit=10,
         )
         handoff = out.get("handoff") or {}
+        # 未 handoff 时默认走 observe，避免空转
         target = str(handoff.get("handoff") or "observe")
-        plan_hint = str(handoff.get("planHint") or handoff.get("goal") or out.get("text") or "")
+        plan_hint = str(handoff.get("planHint") or handoff.get("goal") or "")
         if not plan_hint:
-            plan_hint = "按意图调用 getTrack，必要时 getFrames/matchText/dedupTracks"
+            hull = str(intent.get("hullNumber") or "").strip()
+            description = str(intent.get("description") or "").strip()
+            if hull:
+                plan_hint = f"先 getTrack(hullNumber={hull})，再 getFrames；必要时 matchHull(hullNumberArray=[{hull}]) 与 showEvidence"
+            elif description:
+                plan_hint = f"先 getTrack，再 getFrames，然后 matchText(description={description[:40]})"
+            else:
+                plan_hint = "按意图调用 getTrack，必要时 getFrames/matchText/dedupTracks"
+            if out.get("invoke_error"):
+                plan_hint = f"[规划兜底] {plan_hint}"
         update: dict[str, Any] = {
             "plan_hint": plan_hint,
             "active_agent": "observe" if target != "reflect" else "reflect",

@@ -332,10 +332,19 @@ class ToolService:
             return {"ok": False, "error": "unsupported_verify_combination", "decision": "uncertain"}
 
         references = self.repository.references_by_ids(registryReferenceIds or [])
-        reference_paths = [item["imagePath"] for item in references if Path(item["imagePath"]).exists()][:3]
+        reference_paths = [
+            item["imagePath"]
+            for item in references
+            if Path(item["imagePath"]).exists() and Path(item["imagePath"]).suffix.lower() not in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+        ][:3]
         if has_keyframes:
             frames = self.repository.keyframes_by_ids(keyframeIds or [])
-            evidence = [item["keyframePath"] for item in frames if Path(item["keyframePath"]).exists()][:6 if has_description else 3]
+            # 只传静态图路径；视频片段走 _sample_segments 抽帧，避免 vLLM 拉本地 video URL
+            evidence = [
+                item["keyframePath"]
+                for item in frames
+                if Path(item["keyframePath"]).exists() and Path(item["keyframePath"]).suffix.lower() not in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+            ][:6 if has_description else 3]
         elif has_segments:
             evidence = self._sample_segments(shipSegmentIds or [], 6 if has_description else 3)
         else:

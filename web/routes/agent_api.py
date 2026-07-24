@@ -48,7 +48,14 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                 result = await run_in_threadpool(_controller(request, emit).answer, body.question, body.top_k)
                 await event_queue.put({"type": "complete", "title": "闭环推理完成", "message": "最终回答与视觉证据已生成", "result": result})
             except Exception as error:
-                await event_queue.put({"type": "error", "title": "闭环推理失败", "message": str(error)})
+                message = str(error)
+                if "GRAPH_RECURSION_LIMIT" in message or "Recursion limit" in message:
+                    message = "规划步骤过多已自动收敛，请重试或简化问题"
+                elif "allowed-local-media-path" in message or "Cannot load local files" in message:
+                    message = "视觉模型拒绝本地媒体路径，请确认服务端已用 data URL 传图"
+                elif len(message) > 240:
+                    message = message[:240] + "…"
+                await event_queue.put({"type": "error", "title": "闭环推理失败", "message": message})
 
         task = asyncio.create_task(execute())
         try:
