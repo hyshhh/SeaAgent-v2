@@ -3,16 +3,12 @@
 ```bash
 pip install -e .
 python -m web.app
-```
-
-```bash
+# 或
 seaagent
 ```
 
 ```bash
 python -m pipeline.cli data/videos/example.mp4 --demo --output output/result.mp4
-```
-
-```bash
+# 或
 seaagent-pipeline data/videos/example.mp4 --demo --output output/result.mp4
 ```

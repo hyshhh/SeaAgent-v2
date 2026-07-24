@@ -1,50 +1,107 @@
-"""将监控问答中的自然语言时间归一化为本地时间戳范围。"""
+"""将监控问答中的自然语言时间归一化为本地时间戳范围。
+
+词表、时段、检测模式等均来自 skills/intent_agent/time_parsing.yaml；
+本模块只加载规则并执行归一化算法。
+"""
 from __future__ import annotations
 
 import calendar
 import re
 import unicodedata
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any
 
+from agent.skill_loader import load_skill_yaml
 
-_CN_DIGITS = {
-    "零": 0,
-    "〇": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-_CN_NUMBER = r"[〇零一二两三四五六七八九十]{1,4}"
-_SHORT_NUMBER = rf"(?:\d{{1,2}}|{_CN_NUMBER})"
-_LONG_NUMBER = rf"(?:\d{{1,4}}|{_CN_NUMBER})"
-_PERIOD_NAMES = ("凌晨", "清晨", "早上", "上午", "中午", "正午", "下午", "傍晚", "晚上", "晚间", "夜间", "午夜", "半夜")
-_PERIOD_PATTERN = "|".join(_PERIOD_NAMES)
-_PERIOD_ALIAS = {
-    "清晨": "早上",
-    "正午": "中午",
-    "晚间": "晚上",
-    "夜间": "晚上",
-    "半夜": "凌晨",
-    "午夜": "凌晨",
-}
-_PERIOD_SPANS = {
-    "凌晨": (0, 6),
-    "早上": (6, 9),
-    "上午": (8, 12),
-    "中午": (11, 14),
-    "下午": (12, 18),
-    "傍晚": (17, 19),
-    "晚上": (18, 24),
-}
-_FUZZY_MARKERS = ("左右", "前后", "大约", "约莫", "约", "差不多", "将近")
+
+@lru_cache(maxsize=1)
+def _rules() -> dict[str, Any]:
+    data = load_skill_yaml("intent_agent", "time_parsing")
+    return data if isinstance(data, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def _cfg() -> dict[str, Any]:
+    rules = _rules()
+    cn_digits_raw = rules.get("cn_digits") or {}
+    cn_digits = {str(k): int(v) for k, v in cn_digits_raw.items()} if isinstance(cn_digits_raw, dict) else {}
+    cn_number = str(rules.get("cn_number_pattern") or r"[〇零一二两三四五六七八九十]{1,4}")
+    short = rf"(?:\d{{1,2}}|{cn_number})"
+    long = rf"(?:\d{{1,4}}|{cn_number})"
+    period_names = tuple(str(x) for x in (rules.get("period_names") or []))
+    period_pattern = "|".join(re.escape(name) for name in period_names) if period_names else "凌晨"
+    period_alias = {str(k): str(v) for k, v in (rules.get("period_alias") or {}).items()}
+    period_spans_raw = rules.get("period_spans") or {}
+    period_spans = {
+        str(k): (int(v[0]), int(v[1]))
+        for k, v in period_spans_raw.items()
+        if isinstance(v, (list, tuple)) and len(v) >= 2
+    }
+    fuzzy = tuple(str(x) for x in (rules.get("fuzzy_markers") or []))
+    duration_units = {
+        str(k): float(v) for k, v in (rules.get("duration_unit_seconds") or {}).items()
+    }
+    def _inject(template: str) -> str:
+        return (
+            str(template)
+            .replace("{short}", short)
+            .replace("{long}", long)
+            .replace("{period}", period_pattern)
+        )
+
+    patterns_tpl = list(rules.get("time_expression_patterns") or [])
+    time_patterns = [_inject(p) for p in patterns_tpl]
+    has_date = _inject(str(rules.get("has_date_phrase_pattern") or ""))
+    return {
+        "cn_digits": cn_digits,
+        "cn_number": cn_number,
+        "short": short,
+        "long": long,
+        "period_names": period_names,
+        "period_pattern": period_pattern,
+        "period_alias": period_alias,
+        "period_spans": period_spans,
+        "fuzzy": fuzzy,
+        "duration_units": duration_units,
+        "time_patterns": time_patterns,
+        "has_date_phrase": has_date,
+        "text_substitutions": list(rules.get("text_substitutions") or []),
+        "literal_replacements": {
+            str(k): str(v) for k, v in (rules.get("literal_replacements") or {}).items()
+        },
+        "just_now_markers": tuple(str(x) for x in (rules.get("just_now_markers") or [])),
+        "just_now_minutes": int(rules.get("just_now_minutes") or 10),
+        "later_markers": tuple(str(x) for x in (rules.get("later_markers") or [])),
+        "later_hours": int(rules.get("later_hours") or 1),
+        "daytime_marker": str(rules.get("daytime_marker") or "白天"),
+        "daytime_span": tuple(rules.get("daytime_span") or [6, 18]),
+        "fuzzy_clock_window_minutes": int(rules.get("fuzzy_clock_window_minutes") or 30),
+        "relative_day_phrases": list(rules.get("relative_day_phrases") or []),
+        "year_offsets": {str(k): int(v) for k, v in (rules.get("year_offsets") or {}).items()},
+        "week_prefix_offsets": {
+            (None if k in ("null", "None", "") else str(k)): int(v)
+            for k, v in (rules.get("week_prefix_offsets") or {}).items()
+        },
+        "weekday_index": {str(k): int(v) for k, v in (rules.get("weekday_index") or {}).items()},
+        "relative_month_phrases": {
+            str(k): int(v) for k, v in (rules.get("relative_month_phrases") or {}).items()
+        },
+        "model_start_keys": list(rules.get("model_start_keys") or ["start", "startTime", "begin"]),
+        "model_end_keys": list(rules.get("model_end_keys") or ["end", "endTime", "finish"]),
+        "datetime_formats": list(rules.get("datetime_formats") or []),
+        "next_day_bridge_markers": tuple(str(x) for x in (rules.get("next_day_bridge_markers") or [])),
+        "relative_end_day_markers": {
+            str(k): int(v) for k, v in (rules.get("relative_end_day_markers") or {}).items()
+        },
+        "clock_bridge_pattern": str(
+            rules.get("clock_bridge_pattern")
+            or r"(?:左右|前后)*(?:到|至|[-—~～－])(?:左右|前后)*"
+        ),
+        "date_range_bridge_pattern": str(
+            rules.get("date_range_bridge_pattern") or r"到|至|[-—~～－]"
+        ),
+    }
 
 
 def normalize_time_range(question: str, now: datetime | None = None) -> tuple[float, float] | None:
@@ -91,26 +148,26 @@ def has_time_expression(question: str) -> bool:
     text = _normalize_text(question)
     if not text:
         return False
-    patterns = (
-        r"(?:大前天|前天|昨天|昨日|今天|今日|明天|明日|后天|大后天|前年|去年|今年|明年|后年)",
-        r"(?:上上|下下|上|下|本|这)?(?:周|星期)[一二三四五六日天末]?",
-        rf"(?:最近|近|过去)?(?:{_SHORT_NUMBER}|半|一刻)(?:个)?(?:分钟?|小时|天|日|周|星期|月|年|刻钟)(?:前|后)?",
-        rf"{_LONG_NUMBER}\s*(?:年|[./-])\s*{_SHORT_NUMBER}\s*(?:月|[./-])\s*{_SHORT_NUMBER}(?:日|号)?",
-        rf"{_SHORT_NUMBER}月(?:{_SHORT_NUMBER}(?:日|号)?)?",
-        rf"(?<![\d年月]){_SHORT_NUMBER}(?:日|号)",
-        r"\d{1,2}[:：]\d{1,2}(?::\d{1,2})?",
-        rf"(?:{_PERIOD_PATTERN})?{_SHORT_NUMBER}(?:点|时)",
-        rf"(?:{_PERIOD_PATTERN})",
-        r"(?:稍后|刚才|刚刚|白天|夜里|夜晚|上上个月|上个月|本月|这个月|下个月|下下个月)",
-    )
-    return any(re.search(pattern, text) for pattern in patterns)
+    for pattern in _cfg()["time_patterns"]:
+        if re.search(pattern, text):
+            return True
+    return False
 
 
 def parse_model_time_range(value: Any, now: datetime | None = None) -> tuple[float, float] | None:
     """校验并转换模型返回的规范时间范围，只接受明确的端点。"""
+    cfg = _cfg()
     if isinstance(value, dict):
-        start_value = value.get("start") or value.get("startTime") or value.get("begin")
-        end_value = value.get("end") or value.get("endTime") or value.get("finish")
+        start_value = None
+        end_value = None
+        for key in cfg["model_start_keys"]:
+            if value.get(key) is not None:
+                start_value = value.get(key)
+                break
+        for key in cfg["model_end_keys"]:
+            if value.get(key) is not None:
+                end_value = value.get(key)
+                break
     elif isinstance(value, (list, tuple)) and len(value) == 2:
         start_value, end_value = value
     else:
@@ -122,23 +179,38 @@ def parse_model_time_range(value: Any, now: datetime | None = None) -> tuple[flo
     return start, end
 
 
+def parse_time(
+    expression: str,
+    now: datetime | None = None,
+    *,
+    fallback_question: str | None = None,
+) -> dict[str, Any]:
+    """Intent 工具协议：parseTime。"""
+    time_range = normalize_time_range(expression, now=now)
+    if time_range is None and fallback_question and fallback_question != expression:
+        time_range = normalize_time_range(fallback_question, now=now)
+    return {
+        "ok": True,
+        "timeRange": list(time_range) if time_range else None,
+        "expression": expression,
+        "hint": "可选参考；请你确认后写入 result.timeRange",
+    }
+
+
 def _normalize_text(question: str) -> str:
+    cfg = _cfg()
     text = unicodedata.normalize("NFKC", str(question or "")).lower()
-    substitutions = (
-        (r"\byesterday\b", "昨天"),
-        (r"\btoday\b", "今天"),
-        (r"\btomorrow\b", "明天"),
-        (r"\blastweek\b", "上周"),
-        (r"\bnextweek\b", "下周"),
-        (r"\bthisweek\b", "本周"),
-    )
-    for pattern, replacement in substitutions:
-        text = re.sub(pattern, replacement, text, flags=re.I)
+    for item in cfg["text_substitutions"]:
+        if not isinstance(item, dict):
+            continue
+        pattern = str(item.get("pattern") or "")
+        replacement = str(item.get("replacement") or "")
+        if pattern:
+            text = re.sub(pattern, replacement, text, flags=re.I)
     text = re.sub(r"(?i)(\d{1,2}(?::\d{2})?)\s*p\.?m\.?", r"下午\1", text)
     text = re.sub(r"(?i)(\d{1,2}(?::\d{2})?)\s*a\.?m\.?", r"上午\1", text)
-    text = text.replace("礼拜", "星期").replace("周天", "周日")
-    text = text.replace("夜里", "晚上").replace("夜晚", "晚上")
-    text = text.replace("午后", "下午").replace("傍晚时分", "傍晚")
+    for src, dst in cfg["literal_replacements"].items():
+        text = text.replace(src, dst)
     text = re.sub(r"[\s()（）\[\]【】]", "", text)
     return text
 
@@ -151,24 +223,26 @@ def _local_now(now: datetime | None) -> datetime:
 
 
 def _parse_integer(value: Any) -> int | None:
+    cfg = _cfg()
+    cn_digits = cfg["cn_digits"]
     token = str(value or "").strip()
     if not token:
         return None
     if re.fullmatch(r"\d+", token):
         return int(token)
-    if all(character in _CN_DIGITS for character in token):
-        return int("".join(str(_CN_DIGITS[character]) for character in token))
+    if all(character in cn_digits for character in token):
+        return int("".join(str(cn_digits[character]) for character in token))
     if "十" not in token:
         return None
     if token.count("十") != 1:
         return None
     left, right = token.split("十", 1)
-    if left and (len(left) != 1 or left not in _CN_DIGITS):
+    if left and (len(left) != 1 or left not in cn_digits):
         return None
-    if right and (len(right) != 1 or right not in _CN_DIGITS):
+    if right and (len(right) != 1 or right not in cn_digits):
         return None
-    tens = _CN_DIGITS[left] if left else 1
-    ones = _CN_DIGITS[right] if right else 0
+    tens = cn_digits[left] if left else 1
+    ones = cn_digits[right] if right else 0
     return tens * 10 + ones
 
 
@@ -208,11 +282,13 @@ def _make_day(current: datetime, year: int | None, month: int, day: int) -> date
 
 
 def _date_tokens(text: str, current: datetime) -> list[dict[str, Any]]:
+    cfg = _cfg()
+    long, short = cfg["long"], cfg["short"]
     records: list[dict[str, Any]] = []
     patterns = (
-        re.compile(rf"(?P<year>{_LONG_NUMBER})\s*(?:年|[./-])\s*(?P<month>{_SHORT_NUMBER})\s*(?:月|[./-])\s*(?P<day>{_SHORT_NUMBER})(?:日|号)?"),
-        re.compile(rf"(?<![\d年])(?P<month>{_SHORT_NUMBER})月(?P<day>{_SHORT_NUMBER})(?:日|号)?"),
-        re.compile(rf"(?<![\d年月])(?P<day>{_SHORT_NUMBER})(?:日|号)"),
+        re.compile(rf"(?P<year>{long})\s*(?:年|[./-])\s*(?P<month>{short})\s*(?:月|[./-])\s*(?P<day>{short})(?:日|号)?"),
+        re.compile(rf"(?<![\d年])(?P<month>{short})月(?P<day>{short})(?:日|号)?"),
+        re.compile(rf"(?<![\d年月])(?P<day>{short})(?:日|号)"),
     )
     for index, pattern in enumerate(patterns):
         for match in pattern.finditer(text):
@@ -233,7 +309,8 @@ def _date_tokens(text: str, current: datetime) -> list[dict[str, Any]]:
 
 
 def _relative_duration_range(text: str, current: datetime) -> tuple[datetime, datetime] | None:
-    amount_pattern = rf"(?:\d+(?:\.\d+)?|{_CN_NUMBER}|半|一刻)"
+    cfg = _cfg()
+    amount_pattern = rf"(?:\d+(?:\.\d+)?|{cfg['cn_number']}|半|一刻)"
     recent = re.search(rf"(?:最近|近|过去)(?P<amount>{amount_pattern})(?:个)?(?P<unit>分钟?|小时|天|日|周|星期|月|年|刻钟)", text)
     if recent:
         amount = _parse_amount(recent.group("amount"))
@@ -248,31 +325,20 @@ def _relative_duration_range(text: str, current: datetime) -> tuple[datetime, da
             target = current + timedelta(seconds=seconds if point.group("direction") == "后" else -seconds)
             width = 60 if point.group("unit").startswith("分") or point.group("unit") == "刻钟" else 3600
             return target, target + timedelta(seconds=width)
-    if "刚才" in text or "刚刚" in text:
-        return current - timedelta(minutes=10), current
-    if "稍后" in text:
-        return current, current + timedelta(hours=1)
+    if any(marker in text for marker in cfg["just_now_markers"]):
+        return current - timedelta(minutes=cfg["just_now_minutes"]), current
+    if any(marker in text for marker in cfg["later_markers"]):
+        return current, current + timedelta(hours=cfg["later_hours"])
     return None
 
 
 def _duration_seconds(amount: float | None, unit: str) -> float | None:
     if amount is None:
         return None
-    if unit in {"分", "分钟"}:
-        return amount * 60
-    if unit in {"小时"}:
-        return amount * 3600
-    if unit == "刻钟":
-        return amount * 15 * 60
-    if unit in {"天", "日"}:
-        return amount * 86400
-    if unit in {"周", "星期"}:
-        return amount * 7 * 86400
-    if unit == "月":
-        return amount * 30 * 86400
-    if unit == "年":
-        return amount * 365 * 86400
-    return None
+    seconds = _cfg()["duration_units"].get(unit)
+    if seconds is None:
+        return None
+    return amount * seconds
 
 
 def _date_span(text: str, current: datetime, date_tokens: list[dict[str, Any]]) -> tuple[datetime, datetime] | None:
@@ -287,30 +353,26 @@ def _date_span(text: str, current: datetime, date_tokens: list[dict[str, Any]]) 
     month = _month_expression_span(text, current)
     if month is not None:
         return month
-    year_match = re.search(r"(?:前年|去年|今年|明年|后年)", text)
+    year_offsets = _cfg()["year_offsets"]
+    year_match = re.search("|".join(re.escape(k) for k in year_offsets) if year_offsets else r"(?!)", text)
     if year_match:
-        offsets = {"前年": -2, "去年": -1, "今年": 0, "明年": 1, "后年": 2}
-        year = current.year + offsets[year_match.group(0)]
+        year = current.year + year_offsets[year_match.group(0)]
         start = current.replace(year=year, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         return start, start.replace(year=year + 1)
     return None
 
 
 def _relative_day_span(text: str, current: datetime) -> tuple[datetime, datetime] | None:
-    phrases = (
-        (("大前天",), -3),
-        (("前天",), -2),
-        (("昨天", "昨日"), -1),
-        (("今天", "今日", "当天"), 0),
-        (("明天", "明日"), 1),
-        (("后天",), 2),
-        (("大后天",), 3),
-    )
-    for values, offset in phrases:
-        if any(value in text for value in values):
+    cfg = _cfg()
+    for item in cfg["relative_day_phrases"]:
+        if not isinstance(item, dict):
+            continue
+        phrases = item.get("phrases") or []
+        offset = int(item.get("offset") or 0)
+        if any(str(value) in text for value in phrases):
             start, _ = _day_span(current + timedelta(days=offset))
             return start, start + timedelta(days=1)
-    amount_pattern = rf"(?:\d+|{_CN_NUMBER}|半)"
+    amount_pattern = rf"(?:\d+|{cfg['cn_number']}|半)"
     match = re.search(rf"(?P<amount>{amount_pattern})(?:个)?(?P<unit>天|日|周|星期|月|年)(?P<direction>前|后)", text)
     if not match:
         return None
@@ -333,31 +395,37 @@ def _relative_day_span(text: str, current: datetime) -> tuple[datetime, datetime
 
 
 def _week_span(text: str, current: datetime) -> tuple[datetime, datetime] | None:
+    cfg = _cfg()
+    prefix_offsets = dict(cfg["week_prefix_offsets"])
+    prefix_offsets.setdefault(None, 0)
+    weekday_index = cfg["weekday_index"]
     match = re.search(r"(?P<prefix>上上|下下|上|下|本|这)?(?:周|星期)(?P<weekday>[一二三四五六日天末])", text)
-    prefix_offsets = {"上上": -2, "上": -1, "本": 0, "这": 0, "下": 1, "下下": 2, None: 0}
     monday, _ = _day_span(current - timedelta(days=current.weekday()))
     if match:
-        offset = prefix_offsets[match.group("prefix")]
+        offset = prefix_offsets.get(match.group("prefix"), 0)
         week_start = monday + timedelta(days=offset * 7)
         weekday = match.group("weekday")
         if weekday == "末":
             return week_start + timedelta(days=5), week_start + timedelta(days=7)
-        index = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}[weekday]
+        index = weekday_index.get(weekday)
+        if index is None:
+            return None
         start = week_start + timedelta(days=index)
         return start, start + timedelta(days=1)
     match = re.search(r"(?P<prefix>上上|下下|上|下|本|这)?(?:周|星期)(?![一二三四五六日天末])", text)
     if match:
-        week_start = monday + timedelta(days=prefix_offsets[match.group("prefix")] * 7)
+        week_start = monday + timedelta(days=prefix_offsets.get(match.group("prefix"), 0) * 7)
         return week_start, week_start + timedelta(days=7)
     return None
 
 
 def _month_expression_span(text: str, current: datetime) -> tuple[datetime, datetime] | None:
-    relative = (("上上个月", -2), ("上个月", -1), ("本月", 0), ("这个月", 0), ("下个月", 1), ("下下个月", 2))
-    for phrase, offset in relative:
+    cfg = _cfg()
+    for phrase, offset in cfg["relative_month_phrases"].items():
         if phrase in text:
             return _month_span(current, offset)
-    match = re.search(rf"(?:(?P<year>{_LONG_NUMBER})年)?(?P<month>{_SHORT_NUMBER})月(?P<part>初|中旬|中|末|底)?", text)
+    long, short = cfg["long"], cfg["short"]
+    match = re.search(rf"(?:(?P<year>{long})年)?(?P<month>{short})月(?P<part>初|中旬|中|末|底)?", text)
     if not match:
         return None
     year = _parse_integer(match.group("year"))
@@ -379,9 +447,11 @@ def _month_expression_span(text: str, current: datetime) -> tuple[datetime, date
 
 
 def _time_tokens(text: str) -> list[dict[str, Any]]:
+    cfg = _cfg()
+    short, period = cfg["short"], cfg["period_pattern"]
     records: list[dict[str, Any]] = []
-    colon = re.compile(rf"(?P<period>{_PERIOD_PATTERN})?(?P<hour>{_SHORT_NUMBER})[:：](?P<minute>\d{{1,2}})(?:[:：](?P<second>\d{{1,2}}))?")
-    point = re.compile(rf"(?P<period>{_PERIOD_PATTERN})?(?P<hour>{_SHORT_NUMBER})(?:点|时)(?P<minute>半|一刻|三刻|{_SHORT_NUMBER})?(?:分)?(?P<second>\d{{1,2}})?(?:秒)?")
+    colon = re.compile(rf"(?P<period>{period})?(?P<hour>{short})[:：](?P<minute>\d{{1,2}})(?:[:：](?P<second>\d{{1,2}}))?")
+    point = re.compile(rf"(?P<period>{period})?(?P<hour>{short})(?:点|时)(?P<minute>半|一刻|三刻|{short})?(?:分)?(?P<second>\d{{1,2}})?(?:秒)?")
     for pattern, precision in ((colon, "minute"), (point, "hour")):
         for match in pattern.finditer(text):
             hour = _parse_integer(match.group("hour"))
@@ -417,9 +487,10 @@ def _time_tokens(text: str) -> list[dict[str, Any]]:
 
 
 def _resolve_hour(hour: int, period: str | None) -> int | None:
+    cfg = _cfg()
     if not 0 <= hour <= 23:
         return None
-    resolved_period = _PERIOD_ALIAS.get(period or "", period)
+    resolved_period = cfg["period_alias"].get(period or "", period)
     if resolved_period in {"下午", "傍晚", "晚上"} and 1 <= hour < 12:
         return hour + 12
     if resolved_period == "中午" and 1 <= hour <= 5:
@@ -437,23 +508,23 @@ def _clock_datetime(day: datetime, token: dict[str, Any], inherited_period: str 
 
 
 def _clock_range(text: str, day: datetime, tokens: list[dict[str, Any]], current: datetime) -> tuple[datetime, datetime] | None:
+    cfg = _cfg()
     for index in range(len(tokens) - 1):
         first, second = tokens[index], tokens[index + 1]
         bridge = text[first["end"]:second["start"]]
         start = _clock_datetime(day, first)
         end_day = day
-        if "次日" in bridge or "第二天" in bridge:
+        if any(marker in bridge for marker in cfg["next_day_bridge_markers"]):
             end_day = day + timedelta(days=1)
         else:
-            relative_end_days = (("大前天", -3), ("前天", -2), ("昨天", -1), ("今天", 0), ("明天", 1), ("后天", 2), ("大后天", 3))
-            for marker, offset in relative_end_days:
+            for marker, offset in cfg["relative_end_day_markers"].items():
                 if marker in bridge:
                     end_day, _ = _day_span(current + timedelta(days=offset))
                     break
         cleaned_bridge = bridge
-        for marker in ("大前天", "前天", "昨天", "今天", "明天", "后天", "大后天", "次日", "第二天"):
+        for marker in list(cfg["relative_end_day_markers"]) + list(cfg["next_day_bridge_markers"]):
             cleaned_bridge = cleaned_bridge.replace(marker, "")
-        if not re.fullmatch(r"(?:左右|前后|大约|约莫|约|差不多|将近|从|起|之间)*(?:到|至|[-—~～－])(?:左右|前后|大约|约莫|约|差不多|将近|止|之间)*", cleaned_bridge):
+        if not re.fullmatch(cfg["clock_bridge_pattern"], cleaned_bridge):
             continue
         inherited_period = first.get("period")
         if (
@@ -479,33 +550,40 @@ def _clock_range(text: str, day: datetime, tokens: list[dict[str, Any]], current
     if start is None:
         return None
     window = text[max(0, token["start"] - 6):min(len(text), token["end"] + 6)]
-    if any(marker in window for marker in _FUZZY_MARKERS):
-        return start - timedelta(minutes=30), start + timedelta(minutes=30)
+    if any(marker in window for marker in cfg["fuzzy"]):
+        half = cfg["fuzzy_clock_window_minutes"]
+        return start - timedelta(minutes=half), start + timedelta(minutes=half)
     if token["precision"] == "hour":
         return start, start + timedelta(hours=1)
     return start, start + timedelta(minutes=1)
 
 
 def _period_range(text: str, day: datetime) -> tuple[datetime, datetime] | None:
-    for period in _PERIOD_NAMES:
+    cfg = _cfg()
+    for period in cfg["period_names"]:
         if period not in text:
             continue
-        normalized_period = _PERIOD_ALIAS.get(period, period)
-        start_hour, end_hour = _PERIOD_SPANS[normalized_period]
+        normalized_period = cfg["period_alias"].get(period, period)
+        span = cfg["period_spans"].get(normalized_period)
+        if not span:
+            continue
+        start_hour, end_hour = span
         start = day.replace(hour=start_hour, minute=0, second=0, microsecond=0)
         end = day + timedelta(days=1) if end_hour == 24 else day.replace(hour=end_hour, minute=0, second=0, microsecond=0)
         return start, end
-    if "白天" in text:
-        return day.replace(hour=6), day.replace(hour=18)
+    if cfg["daytime_marker"] in text:
+        start_h, end_h = cfg["daytime_span"]
+        return day.replace(hour=int(start_h)), day.replace(hour=int(end_h))
     return None
 
 
 def _explicit_date_range(text: str, dates: list[dict[str, Any]], times: list[dict[str, Any]]) -> tuple[datetime, datetime] | None:
     if len(dates) < 2:
         return None
+    bridge_pat = _cfg()["date_range_bridge_pattern"]
     for left, right in zip(dates, dates[1:]):
         bridge = text[left["end"]:right["start"]]
-        if not re.search(r"到|至|[-—~～－]", bridge):
+        if not re.search(bridge_pat, bridge):
             continue
         left_times = [item for item in times if left["end"] <= item["start"] < right["start"]]
         right_times = [item for item in times if item["start"] >= right["end"]]
@@ -517,7 +595,8 @@ def _explicit_date_range(text: str, dates: list[dict[str, Any]], times: list[dic
 
 
 def _has_date_phrase(text: str) -> bool:
-    return bool(re.search(rf"(?:{_LONG_NUMBER}年)?{_SHORT_NUMBER}月|{_SHORT_NUMBER}(?:日|号)|大前天|前天|昨天|今日|今天|明天|后天|大后天|(?:上|下|本|这)?(?:周|星期)|(?:上|下|本|这个)?月|前年|去年|今年|明年|后年", text))
+    pattern = _cfg()["has_date_phrase"]
+    return bool(pattern and re.search(pattern, text))
 
 
 def _timestamp_range(start: datetime, end: datetime) -> tuple[float, float]:
@@ -538,7 +617,7 @@ def _parse_time_endpoint(value: Any, now: datetime | None) -> float | None:
     except ValueError:
         parsed = None
     if parsed is None:
-        for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+        for pattern in _cfg()["datetime_formats"]:
             try:
                 parsed = datetime.strptime(text, pattern)
                 break

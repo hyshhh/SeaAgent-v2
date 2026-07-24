@@ -11,12 +11,6 @@ import yaml
 from .loader import load_config, project_root
 
 PROMPT_SETTING_KEYS: tuple[str, ...] = (
-    "planner_intent",
-    "planner",
-    "planner_autonomous",
-    "observer",
-    "reflector",
-    "reflector_autonomous",
     "single_frame_recognition",
     "verify_description",
     "verify_registry",
@@ -30,24 +24,12 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
         "min_chars": 1,
         "max_chars": 8000,
         "label": {
-            "planner_intent": "意图分析提示词",
-            "planner": "PlanAgent 提示词（硬编码辅助模式）",
-            "planner_autonomous": "PlanAgent 提示词（自主规划模式）",
-            "observer": "ObserveAgent 提示词",
-            "reflector": "ReflectAgent 提示词",
-            "reflector_autonomous": "ReflectAgent 提示词（自主规划模式）",
             "single_frame_recognition": "单帧识别提示词",
             "verify_description": "描述核验提示词",
             "verify_registry": "库项核验提示词",
             "text_retrieval_instruction": "文本检索指令",
         }.get(key, key),
         "help": {
-            "planner_intent": "按规则表选择意图：模型自选 R01-R16，并输出 targetScope/targetKind/operation 等查询规格。",
-            "planner": "解释本轮工具计划，不改工具清单。",
-            "planner_autonomous": "PlanAgent 只生成下一轮计划；ObserveAgent 执行工具，ReflectAgent 根据真实观察决定是否继续。",
-            "observer": "记录工具执行事实，不重判答案。",
-            "reflector": "审计固定工具链的证据，不修改控制器状态。",
-            "reflector_autonomous": "根据观察事实决定 sufficient、replan、conflict 或 uncertain。",
             "single_frame_recognition": "单帧舷号可读性与外观描述识别。",
             "verify_description": "灰区时核验轨迹图像是否符合文字描述。",
             "verify_registry": "灰区时比较库参考图与轨迹图像，判断是否为同一艘船。",
@@ -89,12 +71,6 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.evidence.clip_crf": {"type": "int", "min": 18, "max": 40, "step": 1},
     "pipeline.evidence.poster_quality": {"type": "int", "min": 40, "max": 95, "step": 1},
     "pipeline.agent.max_rounds": {"type": "int", "min": 1, "max": 10, "step": 1},
-    "pipeline.agent.plan_mode": {
-        "type": "enum",
-        "choices": ["guided", "autonomous"],
-        "label": "PlanAgent 规划模式",
-        "help": "guided=控制器固定工具链，Plan 只解释；autonomous=Plan 自主决定工具和顺序，系统只校验接口安全。",
-    },
     "llm.enable_thinking": {
         "type": "enum",
         "choices": ["false", "true"],

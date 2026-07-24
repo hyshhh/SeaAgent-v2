@@ -77,7 +77,7 @@ async def memory_summary(request: Request):
     registry = request.app.state.ship_service.list_ships()
     config = request.app.state.config
     qa_memory = request.app.state.repository.qa_memory_summary()
-    recovery_rounds = int(config["pipeline"]["agent"].get("acceptance_recovery_rounds", 0))
+    max_rounds = int(config["pipeline"]["agent"]["max_rounds"])
     return {
         "trackCount": snapshot.get("trackCount", len(snapshot.get("tracks", []))),
         "keyframeCount": snapshot.get("keyframeCount", 0),
@@ -87,9 +87,7 @@ async def memory_summary(request: Request):
         "qaSessionCount": qa_memory["sessionCount"],
         "qaRoundCount": qa_memory["roundCount"],
         "qaEvidenceCount": qa_memory["evidenceCount"],
-        "maxRounds": int(config["pipeline"]["agent"]["max_rounds"]) + recovery_rounds,
-        "baseMaxRounds": config["pipeline"]["agent"]["max_rounds"],
-        "acceptanceRecoveryRounds": recovery_rounds,
+        "maxRounds": max_rounds,
         "retrievalTopK": int(config["pipeline"]["retrieval"].get("top_k", 3)),
     }
 

@@ -1,0 +1,116 @@
+# IntentAgent 可选技能目录：always 始终注入全文，其余按上下文匹配或 loadSkill 补载
+skills:
+  - id: core_intent
+    title: 自主意图核心
+    description: 角色、强制原则、工具列表与输出字段总纲
+    file: core_intent.md
+    always: true
+    tags: [core]
+
+  - id: time_parsing
+    title: 时间解析细则
+    description: 相对/绝对时间、timeRange 与 timeParseError 写法
+    file: time_parsing_rules.md
+    always: false
+    when: 问题含日期、时段、昨天/上周/上下午等时间表达
+    match_any:
+      - "昨天"
+      - "今天"
+      - "明天"
+      - "上周"
+      - "本周"
+      - "下周"
+      - "上午"
+      - "下午"
+      - "晚上"
+      - "凌晨"
+      - "中午"
+      - "点"
+      - "时"
+      - "分钟"
+      - "小时"
+      - "最近"
+      - "过去"
+      - "月"
+      - "年"
+      - "星期"
+      - "白天"
+      - "傍晚"
+      - "时间"
+      - "何时"
+      - "什么时候"
+    match_fields:
+      - timeExpression
+      - timeRange
+      - timeParseError
+    tags: [time]
+
+  - id: multi_target
+    title: 多目标拆分
+    description: 多舷号/多描述并列时如何填 targetItems
+    file: multi_target.md
+    always: false
+    when: 多个目标用顿号逗号“和/与/及”并列
+    match_any:
+      - "、"
+      - "，"
+      - ","
+      - "和"
+      - "与"
+      - "及"
+      - "以及"
+      - "还有"
+      - "分别"
+      - "几个"
+      - "多艘"
+      - "多船"
+    tags: [target, multi]
+
+  - id: target_identity
+    title: 目标与操作类型
+    description: targetScope/Kind/operation/registryRelation 判定
+    file: target_identification_rules.md
+    always: false
+    when: 涉及舷号、外观描述、在库关系、计数/存在/时间类操作
+    match_any:
+      - "舷号"
+      - "在库"
+      - "未在库"
+      - "先验"
+      - "库船"
+      - "有没有"
+      - "是否"
+      - "几艘"
+      - "多少"
+      - "数量"
+      - "什么时候"
+      - "出现"
+      - "黄色"
+      - "白色"
+      - "无人艇"
+      - "快艇"
+      - "货船"
+      - "渔船"
+      - "描述"
+    match_fields:
+      - hullNumber
+      - description
+      - targetKind
+      - operation
+      - registryRelation
+      - targetScope
+    tags: [target, operation]
+
+  - id: acceptance_fields
+    title: 验收字段填写
+    description: expectedOutcome / successCriteria / nextAgentFocus
+    file: acceptance_fields.md
+    always: false
+    when: 需要给 Plan/Reflect 明确验收与焦点时
+    match_any:
+      - "验收"
+      - "证明"
+      - "证据"
+      - "完整"
+      - "详细"
+    tags: [acceptance]

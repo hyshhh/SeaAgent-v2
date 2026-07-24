@@ -1,0 +1,39 @@
+# ObserveAgent 可选技能目录（执行侧提示，非多轮 ReAct）
+skills:
+  - id: core_observe
+    title: 执行观察核心
+    description: 严格按计划执行、不擅自决策退出
+    file: core_observe.md
+    always: true
+    tags: [core]
+
+  - id: execution_rules
+    title: 执行与依赖
+    description: condition、$ref、必填参数与跳过规则
+    file: execution_rules.md
+    always: false
+    when: 存在工具调用或依赖引用
+    match_any:
+      - "$ref"
+      - "condition"
+      - "getTrack"
+      - "getFrames"
+      - "依赖"
+      - "跳过"
+    match_fields:
+      - calls
+      - plan
+    tags: [execution]
+
+  - id: argument_rules
+    title: 参数校验
+    description: 各工具必填参数与常见错误
+    file: argument_rules.md
+    always: false
+    when: 需要核对工具参数
+    match_any:
+      - "参数"
+      - "arguments"
+      - "必填"
+      - "missing"
+    tags: [arguments]

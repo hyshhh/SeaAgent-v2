@@ -33,7 +33,12 @@ function relationLabel(rel) {
 }
 
 function intentSourceLabel(source) {
-  return ({model: '规则表+模型', heuristic: '规则兜底'})[source] || valueText(source);
+  return ({
+    model: '规则表+模型',
+    heuristic: '规则兜底',
+    langgraph_react: 'LangGraph/ReAct',
+    langgraph_fallback: 'LangGraph 兜底',
+  })[source] || valueText(source);
 }
 
 function questionTypeLabel(type) {
@@ -221,9 +226,8 @@ async function loadAgentMemorySummary(showNotice = false) {
     initializeTopKControl(summary.retrievalTopK || 3);
     const limit = document.getElementById('agentRoundLimit');
     if (limit) {
-      const baseRounds = summary.baseMaxRounds || summary.maxRounds || 3;
-      const recoveryRounds = summary.acceptanceRecoveryRounds || 0;
-      limit.textContent = recoveryRounds > 0 ? `最多 ${baseRounds} 轮 + ${recoveryRounds} 轮验收补偿` : `最多 ${baseRounds} 轮`;
+      const maxRounds = summary.maxRounds || 3;
+      limit.textContent = `最多 ${maxRounds} 轮`;
     }
     if (refreshStatus) {
       const updateTime = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -888,7 +892,7 @@ function resetThoughtStream() {
     intent.innerHTML = '<div class="intent-agent-body"><p>正在解析问题并生成验收目标…</p></div>';
   }
   if (intentState) intentState.textContent = '识别中';
-  if (mode) mode.textContent = 'PlanAgent 负责规划，ObserveAgent 负责执行，ReflectAgent 负责验收。';
+  if (mode) mode.textContent = 'LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。';
   setThinkingState('正在推理', 'active');
 }
 
@@ -922,9 +926,11 @@ function appendSystemThought(event) {
     renderIntentAgentCard(event);
     return;
   }
-  if (event.type === 'status' && (event.planMode || /规划模式|PlanAgent/.test(`${event.title || ''}${event.message || ''}`))) {
+  if (event.type === 'status' && (event.planMode || /规划模式|PlanAgent|LangGraph|Controller/.test(`${event.title || ''}${event.message || ''}`))) {
     const mode = document.getElementById('agentPlanMode');
-    const label = event.planMode === 'autonomous' ? '自主规划模式：PlanAgent 自主选择工具，ObserveAgent 负责执行。' : event.planMode === 'guided' ? '辅助规划模式：控制器校验必要证据与工具依赖。' : (event.message || '');
+    const label = event.planMode === 'langgraph'
+      ? 'LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。'
+      : (event.message || 'LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。');
     if (mode) mode.textContent = label;
     return;
   }

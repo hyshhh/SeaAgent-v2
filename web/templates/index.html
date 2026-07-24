@@ -185,10 +185,10 @@
 
       <section class="panel agent-thinking-panel">
         <div class="panel-head">
-          <div><span class="eyebrow">实时协同状态</span><h2>三智能体执行过程</h2></div>
+          <div><span class="eyebrow">实时协同状态</span><h2>四智能体执行过程</h2></div>
           <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
         </div>
-        <div class="thought-notice"><span id="agentPlanMode">PlanAgent 负责规划，ObserveAgent 负责执行，ReflectAgent 负责验收。</span></div>
+        <div class="thought-notice"><span id="agentPlanMode">LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。</span></div>
         <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
           <div class="agent-fixed-stack">
             <article class="agent-thought-card planner" data-role="planner" data-round="0">
@@ -312,14 +312,7 @@
           <label>图像排除阈值<input data-setting="pipeline.retrieval.image_exclude" type="number"><small>参考图匹配低于该值时直接排除。</small></label>
           <label>去重高阈值<input data-setting="pipeline.retrieval.dedup_high" type="number"><small>跨轨迹相似度达到该值时合并。</small></label>
           <label>去重低阈值<input data-setting="pipeline.retrieval.dedup_low" type="number"><small>低于该值时不合并。</small></label>
-          <label>问答最大轮数<input data-setting="pipeline.agent.max_rounds" type="number"><small>规划、观察、反思闭环的最大执行轮数。</small></label>
-          <label class="settings-toggle">PlanAgent 规划模式
-            <select data-setting="pipeline.agent.plan_mode">
-              <option value="guided">硬编码辅助（稳定）</option>
-              <option value="autonomous">自主规划（仅接口安全约束）</option>
-            </select>
-            <small>硬编码辅助：控制器固定工具链，Plan 只解释。自主规划：Plan 自选工具和顺序，系统只校验白名单、参数与证据依赖。</small>
-          </label>
+          <label>问答最大轮数<input data-setting="pipeline.agent.max_rounds" type="number"><small>LangGraph 四 Agent 闭环的最大执行轮数。</small></label>
           <label class="settings-toggle">模型思考模式
             <select data-setting="llm.enable_thinking">
               <option value="false">关闭（推荐）</option>
@@ -342,32 +335,8 @@
       </section>
 
       <section class="panel settings-card settings-card-wide">
-        <div class="panel-head"><div><span class="eyebrow">智能体提示词</span><h3>智能体、检索与核验提示词</h3></div><p class="settings-card-note">可在此直接修改并保存；下一轮问答与识别会使用最新提示词。</p></div>
+        <div class="panel-head"><div><span class="eyebrow">识别与检索提示词</span><h3>单帧识别、核验与检索指令</h3></div><p class="settings-card-note">四 Agent 角色提示词由 skills/ 管理；此处仅保留识别链路可调提示词。</p></div>
         <div class="settings-prompt-grid">
-          <label class="settings-prompt-item">意图分析提示词（planner_intent）
-            <textarea data-setting="prompts.planner_intent" rows="8" spellcheck="false"></textarea>
-            <small>按 R01-R16 规则表让模型自选意图，再编译成描述检索、在库关系、舷号或列表等工具链。</small>
-          </label>
-          <label class="settings-prompt-item">PlanAgent 提示词（硬编码辅助模式）
-            <textarea data-setting="prompts.planner" rows="8" spellcheck="false"></textarea>
-            <small>解释本轮工具计划；不能增删工具，也不能直接回答用户问题。</small>
-          </label>
-          <label class="settings-prompt-item">PlanAgent 提示词（自主规划模式）
-            <textarea data-setting="prompts.planner_autonomous" rows="10" spellcheck="false"></textarea>
-            <small>由 PlanAgent 自选工具和顺序；系统只校验接口、参数和证据依赖。</small>
-          </label>
-          <label class="settings-prompt-item">ObserveAgent 提示词
-            <textarea data-setting="prompts.observer" rows="8" spellcheck="false"></textarea>
-            <small>记录工具执行事实与证据缺口，不重判最终答案。</small>
-          </label>
-          <label class="settings-prompt-item">ReflectAgent 提示词
-            <textarea data-setting="prompts.reflector" rows="8" spellcheck="false"></textarea>
-            <small>硬编码辅助模式下审计固定链路，不改变控制器状态。</small>
-          </label>
-          <label class="settings-prompt-item">ReflectAgent 提示词（自主规划模式）
-            <textarea data-setting="prompts.reflector_autonomous" rows="10" spellcheck="false"></textarea>
-            <small>根据已观察事实实际决定停止、重规划、冲突或无法确认。</small>
-          </label>
           <label class="settings-prompt-item">单帧识别提示词
             <textarea data-setting="prompts.single_frame_recognition" rows="7" spellcheck="false"></textarea>
             <small>单帧舷号可读性判断与外观描述提取。</small>

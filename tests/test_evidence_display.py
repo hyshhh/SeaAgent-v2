@@ -135,11 +135,10 @@ class EvidenceDisplayTest(unittest.TestCase):
             [["ref-003-a"], ["ref-003-a"]],
         )
 
-
-    def test_autonomous_count_only_displays_deduplicated_representatives(self):
+    def test_count_synthesis_uses_working_scope(self):
         controller = AgentController.__new__(AgentController)
         controller.tools = _DisplayTools()
-        controller.meta = {"registryRelation": "any", "targetScope": "track_memory"}
+        controller.meta = {"questionType": "count"}
         controller.session_id = "session-test"
         controller.question = "一共出现多少艘船？"
         controller.rounds = []
@@ -152,31 +151,22 @@ class EvidenceDisplayTest(unittest.TestCase):
         controller.working_scope = {
             "tracksSnapshot": {
                 "tracks": [
-                    {"trackId": "1", "startTime": 0.0, "endTime": 1.0},
-                    {"trackId": "2", "startTime": 2.0, "endTime": 3.0},
-                    {"trackId": "3", "startTime": 4.0, "endTime": 5.0},
+                    {"trackId": "1", "embeddingScore": 0.4},
+                    {"trackId": "2", "embeddingScore": 0.9},
+                    {"trackId": "3", "embeddingScore": 0.8},
                 ]
-            },
-            "countFrames": {
-                "keyframesByTrack": {
-                    "1": {"keyframes": [{"keyframeId": "frame-1", "retentionScore": 0.4}]},
-                    "2": {"keyframes": [{"keyframeId": "frame-2", "retentionScore": 0.9}]},
-                    "3": {"keyframes": [{"keyframeId": "frame-3", "retentionScore": 0.8}]},
-                }
             },
             "deduplicatedCount": {
                 "highThresholdShipCount": 2,
-                "lowThresholdShipCount": 2,
                 "highGroups": [["1", "2"], ["3"]],
             },
         }
 
-        result = controller._finish_autonomous(None, "sufficient", "去重完成")
+        result = controller._synthesize("sufficient", "去重完成")
 
-        self.assertEqual([item["trackId"] for item in result["tracks"]], ["2", "3"])
-        self.assertEqual([item["trackId"] for item in result["displayGroups"]], ["2", "3"])
-        self.assertEqual(result["display"]["trackCount"], 2)
-        self.assertEqual(result["evidence"]["keyframeIds"], ["frame-2", "frame-3"])
+        self.assertEqual(result["count"], 2)
+        self.assertIn("统计结果为 2", result["conclusion"])
+        self.assertEqual(result["planMode"], "langgraph")
 
 
 if __name__ == "__main__":

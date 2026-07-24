@@ -1,0 +1,199 @@
+# 时间归一化规则（替代 agent/time_normalizer.py 内硬编码词表/模式）
+# 算法流程仍在 Python；词表、别名、区间、检测模式从此文件加载。
+
+cn_digits:
+  零: 0
+  〇: 0
+  一: 1
+  二: 2
+  两: 2
+  三: 3
+  四: 4
+  五: 5
+  六: 6
+  七: 7
+  八: 8
+  九: 9
+
+cn_number_pattern: "[〇零一二两三四五六七八九十]{1,4}"
+
+period_names:
+  - 凌晨
+  - 清晨
+  - 早上
+  - 上午
+  - 中午
+  - 正午
+  - 下午
+  - 傍晚
+  - 晚上
+  - 晚间
+  - 夜间
+  - 午夜
+  - 半夜
+
+period_alias:
+  清晨: 早上
+  正午: 中午
+  晚间: 晚上
+  夜间: 晚上
+  半夜: 凌晨
+  午夜: 凌晨
+
+# 标准时段小时区间 [start, end)，end=24 表示跨到次日 0 点
+period_spans:
+  凌晨: [0, 6]
+  早上: [6, 9]
+  上午: [8, 12]
+  中午: [11, 14]
+  下午: [12, 18]
+  傍晚: [17, 19]
+  晚上: [18, 24]
+
+fuzzy_markers:
+  - 左右
+  - 前后
+  - 大约
+  - 约莫
+  - 约
+  - 差不多
+  - 将近
+
+# 文本预处理：英文/口语替换为中文
+text_substitutions:
+  - pattern: "\\byesterday\\b"
+    replacement: 昨天
+  - pattern: "\\btoday\\b"
+    replacement: 今天
+  - pattern: "\\btomorrow\\b"
+    replacement: 明天
+  - pattern: "\\blastweek\\b"
+    replacement: 上周
+  - pattern: "\\bnextweek\\b"
+    replacement: 下周
+  - pattern: "\\bthisweek\\b"
+    replacement: 本周
+
+literal_replacements:
+  礼拜: 星期
+  周天: 周日
+  夜里: 晚上
+  夜晚: 晚上
+  午后: 下午
+  傍晚时分: 傍晚
+
+# 相对时段关键词
+just_now_markers: [刚才, 刚刚]
+just_now_minutes: 10
+later_markers: [稍后]
+later_hours: 1
+daytime_marker: 白天
+daytime_span: [6, 18]
+
+# 模糊钟点默认窗口（分钟）
+fuzzy_clock_window_minutes: 30
+
+# 相对日短语 -> 偏移天数
+relative_day_phrases:
+  - phrases: [大前天]
+    offset: -3
+  - phrases: [前天]
+    offset: -2
+  - phrases: [昨天, 昨日]
+    offset: -1
+  - phrases: [今天, 今日, 当天]
+    offset: 0
+  - phrases: [明天, 明日]
+    offset: 1
+  - phrases: [后天]
+    offset: 2
+  - phrases: [大后天]
+    offset: 3
+
+year_offsets:
+  前年: -2
+  去年: -1
+  今年: 0
+  明年: 1
+  后年: 2
+
+week_prefix_offsets:
+  上上: -2
+  上: -1
+  本: 0
+  这: 0
+  下: 1
+  下下: 2
+
+weekday_index:
+  一: 0
+  二: 1
+  三: 2
+  四: 3
+  五: 4
+  六: 5
+  日: 6
+  天: 6
+
+relative_month_phrases:
+  上上个月: -2
+  上个月: -1
+  本月: 0
+  这个月: 0
+  下个月: 1
+  下下个月: 2
+
+# 时长单位 -> 秒
+duration_unit_seconds:
+  分: 60
+  分钟: 60
+  小时: 3600
+  刻钟: 900
+  天: 86400
+  日: 86400
+  周: 604800
+  星期: 604800
+  月: 2592000
+  年: 31536000
+
+# 模型端点字段名
+model_start_keys: [start, startTime, begin]
+model_end_keys: [end, endTime, finish]
+
+# 绝对时间解析格式
+datetime_formats:
+  - "%Y-%m-%d %H:%M:%S"
+  - "%Y-%m-%d %H:%M"
+  - "%Y/%m/%d %H:%M:%S"
+  - "%Y/%m/%d %H:%M"
+
+# 跨日桥接词
+next_day_bridge_markers: [次日, 第二天]
+relative_end_day_markers:
+  大前天: -3
+  前天: -2
+  昨天: -1
+  今天: 0
+  明天: 1
+  后天: 2
+  大后天: 3
+
+# has_time_expression 检测模式（{short}/{long}/{period} 会被替换）
+time_expression_patterns:
+  - "(?:大前天|前天|昨天|昨日|今天|今日|明天|明日|后天|大后天|前年|去年|今年|明年|后年)"
+  - "(?:上上|下下|上|下|本|这)?(?:周|星期)[一二三四五六日天末]?"
+  - "(?:最近|近|过去)?(?:{short}|半|一刻)(?:个)?(?:分钟?|小时|天|日|周|星期|月|年|刻钟)(?:前|后)?"
+  - "{long}\\s*(?:年|[./-])\\s*{short}\\s*(?:月|[./-])\\s*{short}(?:日|号)?"
+  - "{short}月(?:{short}(?:日|号)?)?"
+  - "(?<![\\d年月]){short}(?:日|号)"
+  - "\\d{1,2}[:：]\\d{1,2}(?::\\d{1,2})?"
+  - "(?:{period})?{short}(?:点|时)"
+  - "(?:{period})"
+  - "(?:稍后|刚才|刚刚|白天|夜里|夜晚|上上个月|上个月|本月|这个月|下个月|下下个月)"
+
+has_date_phrase_pattern: "(?:{long}年)?{short}月|{short}(?:日|号)|大前天|前天|昨天|今日|今天|明天|后天|大后天|(?:上|下|本|这)?(?:周|星期)|(?:上|下|本|这个)?月|前年|去年|今年|明年|后年"
+
+# 区间连接桥接（钟点对）
+clock_bridge_pattern: "(?:左右|前后|大约|约莫|约|差不多|将近|从|起|之间)*(?:到|至|[-—~～－])(?:左右|前后|大约|约莫|约|差不多|将近|止|之间)*"
+
+date_range_bridge_pattern: "到|至|[-—~～－]"

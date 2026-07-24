@@ -1,0 +1,85 @@
+# PlanAgent 可选技能目录
+skills:
+  - id: core_planning
+    title: 自主规划核心
+    description: 角色、最小可执行计划原则与输出格式
+    file: core_planning.md
+    always: true
+    tags: [core]
+
+  - id: tool_chains
+    title: 工具链路与参数
+    description: 允许工具、典型链路、参数与 $ref 要点
+    file: tool_planning_rules.md
+    always: false
+    when: 需要设计工具调用链或参数
+    match_any:
+      - "getTrack"
+      - "getFrames"
+      - "matchText"
+      - "matchImage"
+      - "matchHull"
+      - "dedupTracks"
+      - "getRegistry"
+      - "listRegistry"
+      - "showEvidence"
+      - "verifyTarget"
+      - "getClip"
+      - "轨迹"
+      - "关键帧"
+      - "匹配"
+      - "去重"
+      - "在库"
+      - "描述"
+      - "舷号"
+      - "计数"
+    match_fields:
+      - planBlueprint
+      - allowedTools
+      - planValidationError
+      - previousInvalidPlan
+    tags: [tools]
+
+  - id: recovery
+    title: 失败修复与补洞
+    description: 计划校验失败、缺证据时如何改计划
+    file: recovery.md
+    always: false
+    when: 上轮计划失败、校验错误或 Reflect 要求 replan 补洞
+    match_any:
+      - "失败"
+      - "校验"
+      - "修复"
+      - "重试"
+      - "缺口"
+      - "缺少"
+      - "未满足"
+      - "无效"
+      - "replan"
+      - "evidenceGap"
+      - "补"
+    match_fields:
+      - planValidationError
+      - previousInvalidPlan
+      - repairHint
+      - evidenceGap
+    tags: [recovery]
+
+  - id: acceptance_focus
+    title: 验收驱动规划
+    description: 按 pendingRequirements / nextAgentFocus 排优先级
+    file: acceptance_focus.md
+    always: false
+    when: 存在验收进度或下一焦点
+    match_any:
+      - "验收"
+      - "pending"
+      - "nextAgentFocus"
+      - "successCriteria"
+      - "expectedOutcome"
+    match_fields:
+      - acceptanceProgress
+      - intent.successCriteria
+      - intent.nextAgentFocus
+      - intent.expectedOutcome
+    tags: [acceptance]
