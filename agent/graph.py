@@ -1,9 +1,9 @@
 """LangGraph 四 Agent 编排：角色工具集 → handoff → Graph。
 
-流程：
+流程（对齐 old 自主规划）：
   IntentAgent ⇄ tools → handoff_to_plan
-  PlanAgent ⇄ tools → handoff_to_observe | handoff_to_reflect
-  ObserveAgent ⇄ tools → handoff_to_reflect
+  PlanAgent ⇄ tools → handoff_to_observe(calls+$ref) | handoff_to_reflect
+  ObserveAgent = 确定性执行 calls（完整结果进 working_scope，模型只看摘要）→ reflect
   ReflectAgent ⇄ tools → handoff_to_plan_replan | handoff_finish
 """
 from __future__ import annotations
@@ -24,8 +24,9 @@ from services import AgentLLMService
 from tools import ToolService
 from tools.target_parser import infer_intent_fields, normalize_target_items
 
-from .lc_tools import build_intent_tools, build_load_skill_tool, build_observe_tools
+from .lc_tools import build_intent_tools, build_load_skill_tool
 from .llm_adapter import build_chat_model
+from .plan_executor import PlanExecutor
 from .roles import (
     INTENT_RESPONSIBILITY,
     OBSERVE_RESPONSIBILITY,
@@ -57,6 +58,7 @@ class AgentState(TypedDict, total=False):
     tool_chain: Annotated[list[str], _merge_list]
     tool_records: Annotated[list[dict[str, Any]], _merge_list]
     plan_hint: str
+    plan_calls: list[dict[str, Any]]
     observation_summary: str
     active_agent: str
     final_state: str
@@ -74,7 +76,11 @@ class HandoffToPlanArgs(BaseModel):
 
 class HandoffToObserveArgs(BaseModel):
     goal: str = Field(description="本轮观察目标")
-    planHint: str = Field(default="", description="建议调用的工具与参数要点")
+    calls: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="本轮可执行工具调用列表；每项含 id/tool/arguments，跨步骤用 $ref",
+    )
+    planHint: str = Field(default="", description="自然语言计划说明，供前端展示")
     reason: str = Field(default="")
 
 
@@ -199,10 +205,22 @@ def build_sea_agent_graph(
         return json.dumps({"ok": True, "handoff": "plan", "intent": intent or {}, "note": note}, ensure_ascii=False)
 
     @tool("handoff_to_observe", args_schema=HandoffToObserveArgs)
-    def handoff_to_observe(goal: str, planHint: str = "", reason: str = "") -> str:
-        """规划完成后移交给 ObserveAgent 执行工具。"""
+    def handoff_to_observe(
+        goal: str,
+        calls: list[dict[str, Any]] | None = None,
+        planHint: str = "",
+        reason: str = "",
+    ) -> str:
+        """规划完成后移交给 ObserveAgent 按 calls 确定性执行。"""
         return json.dumps(
-            {"ok": True, "handoff": "observe", "goal": goal, "planHint": planHint, "reason": reason},
+            {
+                "ok": True,
+                "handoff": "observe",
+                "goal": goal,
+                "calls": calls or [],
+                "planHint": planHint,
+                "reason": reason,
+            },
             ensure_ascii=False,
         )
 
@@ -251,6 +269,59 @@ def build_sea_agent_graph(
             return {"ok": True, "skillId": skill_id, "content": body}
 
         return _load
+
+    def _default_plan_calls(intent: dict[str, Any], top_k: int) -> list[dict[str, Any]]:
+        """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
+        hull = str(intent.get("hullNumber") or "").strip()
+        description = str(intent.get("description") or "").strip()
+        time_range = intent.get("timeRange")
+        operation = str(intent.get("operation") or "list")
+        target_scope = str(intent.get("targetScope") or "track_memory")
+        top = max(1, min(20, int(top_k or 3)))
+
+        if target_scope == "registry":
+            if hull:
+                return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
+            return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
+
+        track_args: dict[str, Any] = {"offset": 0, "limit": 60}
+        if time_range:
+            track_args["timeRange"] = time_range
+        if hull:
+            track_args["hullNumber"] = hull
+        calls: list[dict[str, Any]] = [
+            {"id": "tracks", "tool": "getTrack", "arguments": track_args},
+        ]
+        if operation == "count":
+            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+            calls.append({
+                "id": "dedup",
+                "tool": "dedupTracks",
+                "arguments": {
+                    "tracks": {"$ref": "tracks.tracks"},
+                    "keyframesByTrack": {"$ref": "frames.keyframesByTrack"},
+                },
+            })
+            return calls
+        if description:
+            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+            calls.append({
+                "id": "match",
+                "tool": "matchText",
+                "arguments": {
+                    "description": description,
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": top,
+                },
+            })
+            return calls
+        if hull:
+            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+            calls.append({"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}})
+            return calls
+        # 列表/存在：先取轨迹，再取关键帧供展示
+        calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+        return calls
 
     def _tool_event(name: str, arguments: dict[str, Any], result: dict[str, Any], *, round_number: int) -> None:
         call_id = f"{name}-{round_number}-{abs(hash(json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str))) % 10_000}"
@@ -329,7 +400,8 @@ def build_sea_agent_graph(
                     "title": title,
                     "message": f"{title} 开始",
                     "role": role,
-                    "round": max(1, round_number),
+                    # Intent 全局一轮；Plan/Observe/Reflect 从 1 计
+                    "round": 0 if role == "intent" else max(1, round_number),
                 },
             )
 
@@ -409,6 +481,7 @@ def build_sea_agent_graph(
         text = _last_ai_text(messages)
         if invoke_error and not text:
             text = f"{title} 未正常结束：{invoke_error[:200]}"
+        event_round = 0 if role == "intent" else max(1, round_number or 1)
         if text:
             _emit(
                 event_handler,
@@ -417,7 +490,7 @@ def build_sea_agent_graph(
                     "title": title,
                     "message": "",
                     "role": role,
-                    "round": max(1, round_number or 1),
+                    "round": event_round,
                     "delta": text[:500] + ("…" if len(text) > 500 else ""),
                 },
             )
@@ -427,7 +500,7 @@ def build_sea_agent_graph(
                 "title": title,
                 "message": text[:300] if text else f"{title} 完成",
                 "role": role,
-                "round": max(1, round_number),
+                "round": event_round,
                 "modelSummary": {
                     "summary": text[:500] if text else "",
                     "goal": (handoff or {}).get("goal") or (handoff or {}).get("planHint") or "",
@@ -449,19 +522,27 @@ def build_sea_agent_graph(
                 ],
             }
             if role == "planner":
-                tools_in_hint = []
-                for name_candidate in (
-                    "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
-                    "matchHull", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks",
-                ):
-                    blob = f"{(handoff or {}).get('planHint') or ''} {(handoff or {}).get('goal') or ''} {text}"
-                    if name_candidate in blob:
-                        tools_in_hint.append(name_candidate)
-                if tools_in_hint and not end_event["calls"]:
-                    end_event["calls"] = [{"id": f"plan-{i+1}", "tool": tool_name} for i, tool_name in enumerate(tools_in_hint)]
+                # 优先使用 handoff.calls；否则从 planHint 文本抽工具名作展示
+                handoff_calls = PlanExecutor.sanitize_calls((handoff or {}).get("calls"))
+                if handoff_calls:
+                    end_event["calls"] = [
+                        {"id": c["id"], "tool": c["tool"], "arguments": c.get("arguments") or {}}
+                        for c in handoff_calls
+                    ]
+                else:
+                    tools_in_hint = []
+                    for name_candidate in (
+                        "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
+                        "matchHull", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks",
+                    ):
+                        blob = f"{(handoff or {}).get('planHint') or ''} {(handoff or {}).get('goal') or ''} {text}"
+                        if name_candidate in blob:
+                            tools_in_hint.append(name_candidate)
+                    if tools_in_hint and not end_event["calls"]:
+                        end_event["calls"] = [{"id": f"plan-{i+1}", "tool": tool_name} for i, tool_name in enumerate(tools_in_hint)]
                 end_event["planBlueprint"] = [
                     {
-                        "stepId": f"step-{i+1}",
+                        "stepId": str(call.get("id") or f"step-{i+1}"),
                         "title": f"执行 {call.get('tool')}",
                         "tools": [call.get("tool")],
                         "optional": False,
@@ -527,7 +608,7 @@ def build_sea_agent_graph(
             intent_tools,
             state,
             user,
-            role=None,
+            role="intent",
             round_number=0,
         )
         handoff = out.get("handoff") or {}
@@ -631,9 +712,10 @@ def build_sea_agent_graph(
         round_number = loop_count + 1
         intent = state.get("intent") or {}
         reflection = state.get("reflection") or {}
+        scope_keys = list((state.get("working_scope") or {}).keys())
         user = json.dumps(
             {
-                "task": "规划本轮检索；必须调用 handoff_to_observe（或无法继续时 handoff_to_reflect）",
+                "task": "规划本轮检索；必须调用 handoff_to_observe(goal, calls, planHint) 或 handoff_to_reflect",
                 "question": state.get("question"),
                 "intent": intent,
                 "loop": loop_count,
@@ -641,10 +723,36 @@ def build_sea_agent_graph(
                 "maxRounds": state.get("max_rounds") or max_rounds,
                 "queryTopK": state.get("query_top_k") or default_top_k,
                 "previousReflection": reflection,
-                "workingScopeKeys": list((state.get("working_scope") or {}).keys()),
+                "workingScopeKeys": scope_keys,
                 "availableTools": [
                     "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
                     "matchHull", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks",
+                ],
+                "callSchema": {
+                    "id": "本轮唯一调用 id，如 tracks/frames/match",
+                    "tool": "工具名",
+                    "arguments": "参数对象；跨步骤用 {\"$ref\": \"{callId}.{field}\"}",
+                },
+                "examples": [
+                    {
+                        "desc": "描述存在判断",
+                        "calls": [
+                            {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": intent.get("timeRange"), "offset": 0, "limit": 60}},
+                            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                            {"id": "match", "tool": "matchText", "arguments": {
+                                "description": intent.get("description") or "目标描述",
+                                "galleryImages": {"$ref": "frames.keyframes"},
+                                "topK": state.get("query_top_k") or default_top_k,
+                            }},
+                        ],
+                    },
+                    {
+                        "desc": "舷号查询",
+                        "calls": [
+                            {"id": "tracks", "tool": "getTrack", "arguments": {"hullNumber": intent.get("hullNumber"), "timeRange": intent.get("timeRange")}},
+                            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                        ],
+                    },
                 ],
             },
             ensure_ascii=False,
@@ -662,22 +770,21 @@ def build_sea_agent_graph(
             recursion_limit=10,
         )
         handoff = out.get("handoff") or {}
-        # 未 handoff 时默认走 observe，避免空转
         target = str(handoff.get("handoff") or "observe")
         plan_hint = str(handoff.get("planHint") or handoff.get("goal") or "")
-        if not plan_hint:
-            hull = str(intent.get("hullNumber") or "").strip()
-            description = str(intent.get("description") or "").strip()
-            if hull:
-                plan_hint = f"先 getTrack(hullNumber={hull})，再 getFrames；必要时 matchHull(hullNumberArray=[{hull}]) 与 showEvidence"
-            elif description:
-                plan_hint = f"先 getTrack，再 getFrames，然后 matchText(description={description[:40]})"
-            else:
-                plan_hint = "按意图调用 getTrack，必要时 getFrames/matchText/dedupTracks"
+        plan_calls = PlanExecutor.sanitize_calls(handoff.get("calls"))
+
+        # 模型未给出 calls 时，按意图生成最小可执行链（仍是结构化 calls+$ref，非硬编码业务流程分支）
+        if target != "reflect" and not plan_calls:
+            plan_calls = _default_plan_calls(intent, state.get("query_top_k") or default_top_k)
+            if not plan_hint:
+                plan_hint = " → ".join(c["tool"] for c in plan_calls) or "无步骤"
             if out.get("invoke_error"):
                 plan_hint = f"[规划兜底] {plan_hint}"
+
         update: dict[str, Any] = {
             "plan_hint": plan_hint,
+            "plan_calls": plan_calls,
             "active_agent": "observe" if target != "reflect" else "reflect",
             "tool_chain": out.get("tool_chain") or [],
             "tool_records": out.get("tool_records") or [],
@@ -688,59 +795,126 @@ def build_sea_agent_graph(
         return Command(goto="observe", update=update)
 
     def observe_node(state: AgentState) -> Command:
+        """确定性执行 Plan 的 calls（对齐 old Observer），不把完整工具结果塞进 ReAct 对话。"""
         loop_count = int(state.get("loop_count") or 0)
         round_number = loop_count + 1
-        intent = state.get("intent") or {}
-        top_k = int(state.get("query_top_k") or default_top_k)
+        plan_calls = PlanExecutor.sanitize_calls(state.get("plan_calls") or [])
+        if not plan_calls:
+            # 无 calls 时再兜底一次
+            plan_calls = _default_plan_calls(state.get("intent") or {}, state.get("query_top_k") or default_top_k)
 
-        def on_tool(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
-            _tool_event(name, arguments, result, round_number=round_number)
-
-        observe_tools = build_observe_tools(tools, on_tool=on_tool) + [
-            build_load_skill_tool("observe_agent", _skill_loader("observe_agent")),
-            handoff_to_reflect,
-        ]
-        user = json.dumps(
+        _emit(
+            event_handler,
             {
-                "task": "多轮调用业务工具完成 planHint；完成后必须 handoff_to_reflect",
-                "question": state.get("question"),
-                "intent": intent,
-                "planHint": state.get("plan_hint"),
-                "queryTopK": top_k,
-                "workingScopeKeys": list((state.get("working_scope") or {}).keys()),
-                "rules": [
-                    "先 getTrack 再 getFrames",
-                    "描述匹配用 matchText(description=...)，galleryImages 可省略（自动用本轮 getFrames 关键帧）",
-                    "图像匹配用 matchImage，query/gallery 可省略",
-                    f"matchText/matchImage 的 topK 默认 {top_k}",
-                    "计数用 dedupTracks",
-                    "不要伪造轨迹",
+                "type": "agent_start",
+                "title": "观察执行智能体（ObserveAgent）",
+                "message": f"按计划确定性执行 {len(plan_calls)} 个工具步骤",
+                "role": "observer",
+                "round": round_number,
+            },
+        )
+
+        def on_tool_event(event: dict[str, Any]) -> None:
+            tool_name = str(event.get("tool") or "")
+            phase = str(event.get("phase") or "running")
+            summary = event.get("summary") if isinstance(event.get("summary"), dict) else {}
+            _emit(
+                event_handler,
+                {
+                    "type": "agent_tool",
+                    "title": "ObserveAgent",
+                    "message": tool_name,
+                    "role": "observer",
+                    "round": round_number,
+                    "id": event.get("id") or tool_name,
+                    "tool": tool_name,
+                    "arguments": event.get("arguments") or {},
+                    "ok": event.get("ok", True) is not False,
+                    "status": phase,
+                    "phase": phase,
+                    "summary": summary,
+                    "error": event.get("error"),
+                    "skipped": bool(event.get("skipped")),
+                    **{k: v for k, v in summary.items() if k not in {"id", "tool"}},
+                },
+            )
+
+        executor = PlanExecutor(tools)
+        executed = executor.execute(
+            plan_calls,
+            scope=state.get("working_scope") or {},
+            on_tool_event=on_tool_event,
+        )
+        summary_obj = executed.get("summary") or {}
+        call_summaries = summary_obj.get("calls") or []
+        lines = []
+        for item in call_summaries:
+            if item.get("skipped"):
+                lines.append(f"{item.get('tool')}: 跳过 ({item.get('skipReason') or item.get('error') or '条件不满足'})")
+            elif item.get("ok") is False:
+                lines.append(f"{item.get('tool')}: 失败 ({item.get('error') or 'unknown'})")
+            else:
+                bits = [str(item.get("tool") or "tool")]
+                if item.get("trackCount") is not None:
+                    bits.append(f"{item['trackCount']} 条轨迹")
+                if item.get("keyframeCount") is not None:
+                    bits.append(f"{item['keyframeCount']} 张关键帧")
+                if item.get("matchCount") is not None:
+                    bits.append(f"{item['matchCount']} 条匹配")
+                if item.get("registryCount") is not None:
+                    bits.append(f"{item['registryCount']} 个库项")
+                if item.get("exactMatchHullCount") is not None:
+                    bits.append(f"{item['exactMatchHullCount']} 组舷号命中")
+                lines.append(" · ".join(bits) if len(bits) > 1 else f"{bits[0]}: 完成")
+        observation_summary = "；".join(lines) if lines else "本轮无工具执行"
+        if state.get("plan_hint"):
+            observation_summary = f"计划：{state.get('plan_hint')}\n结果：{observation_summary}"
+
+        _emit(
+            event_handler,
+            {
+                "type": "agent_end",
+                "title": "观察执行智能体（ObserveAgent）",
+                "message": observation_summary[:300],
+                "role": "observer",
+                "round": round_number,
+                "modelSummary": {"summary": observation_summary[:500]},
+                "calls": [
+                    {
+                        "id": item.get("id"),
+                        "tool": item.get("tool"),
+                        "arguments": {},
+                        "ok": item.get("ok") is not False and not item.get("skipped"),
+                        "skipped": bool(item.get("skipped")),
+                        "error": item.get("error") or item.get("skipReason"),
+                        "summary": item,
+                        **{k: v for k, v in item.items() if k not in {"id", "tool"}},
+                    }
+                    for item in call_summaries
                 ],
             },
-            ensure_ascii=False,
         )
-        out = _run_agent(
-            "observe",
-            "observe_agent",
-            "观察执行智能体（ObserveAgent）",
-            OBSERVE_RESPONSIBILITY,
-            observe_tools,
-            state,
-            user,
-            role="observer",
-            round_number=round_number,
-            recursion_limit=16,
-        )
-        handoff = out.get("handoff") or {}
-        summary = str(handoff.get("summary") or out.get("text") or "观察完成")
+
+        # working_scope：保留本轮完整工具结果（按 call id 索引），供合成与后续 $ref
+        scope_updates = {
+            key: value
+            for key, value in (executed.get("scope") or {}).items()
+            if key not in (state.get("working_scope") or {}) or key in {c["id"] for c in plan_calls}
+        }
+        # 若 merge 需要整表，直接传 executed.scope 中本轮 id
+        for call in plan_calls:
+            cid = call["id"]
+            if cid in (executed.get("scope") or {}):
+                scope_updates[cid] = executed["scope"][cid]
+
         return Command(
             goto="reflect",
             update={
-                "working_scope": out.get("scope_updates") or {},
-                "observation_summary": summary,
+                "working_scope": scope_updates,
+                "observation_summary": observation_summary,
                 "active_agent": "reflect",
-                "tool_chain": out.get("tool_chain") or [],
-                "tool_records": out.get("tool_records") or [],
+                "tool_chain": executed.get("tool_chain") or [],
+                "tool_records": executed.get("tool_records") or [],
             },
         )
 
@@ -749,7 +923,34 @@ def build_sea_agent_graph(
         limit = int(state.get("max_rounds") or max_rounds)
         intent = state.get("intent") or {}
         scope = state.get("working_scope") or {}
-        has_tool_evidence = bool(scope)
+        # 成功证据：working_scope 中存在 ok 且含 tracks/matches/keyframes/registry 等
+        has_tool_evidence = False
+        evidence_bits: list[str] = []
+        for key, value in scope.items():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            if any(value.get(field) not in (None, [], {}) for field in (
+                "tracks", "trackIds", "keyframes", "keyframeIds", "matches",
+                "registryItems", "registryReferences", "exactMatches",
+                "highThresholdShipCount", "uniqueCount", "count",
+            )):
+                has_tool_evidence = True
+                if value.get("tracks") is not None:
+                    evidence_bits.append(f"{key}:tracks={len(value.get('tracks') or [])}")
+                if value.get("keyframes") is not None:
+                    evidence_bits.append(f"{key}:keyframes={len(value.get('keyframes') or [])}")
+                if value.get("matches") is not None:
+                    evidence_bits.append(f"{key}:matches={len(value.get('matches') or [])}")
+                if value.get("registryItems") is not None or value.get("registryReferences") is not None:
+                    evidence_bits.append(f"{key}:registry")
+                if value.get("exactMatches") is not None:
+                    evidence_bits.append(f"{key}:exactHull")
+        # 工具链非空也算有执行痕迹
+        if not has_tool_evidence and (state.get("tool_chain") or state.get("tool_records")):
+            has_tool_evidence = any(
+                isinstance(r, dict) and r.get("ok") is not False and not r.get("skipped")
+                for r in (state.get("tool_records") or [])
+            )
         user = json.dumps(
             {
                 "task": "判定是否退出。replan→handoff_to_plan_replan；否则必须 handoff_finish",
@@ -758,14 +959,17 @@ def build_sea_agent_graph(
                 "successCriteria": intent.get("successCriteria"),
                 "observation": state.get("observation_summary"),
                 "workingScopeKeys": list(scope.keys()),
+                "evidenceHints": evidence_bits[:20],
                 "hasToolEvidence": has_tool_evidence,
                 "toolChain": state.get("tool_chain") or [],
                 "loop": loop_count,
                 "maxRounds": limit,
                 "notes": [
+                    "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
                     "无成功工具结果时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                     "证据矛盾 → conflict",
+                    "描述匹配已有 matches 且非空 → 倾向 sufficient 或按分数解释",
                 ],
             },
             ensure_ascii=False,

@@ -155,6 +155,142 @@ def build_intent_tools(reference_time: datetime | None = None) -> list[Structure
     ]
 
 
+def _compact_track(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "trackId": item.get("trackId") or item.get("id"),
+        "hullNumber": item.get("finalHullNumber") or item.get("hullNumber"),
+        "startTime": item.get("startTime") or item.get("start_time"),
+        "endTime": item.get("endTime") or item.get("end_time"),
+        "finalMatchType": item.get("finalMatchType"),
+    }
+
+
+def _compact_keyframe(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "keyframeId": item.get("keyframeId") or item.get("id"),
+        "trackId": item.get("trackId"),
+        "timestamp": item.get("timestamp") or item.get("time"),
+        "hullNumber": item.get("hullNumber") or item.get("finalHullNumber"),
+    }
+
+
+def _compact_registry(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "registryId": item.get("registryId") or item.get("id"),
+        "hullNumber": item.get("hullNumber") or item.get("hull"),
+        "description": item.get("description"),
+        "referenceId": item.get("referenceId") or item.get("registryReferenceId"),
+    }
+
+
+def _compact_match(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "trackId": item.get("trackId"),
+        "keyframeId": item.get("keyframeId") or item.get("id"),
+        "hullNumber": item.get("hullNumber") or item.get("finalHullNumber"),
+        "score": item.get("score") or item.get("embeddingScore") or item.get("similarity"),
+        "registryId": item.get("registryId") or item.get("matchedRegistryId"),
+    }
+
+
+def compact_tool_result_for_model(name: str, result: dict[str, Any], *, sample: int = 8) -> dict[str, Any]:
+    """压缩回传给模型的工具结果，避免关键帧/轨迹大 JSON 撑爆上下文。
+
+    完整数据仍保留在会话缓存中供后续 matchText/matchImage 自动注入。
+    """
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "tool_result_invalid", "tool": name}
+    compact: dict[str, Any] = {
+        "ok": result.get("ok") is not False,
+        "tool": name,
+    }
+    if result.get("error"):
+        compact["error"] = result.get("error")
+    if result.get("found") is not None:
+        compact["found"] = result.get("found")
+    if result.get("decision") is not None:
+        compact["decision"] = result.get("decision")
+    if result.get("hasMore") is not None:
+        compact["hasMore"] = result.get("hasMore")
+    if result.get("message"):
+        compact["message"] = str(result.get("message"))[:200]
+
+    tracks = result.get("tracks")
+    if isinstance(tracks, list):
+        compact["trackCount"] = len(tracks)
+        # 轻量轨迹列表（仅 ID/舷号/时间），供后续合成与模型选 trackIds
+        compact["tracks"] = [_compact_track(t) for t in tracks if isinstance(t, dict)][:80]
+        compact["trackIds"] = [
+            str(t.get("trackId"))
+            for t in compact["tracks"]
+            if t.get("trackId") is not None
+        ]
+        if len(tracks) > 80:
+            compact["tracksOmitted"] = len(tracks) - 80
+        compact["hint"] = "轨迹字段已压缩；后续 getFrames 只传需要的 trackIds（建议≤12）"
+
+    keyframes = result.get("keyframes")
+    if isinstance(keyframes, list):
+        compact["keyframeCount"] = len(keyframes)
+        # 只回传样本，完整列表在会话缓存；避免 80+ 关键帧 JSON 撑爆上下文
+        compact["keyframes"] = [_compact_keyframe(k) for k in keyframes[:sample] if isinstance(k, dict)]
+        compact["keyframeIds"] = [
+            str(k.get("keyframeId"))
+            for k in compact["keyframes"]
+            if k.get("keyframeId") is not None
+        ]
+        if len(keyframes) > sample:
+            compact["keyframesOmitted"] = len(keyframes) - sample
+        compact["hint"] = (
+            "关键帧已缓存；matchText/matchImage/showEvidence 可省略 galleryImages/keyframeIds。"
+            "不要要求回传图像路径或完整关键帧列表。"
+        )
+
+    by_track = result.get("keyframesByTrack")
+    if isinstance(by_track, dict):
+        compact["tracksWithFrames"] = len(by_track)
+        compact["frameTrackIds"] = [str(k) for k in list(by_track.keys())[:40]]
+        # 不把 keyframesByTrack 原样塞回模型
+
+    matches = result.get("matches") or result.get("results")
+    if isinstance(matches, list):
+        compact["matchCount"] = len(matches)
+        compact["matches"] = [_compact_match(m) for m in matches if isinstance(m, dict)][:40]
+        if len(matches) > 40:
+            compact["matchesOmitted"] = len(matches) - 40
+
+    for key in (
+        "trackCount", "returnedTrackCount", "totalTrackCount", "keyframeCount", "matchCount",
+        "registryCount", "exactMatchHullCount", "highThresholdShipCount", "lowThresholdShipCount",
+        "shipSegmentId", "segmentId", "offset", "limit",
+    ):
+        if result.get(key) is not None and key not in compact:
+            compact[key] = result.get(key)
+
+    refs = result.get("registryReferences") or result.get("registryItems")
+    if isinstance(refs, list):
+        compact["registryCount"] = len(refs)
+        compact["registrySample"] = [_compact_registry(r) for r in refs[:sample] if isinstance(r, dict)]
+        if len(refs) > sample:
+            compact["registryOmitted"] = len(refs) - sample
+        compact["hint"] = "先验库参考图已缓存；matchImage/matchText 可省略 gallery/query"
+
+    hulls = result.get("matchedHullNumbers")
+    if isinstance(hulls, list):
+        compact["exactMatchHullCount"] = len(hulls)
+        compact["matchedHullNumbers"] = hulls[:20]
+
+    # 计数/去重等轻量结果原样保留少量字段
+    for key in ("uniqueShipCount", "dedupCount", "count", "answerHint"):
+        if result.get(key) is not None:
+            compact[key] = result.get(key)
+
+    # 若几乎无字段，保留短错误/原文摘要
+    if len(compact) <= 3 and result.get("ok") is not False:
+        compact["note"] = "工具执行成功（结果已压缩）"
+    return compact
+
+
 def build_observe_tools(
     tools_service: Any,
     on_tool: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
@@ -163,6 +299,7 @@ def build_observe_tools(
 
     兼容旧版 $ref 行为：本轮 getFrames / listRegistry / getRegistry 的结果会缓存，
     matchText/matchImage 未传 galleryImages/queryImages 时自动注入。
+    回传给模型的是压缩摘要，避免上下文超限。
     """
     # 本轮观察会话缓存（单次 ObserveAgent 内共享）
     session: dict[str, Any] = {
@@ -183,6 +320,8 @@ def build_observe_tools(
         elif name in {"listRegistry", "getRegistry"}:
             if result.get("registryReferences") is not None:
                 session["registryReferences"] = result.get("registryReferences")
+            elif result.get("registryItems") is not None:
+                session["registryReferences"] = result.get("registryItems")
         elif name == "getTrack":
             if result.get("tracks") is not None:
                 session["tracks"] = result.get("tracks")
@@ -230,15 +369,32 @@ def build_observe_tools(
                 tr = arguments["timeRange"]
                 if len(tr) == 2:
                     arguments["timeRange"] = (float(tr[0]), float(tr[1]))
+            # getFrames 限制轨迹数量，避免一次取过多关键帧
+            if name == "getFrames" and isinstance(arguments.get("trackIds"), list):
+                track_ids = arguments["trackIds"]
+                if len(track_ids) > 12:
+                    arguments["trackIds"] = track_ids[:12]
+                    arguments["_trackIdsTruncated"] = len(track_ids) - 12
             arguments = _auto_fill(name, arguments)
             result = tools_service.execute(name, arguments)
             if not isinstance(result, dict):
                 result = {"ok": False, "error": "tool_result_invalid", "tool": name}
+            if arguments.get("_trackIdsTruncated") and isinstance(result, dict):
+                result = dict(result)
+                result["trackIdsTruncated"] = arguments["_trackIdsTruncated"]
+                result["message"] = (
+                    f"已限制本轮最多 12 条轨迹取帧，另有 {arguments['_trackIdsTruncated']} 条未取；"
+                    "如需更多请分页再调 getFrames"
+                )
             _remember(name, result)
             if on_tool:
                 try:
                     # 事件里不塞完整关键帧大对象，只报模型实际传入的关键参数
-                    event_args = {k: v for k, v in arguments.items() if k not in {"galleryImages", "queryImages", "keyframesByTrack"} or not isinstance(v, (list, dict))}
+                    event_args = {
+                        k: v for k, v in arguments.items()
+                        if k not in {"galleryImages", "queryImages", "keyframesByTrack", "_trackIdsTruncated"}
+                        or not isinstance(v, (list, dict))
+                    }
                     if "galleryImages" in arguments and "galleryImages" not in event_args:
                         event_args["galleryImages"] = f"<auto:{len(arguments.get('galleryImages') or []) if isinstance(arguments.get('galleryImages'), list) else 'obj'}>"
                     if "queryImages" in arguments and "queryImages" not in event_args:
@@ -246,7 +402,7 @@ def build_observe_tools(
                     on_tool(name, event_args, result)
                 except Exception:
                     pass
-            return _dump(result)
+            return _dump(compact_tool_result_for_model(name, result))
 
         return StructuredTool.from_function(
             name=name,
@@ -257,14 +413,15 @@ def build_observe_tools(
 
     def _list_registry(dummy: str | None = None) -> str:
         result = tools_service.execute("listRegistry", {})
-        if isinstance(result, dict):
-            _remember("listRegistry", result)
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": "tool_result_invalid", "tool": "listRegistry"}
+        _remember("listRegistry", result)
         if on_tool:
             try:
-                on_tool("listRegistry", {}, result if isinstance(result, dict) else {})
+                on_tool("listRegistry", {}, result)
             except Exception:
                 pass
-        return _dump(result)
+        return _dump(compact_tool_result_for_model("listRegistry", result))
 
     return [
         _wrap("getTrack", GetTrackArgs, "按时间/舷号分页检索轨迹"),

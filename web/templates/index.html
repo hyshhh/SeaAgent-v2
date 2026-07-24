@@ -191,6 +191,12 @@
         <div class="thought-notice"><span id="agentPlanMode">LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。</span></div>
         <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
           <div class="agent-fixed-stack">
+            <article class="agent-thought-card intent" data-role="intent" data-round="0">
+              <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>IntentAgent</strong><span>意图识别</span></div></div><div class="agent-card-state"><span class="agent-card-round">全局</span><em>等待</em></div></div>
+              <p class="agent-thought-hint">解析目标、时间与验收条件，再移交规划</p>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待意图识别…</span></div>
+              <div class="agent-thought-tags"></div>
+            </article>
             <article class="agent-thought-card planner" data-role="planner" data-round="0">
               <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>规划智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
               <p class="agent-thought-hint">理解验收缺口并生成本轮工具计划</p>

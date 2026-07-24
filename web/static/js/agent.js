@@ -621,6 +621,14 @@ function compactAgentText(event) {
     if (event.planRepair) lines.push('校验：上一版计划无效，已重新规划');
     return lines.join('\n') || '本轮未生成可执行计划';
   }
+  if (event.role === 'intent') {
+    const model = event.modelSummary || {};
+    return [
+      model.goal ? `移交：${compactAgentValue(model.goal, 120)}` : '',
+      model.reason ? `依据：${compactAgentValue(model.reason, 140)}` : '',
+      summary ? compactAgentValue(summary, 200) : '',
+    ].filter(Boolean).join('\n') || '意图识别完成';
+  }
   if (event.role === 'observer') {
     const toolLines = calls.map(compactToolCall);
     return [toolLines.length ? toolLines.join('\n') : '', summary ? `观察：${compactAgentValue(summary, 160)}` : '']
@@ -639,6 +647,7 @@ function compactAgentText(event) {
 }
 
 const agentRoles = {
+  intent: {name: 'IntentAgent', label: '意图识别', hint: '解析目标与验收条件', stage: '00'},
   planner: {name: 'PlanAgent', label: '规划智能体', hint: '只展示模型规划，不执行工具', stage: '01'},
   observer: {name: 'ObserveAgent', label: '观察智能体', hint: '执行工具并返回关键结果', stage: '02'},
   reflector: {name: 'ReflectAgent', label: '反思智能体', hint: '判断证据是否足够及下一步', stage: '03'},
@@ -840,42 +849,98 @@ function updatePlanReflection(event) {
   }
 }
 
+function rolePlaceholder(role, forRound = false) {
+  if (role === 'intent') return forRound ? '等待意图识别…' : '等待意图识别…';
+  if (role === 'planner') return forRound ? '等待本轮规划…' : '等待规划…';
+  if (role === 'observer') return forRound ? '等待本轮执行…' : '等待执行…';
+  if (role === 'reflector') return forRound ? '等待本轮验收…' : '等待验收…';
+  return '等待中…';
+}
+
+function roleRunningLabel(role) {
+  return ({
+    intent: '识别中',
+    planner: '规划中',
+    observer: '执行中',
+    reflector: '验收中',
+  })[role] || '运行中';
+}
+
+function rolePendingText(role) {
+  return ({
+    intent: '正在解析用户问题与验收目标…',
+    planner: '正在生成本轮工具规划…',
+    observer: '正在执行工具并整理结果…',
+    reflector: '正在对照验收目标检查证据…',
+  })[role] || '处理中…';
+}
+
+function scrollThoughtStreamToCard(card) {
+  const stream = document.getElementById('agentThoughtStream');
+  if (!stream || !card) return;
+  try {
+    card.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function setAgentStreamText(card, text, {cursor = false, html = false} = {}) {
+  const content = card?.querySelector('.agent-stream-text');
+  if (!content) return;
+  if (html) {
+    content.innerHTML = text + (cursor ? '<span class="agent-stream-cursor"></span>' : '');
+    return;
+  }
+  content.textContent = text || '';
+  if (cursor) {
+    const node = document.createElement('span');
+    node.className = 'agent-stream-cursor';
+    content.appendChild(node);
+  }
+  content.scrollTop = content.scrollHeight;
+}
+
 function resetFixedAgentCards() {
   activeAgentRound = 0;
   document.querySelectorAll('#agentThoughtStream .agent-thought-card').forEach((card) => {
     const role = card.dataset.role;
-    card.dataset.round = '0';
+    card.dataset.round = role === 'intent' ? '0' : '0';
     card.dataset.streamText = '';
     card.classList.remove('active', 'failed');
     card._toolLogs = [];
     const round = card.querySelector('.agent-card-round');
     const state = card.querySelector('.agent-thought-head em');
-    const content = card.querySelector('.agent-stream-text');
     const tags = card.querySelector('.agent-thought-tags');
-    if (round) round.textContent = '等待轮次';
+    if (round) round.textContent = role === 'intent' ? '全局' : '等待轮次';
     if (state) state.textContent = '等待';
-    if (content) content.innerHTML = `<span class="agent-stream-placeholder">${role === 'planner' ? '等待规划…' : role === 'observer' ? '等待执行…' : '等待验收…'}</span>`;
+    setAgentStreamText(card, '', {html: true});
+    const content = card.querySelector('.agent-stream-text');
+    if (content) content.innerHTML = `<span class="agent-stream-placeholder">${escapeHtml(rolePlaceholder(role))}</span>`;
     if (tags) tags.innerHTML = '';
   });
 }
 
 function prepareAgentRound(roundNumber) {
   const normalizedRound = Number(roundNumber || 1);
+  if (!Number.isFinite(normalizedRound) || normalizedRound <= 0) return;
   if (activeAgentRound === normalizedRound) return;
   activeAgentRound = normalizedRound;
   document.querySelectorAll('#agentThoughtStream .agent-thought-card').forEach((card) => {
     const role = card.dataset.role;
+    // 意图卡跨轮保留，不随 Plan 轮次重置
+    if (role === 'intent') return;
     card.dataset.round = String(normalizedRound);
     card.dataset.streamText = '';
     card.classList.remove('active', 'failed');
     card._toolLogs = [];
     const round = card.querySelector('.agent-card-round');
     const state = card.querySelector('.agent-thought-head em');
-    const content = card.querySelector('.agent-stream-text');
     const tags = card.querySelector('.agent-thought-tags');
     if (round) round.textContent = `第 ${normalizedRound} 轮`;
     if (state) state.textContent = '等待';
-    if (content) content.innerHTML = `<span class="agent-stream-placeholder">${role === 'planner' ? '等待本轮规划…' : role === 'observer' ? '等待本轮执行…' : '等待本轮验收…'}</span>`;
+    const content = card.querySelector('.agent-stream-text');
+    if (content) content.innerHTML = `<span class="agent-stream-placeholder">${escapeHtml(rolePlaceholder(role, true))}</span>`;
     if (tags) tags.innerHTML = '';
   });
 }
@@ -887,21 +952,35 @@ function resetThoughtStream() {
   const intent = document.getElementById('agentIntentResult');
   const intentState = document.getElementById('agentIntentState');
   const mode = document.getElementById('agentPlanMode');
+  const headBadge = document.querySelector('#agentProcessView .agent-response-head b');
   if (intent) {
     intent.className = 'intent-agent-card pending compact';
     intent.innerHTML = '<div class="intent-agent-body"><p>正在解析问题并生成验收目标…</p></div>';
   }
   if (intentState) intentState.textContent = '识别中';
+  if (headBadge && headBadge.id !== 'agentIntentState') headBadge.textContent = '推理中';
   if (mode) mode.textContent = 'LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。';
   setThinkingState('正在推理', 'active');
 }
 
 function ensureAgentCard(roundNumber, role) {
-  prepareAgentRound(roundNumber);
+  if (role === 'intent') {
+    return document.querySelector('#agentThoughtStream .agent-thought-card[data-role="intent"]');
+  }
+  if (Number(roundNumber) > 0) prepareAgentRound(roundNumber);
   return document.querySelector(`#agentThoughtStream .agent-thought-card[data-role="${role}"]`);
 }
 
 function agentTags(event) {
+  if (event.role === 'intent') {
+    const tags = [];
+    if (event.targetKind) tags.push(`<span>${escapeHtml(targetKindLabel(event.targetKind))}</span>`);
+    if (event.operation) tags.push(`<span>${escapeHtml(operationLabel(event.operation))}</span>`);
+    if (event.intentSource) tags.push(`<span>${escapeHtml(intentSourceLabel(event.intentSource))}</span>`);
+    if (event.hullNumber) tags.push(`<span>舷号 ${escapeHtml(event.hullNumber)}</span>`);
+    if (event.description) tags.push(`<span>${escapeHtml(compactAgentValue(event.description, 24))}</span>`);
+    return tags.join('');
+  }
   if (event.role === 'planner') {
     const tools = (event.calls || []).map((call) => `<span>${escapeHtml(call.tool || '工具')}</span>`).join('');
     const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">计划已纠正</span>` : '';
@@ -934,26 +1013,51 @@ function appendSystemThought(event) {
     if (mode) mode.textContent = label;
     return;
   }
-  if (event.type === 'status' && /IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`)) {
-    const card = document.getElementById('agentIntentResult');
+  if (event.type === 'status' && (/IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`) || event.role === 'intent')) {
+    const left = document.getElementById('agentIntentResult');
     const state = document.getElementById('agentIntentState');
-    if (card) {
-      card.className = 'intent-agent-card pending compact';
-      card.innerHTML = `<div class="intent-agent-body"><p>${escapeHtml(event.message || '正在解析用户意图')}</p></div>`;
+    if (left) {
+      left.className = 'intent-agent-card pending compact';
+      left.innerHTML = `<div class="intent-agent-body"><p>${escapeHtml(event.message || '正在解析用户意图')}</p></div>`;
     }
     if (state) state.textContent = '识别中';
+    const card = ensureAgentCard(0, 'intent');
+    if (card) {
+      card.classList.add('active');
+      card.classList.remove('failed');
+      const head = card.querySelector('.agent-thought-head em');
+      if (head) head.textContent = '识别中';
+      setAgentStreamText(card, event.message || '正在解析用户意图…', {cursor: true});
+      scrollThoughtStreamToCard(card);
+    }
+    setThinkingState('意图识别中', 'active');
+    return;
+  }
+  if (event.type === 'status' && event.role) {
+    const card = ensureAgentCard(event.round, event.role);
+    if (card && event.message) {
+      if (!card.classList.contains('active')) card.classList.add('active');
+      const head = card.querySelector('.agent-thought-head em');
+      if (head && head.textContent === '等待') head.textContent = roleRunningLabel(event.role);
+      // 仅在仍是占位或空内容时写入状态，避免覆盖思考/工具日志
+      const content = card.querySelector('.agent-stream-text');
+      const isPlaceholder = content?.querySelector('.agent-stream-placeholder');
+      if (isPlaceholder || !(card.dataset.streamText || '').trim()) {
+        setAgentStreamText(card, event.message, {cursor: true});
+      }
+    }
     return;
   }
   if (event.type === 'synthesis') {
     const decision = document.getElementById('agentPlanDecision');
     if (decision) decision.textContent = `${stateLabel(event.state)}，候选轨迹 ${Number(event.trackCount || 0)} 条。`;
+    setThinkingState('生成最终回答', 'active');
   }
 }
 
 function renderIntentAgentCard(event) {
   const card = document.getElementById('agentIntentResult');
   const state = document.getElementById('agentIntentState');
-  if (!card) return;
   const timeScope = event.timeParseError ? `解析失败：${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
   const rules = Array.isArray(event.selectedRules) && event.selectedRules.length ? event.selectedRules.join(' / ') : '模型判定';
   const targetItems = Array.isArray(event.targetItems) ? event.targetItems.filter((item) => item && item.label) : [];
@@ -964,8 +1068,9 @@ function renderIntentAgentCard(event) {
   const confidenceText = Number.isFinite(confidence) ? confidence.toFixed(2) : '—';
   const route = `${scopeLabel(event.targetScope)} · ${operationLabel(event.operation)} · ${relationLabel(event.registryRelation)}`;
   const acceptance = event.successCriteria || event.expectedOutcome || '按查询目标返回可核验证据';
-  card.className = event.timeParseError ? 'intent-agent-card pending compact' : 'intent-agent-card ready compact';
-  card.innerHTML = `
+  if (card) {
+    card.className = event.timeParseError ? 'intent-agent-card pending compact' : 'intent-agent-card ready compact';
+    card.innerHTML = `
     <div class="intent-agent-summary compact">
       <p><strong>目标：</strong>${escapeHtml(String(targetText))}</p>
       <p><strong>路径：</strong>${escapeHtml(route)}</p>
@@ -977,8 +1082,30 @@ function renderIntentAgentCard(event) {
       <span>来源 ${escapeHtml(intentSourceLabel(event.intentSource))}</span>
       <span>置信度 ${escapeHtml(confidenceText)}</span>${event.timeSource ? `<span>时间来源 ${event.timeSource === 'model' ? '模型归一化' : '规则归一化'}</span>` : ''}
     </div>`;
+  }
   if (state) state.textContent = event.timeParseError ? '需确认' : '已识别';
+
+  // 右栏意图过程卡同步收尾
+  const thought = ensureAgentCard(0, 'intent');
+  if (thought) {
+    const summary = [
+      `目标：${targetText || '—'}`,
+      `路径：${route}`,
+      `时间：${timeScope}`,
+      `验收：${acceptance}`,
+      event.nextAgentFocus ? `焦点：${event.nextAgentFocus}` : '',
+    ].filter(Boolean).join('\n');
+    thought.classList.remove('active');
+    thought.classList.toggle('failed', Boolean(event.timeParseError));
+    const head = thought.querySelector('.agent-thought-head em');
+    if (head) head.textContent = event.timeParseError ? '需确认' : '完成';
+    setAgentStreamText(thought, summary);
+    const tags = thought.querySelector('.agent-thought-tags');
+    if (tags) tags.innerHTML = agentTags({role: 'intent', ...event});
+    scrollThoughtStreamToCard(thought);
+  }
   initializePlanBlueprint(event.planBlueprint);
+  setThinkingState('规划中', 'active');
 }
 
 function toolResultText(call) {
@@ -1043,8 +1170,13 @@ function updateObserverToolEvent(event) {
   const item = {id: event.id, text: formatToolCall(event.round, event)};
   if (index >= 0) logs[index] = item; else logs.push(item);
   card._toolLogs = logs;
-  const content = card.querySelector('.agent-stream-text');
-  if (content) content.textContent = card._toolLogs.map((entry) => entry.text).join('\n');
+  card.classList.add('active');
+  const state = card.querySelector('.agent-thought-head em');
+  if (state) state.textContent = event.phase === 'running' ? '执行中' : roleRunningLabel('observer');
+  setAgentStreamText(card, card._toolLogs.map((entry) => entry.text).join('\n'), {
+    cursor: event.phase === 'running' || event.status === 'running',
+  });
+  scrollThoughtStreamToCard(card);
   updatePlanProgressFromTool(event);
 }
 
@@ -1063,6 +1195,7 @@ function compactAgentErrorMessage(raw) {
 }
 
 function appendThoughtEvent(event) {
+  // 推理全程保持过程视图；complete 仅更新状态，最终结果由 askAgent 在拿到 result 后切换
   if (event.type === 'complete') {
     setThinkingState('推理完成', 'completed');
     const decision = document.getElementById('agentPlanDecision');
@@ -1070,6 +1203,13 @@ function appendThoughtEvent(event) {
       decision.className = 'agent-plan-decision sufficient';
       decision.textContent = '闭环推理完成，最终回答与证据已生成。';
     }
+    document.querySelectorAll('.agent-thought-card.active').forEach((card) => {
+      card.classList.remove('active');
+      const state = card.querySelector('.agent-thought-head em');
+      if (state && ['识别中', '规划中', '执行中', '验收中', '运行中'].includes(state.textContent)) {
+        state.textContent = '完成';
+      }
+    });
     return;
   }
   if (event.type === 'error') {
@@ -1092,17 +1232,17 @@ function appendThoughtEvent(event) {
     const card = ensureAgentCard(event.round, event.role);
     if (!card) return;
     card.classList.add('active');
+    card.classList.remove('failed');
     card.dataset.streamText = '';
     if (event.role === 'observer') card._toolLogs = [];
     const state = card.querySelector('.agent-thought-head em');
-    if (state) state.textContent = event.role === 'observer' ? '执行中' : event.role === 'reflector' ? '验收中' : '规划中';
-    const pendingText = event.role === 'planner'
-      ? '正在生成本轮工具规划…'
-      : event.role === 'observer'
-        ? '正在执行工具并整理结果…'
-        : '正在对照验收目标检查证据…';
-    card.querySelector('.agent-stream-text').innerHTML = `${escapeHtml(pendingText)}<span class="agent-stream-cursor"></span>`;
-    if (event.role === 'planner') {
+    if (state) state.textContent = roleRunningLabel(event.role);
+    setAgentStreamText(card, rolePendingText(event.role), {cursor: true});
+    scrollThoughtStreamToCard(card);
+    if (event.role === 'intent') {
+      setThinkingState('意图识别中', 'active');
+    } else if (event.role === 'planner') {
+      setThinkingState(`第 ${event.round || 1} 轮规划中`, 'active');
       const round = document.getElementById('agentPlanRound');
       const decision = document.getElementById('agentPlanDecision');
       if (round) round.textContent = `第 ${event.round || 1} 轮规划中`;
@@ -1110,16 +1250,18 @@ function appendThoughtEvent(event) {
         decision.className = 'agent-plan-decision active';
         decision.textContent = '正在根据当前验收缺口生成计划。';
       }
+    } else if (event.role === 'observer') {
+      setThinkingState(`第 ${event.round || 1} 轮执行中`, 'active');
+    } else if (event.role === 'reflector') {
+      setThinkingState(`第 ${event.round || 1} 轮验收中`, 'active');
     }
   } else if (event.type === 'agent_delta') {
     const card = ensureAgentCard(event.round, event.role);
     if (!card || !event.delta) return;
-    card.dataset.streamText = `${card.dataset.streamText || ''}${event.delta}`.slice(-520);
-    const content = card.querySelector('.agent-stream-text');
-    content.textContent = card.dataset.streamText;
-    const cursor = document.createElement('span');
-    cursor.className = 'agent-stream-cursor';
-    content.appendChild(cursor);
+    card.classList.add('active');
+    card.dataset.streamText = `${card.dataset.streamText || ''}${event.delta}`.slice(-1200);
+    setAgentStreamText(card, card.dataset.streamText, {cursor: true});
+    scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_tool') {
     updateObserverToolEvent(event);
   } else if (event.type === 'agent_end') {
@@ -1128,13 +1270,13 @@ function appendThoughtEvent(event) {
     if (event.role === 'planner') syncPlanProgress(event);
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
-    const content = card.querySelector('.agent-stream-text');
     const isPlanCard = event.role === 'planner' || event.planOnly;
     const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
     const summaryText = event.role === 'observer' && card._toolLogs?.length
       ? card._toolLogs.map((entry) => entry.text).join('\n')
       : compactAgentText(event) || '';
-    content.textContent = planNote || summaryText || event.fallback || '本轮没有可展示信息';
+    const finalText = planNote || summaryText || event.fallback || event.message || '本轮没有可展示信息';
+    setAgentStreamText(card, finalText);
     card.classList.remove('active');
     const hasFailedCall = event.role === 'observer' && (event.calls || []).some((call) => call.skipped || call.ok === false);
     const markFailed = isPlanCard ? false : Boolean(event.fallback || hasFailedCall);
@@ -1144,13 +1286,17 @@ function appendThoughtEvent(event) {
     else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
     else if (hasFailedCall) statusLabel = '部分失败';
     else if (event.role === 'reflector') statusLabel = stateLabel(event.state);
+    else if (event.role === 'intent') statusLabel = '完成';
     const state = card.querySelector('.agent-thought-head em');
     if (state) state.textContent = statusLabel;
-    card.querySelector('.agent-thought-tags').innerHTML = agentTags(event);
+    const tags = card.querySelector('.agent-thought-tags');
+    if (tags) tags.innerHTML = agentTags(event);
+    scrollThoughtStreamToCard(card);
   } else {
     appendSystemThought(event);
   }
 }
+
 async function streamAgentQuery(question, topK = null) {
   const response = await fetch('/api/agent/query/stream', {
     method: 'POST',
@@ -1174,7 +1320,12 @@ async function streamAgentQuery(question, topK = null) {
     buffer = lines.pop() || '';
     for (const line of lines) {
       if (!line.trim()) continue;
-      const event = JSON.parse(line);
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch (_) {
+        continue;
+      }
       appendThoughtEvent(event);
       if (event.type === 'complete') result = event.result;
       if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
@@ -1182,10 +1333,17 @@ async function streamAgentQuery(question, topK = null) {
     if (done) break;
   }
   if (buffer.trim()) {
-    const event = JSON.parse(buffer);
-    appendThoughtEvent(event);
-    if (event.type === 'complete') result = event.result;
-    if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+    let event;
+    try {
+      event = JSON.parse(buffer);
+    } catch (_) {
+      event = null;
+    }
+    if (event) {
+      appendThoughtEvent(event);
+      if (event.type === 'complete') result = event.result;
+      if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+    }
   }
   if (!result) throw new Error('未收到最终回答');
   return result;
@@ -1200,18 +1358,26 @@ async function askAgent() {
     button.disabled = true;
     if (clearButton) clearButton.disabled = true;
     button.textContent = '推理中…';
+    // 只展示过程流，最终回答区延后到 complete
     resetThoughtStream();
-    document.getElementById('agentAnswer').className = 'agent-answer empty-state';
-    document.getElementById('agentAnswer').textContent = '正在基于轨迹记忆生成回答…';
-    renderEvidence(null, null, 'Collecting evidence...');
+    const answer = document.getElementById('agentAnswer');
+    if (answer) {
+      answer.className = 'agent-answer empty-state';
+      answer.textContent = '推理完成后在此展示最终回答…';
+    }
+    renderEvidence(null, null, '推理中，证据将在完成后展示…');
     const result = await streamAgentQuery(question, selectedTopK());
+    // 过程流结束后再切换最终结果
     renderAgentAnswer(result);
     renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
     showAgentFinalView();
     setThinkingState('推理失败', 'failed');
-    document.getElementById('agentAnswer').className = 'agent-answer empty-state';
-    document.getElementById('agentAnswer').textContent = `执行失败：${compactAgentErrorMessage(error.message)}`;
+    const answer = document.getElementById('agentAnswer');
+    if (answer) {
+      answer.className = 'agent-answer empty-state';
+      answer.textContent = `执行失败：${compactAgentErrorMessage(error.message)}`;
+    }
     renderEvidence(null, null);
     showToast(compactAgentErrorMessage(error.message), 'error');
   } finally {
