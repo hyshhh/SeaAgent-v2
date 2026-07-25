@@ -13,6 +13,13 @@ from vector_store import VectorCatalog
 from .graph import run_sea_agent
 
 
+def _nonnegative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 class AgentController:
     """前端入口：内部运行 LangGraph（Intent→Plan→Observe→Reflect）。"""
 
@@ -31,8 +38,10 @@ class AgentController:
         self.llm = llm or AgentLLMService(self.config)
         self.tools = tools or ToolService(self.config, self.repository, embedder, self.llm, vectors)
         settings = self.config.get("pipeline", {}).get("agent", {})
+        retrieval_settings = self.config.get("pipeline", {}).get("retrieval", {})
         self.max_rounds = int(settings.get("max_rounds", 3))
         self.display_limit = int(settings.get("display_limit", 3))
+        self.broad_match_top_k = _nonnegative_int(retrieval_settings.get("broad_match_top_k", 0))
         self.event_handler = event_handler
         self.session_id = ""
         self.question = ""
@@ -63,8 +72,10 @@ class AgentController:
         agent_settings = self.config.get("pipeline", {}).get("agent", {})
         self.max_rounds = int(agent_settings.get("max_rounds", self.max_rounds))
         self.display_limit = int(agent_settings.get("display_limit", self.display_limit))
-        default_top_k = int(self.config.get("pipeline", {}).get("retrieval", {}).get("top_k", 3))
+        retrieval_settings = self.config.get("pipeline", {}).get("retrieval", {})
+        default_top_k = int(retrieval_settings.get("top_k", 3))
         self.query_top_k = max(1, min(20, int(top_k if top_k is not None else default_top_k)))
+        self.broad_match_top_k = _nonnegative_int(retrieval_settings.get("broad_match_top_k", 0))
 
         self._emit("status", "Controller", "LangGraph 四 Agent 协同启动", planMode="langgraph")
         try:
@@ -74,6 +85,7 @@ class AgentController:
                 self.tools,
                 max_rounds=self.max_rounds,
                 query_top_k=self.query_top_k,
+                broad_match_top_k=self.broad_match_top_k,
                 event_handler=self.event_handler,
             )
         except Exception as error:
@@ -82,7 +94,12 @@ class AgentController:
                 [],
                 f"LangGraph 执行失败：{error}",
                 "uncertain",
-                extra={"error": str(error), "planMode": "langgraph"},
+                extra={
+                    "error": str(error),
+                    "planMode": "langgraph",
+                    "retrievalTopK": self.query_top_k,
+                    "retrievalBroadMatchTopK": self.broad_match_top_k,
+                },
             )
             try:
                 self.repository.finish_session(self.session_id, self._session_audit_result(result))
@@ -94,6 +111,7 @@ class AgentController:
         self.meta["planMode"] = "langgraph"
         self.meta["maxRounds"] = self.max_rounds
         self.meta["retrievalTopK"] = self.query_top_k
+        self.meta["retrievalBroadMatchTopK"] = self.broad_match_top_k
         self.working_scope = dict(state.get("working_scope") or {})
         self.rounds = list(state.get("rounds") or [])
         self.tool_chain = list(state.get("tool_chain") or [])

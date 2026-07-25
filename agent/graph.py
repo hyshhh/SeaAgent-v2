@@ -66,6 +66,7 @@ class AgentState(TypedDict, total=False):
     loop_count: int
     max_rounds: int
     query_top_k: int
+    broad_match_top_k: int
     error: str
 
 
@@ -238,18 +239,256 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _normalize_broad_match_top_k(value: int | None) -> int:
+    """规范化广泛库图匹配上限；0 表示不截断。"""
+    try:
+        return max(0, int(value if value is not None else 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _default_plan_calls(
+    intent: dict[str, Any],
+    top_k: int,
+    broad_match_top_k: int = 0,
+    *,
+    replan_hint: str = "",
+) -> list[dict[str, Any]]:
+    """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
+    hull = str(intent.get("hullNumber") or "").strip()
+    description = str(intent.get("description") or "").strip()
+    time_range = intent.get("timeRange")
+    operation = str(intent.get("operation") or "list")
+    target_scope = str(intent.get("targetScope") or "track_memory")
+    top = max(1, min(20, int(top_k or 3)))
+    broad_top = _normalize_broad_match_top_k(broad_match_top_k)
+    hint_raw = str(replan_hint or intent.get("nextAgentFocus") or "")
+    hint = hint_raw.lower()
+    wants_registry = (
+        target_scope in {"registry", "both"}
+        or str(intent.get("registryRelation") or "any") in {"in", "out"}
+        or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
+    )
+    # 视觉匹配：库参考图 ↔ 视频关键帧（舷号 OCR 未命中 / 在库列表）
+    wants_visual_match = any(
+        token in hint
+        for token in (
+            "matchimage", "match_image", "视觉匹配", "图像匹配", "图匹配",
+            "registryreferences", "关键帧匹配", "库图", "对照视频",
+        )
+    ) or ("match" in hint and "image" in hint)
+    registry_relation = str(intent.get("registryRelation") or "any")
+    # 「有哪些在库船出现」：list + in + both/all，禁止当描述 matchText
+    wants_registry_in_list = (
+        registry_relation == "in"
+        and operation == "list"
+        and not hull
+        and (
+            target_scope in {"both", "registry"}
+            or str(intent.get("questionType") or "") == "registry_in_list"
+            or any(token in hint for token in ("listregistry", "在库", "哪些", "matchimage", "matchhull"))
+        )
+    )
+    # 伪描述：整句问法残留，不当 matchText description
+    bogus_description = bool(
+        description
+        and (
+            any(token in description for token in ("哪些", "在库", "先验库", "有哪些", "未在库"))
+            or description in {"船", "船舶", "船只", "目标"}
+        )
+    )
+    if bogus_description:
+        description = ""
+
+    def _track_args(*, with_hull: bool, all_tracks: bool = False) -> dict[str, Any]:
+        args: dict[str, Any] = {"offset": 0, "limit": 0 if all_tracks else 60}
+        if time_range:
+            args["timeRange"] = time_range
+        if with_hull and hull:
+            args["hullNumber"] = hull
+        return args
+
+    def _match_image_from_list_registry() -> list[dict[str, Any]]:
+        return [
+            {"id": "registry", "tool": "listRegistry", "arguments": {}},
+            {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False, all_tracks=True)},
+            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+            {
+                "id": "match",
+                "tool": "matchImage",
+                "arguments": {
+                    "queryImages": {"$ref": "registry.registryReferences"},
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": broad_top,
+                },
+            },
+        ]
+
+    # 在库船列表（视频中出现的库船）：listRegistry → getTrack → getFrames → matchImage
+    if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
+        return _match_image_from_list_registry()
+
+    # 已有/待查先验库后做视觉匹配：不带舷号扫视频轨迹 → 关键帧 → matchImage
+    if wants_visual_match and hull:
+        return [
+            {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
+            {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
+            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+            {
+                "id": "match",
+                "tool": "matchImage",
+                "arguments": {
+                    # 只引用参考图列表；执行器会再从 registryItems.references 展开补齐
+                    "queryImages": {"$ref": "registry.registryReferences"},
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": top,
+                },
+            },
+        ]
+    if wants_visual_match and description:
+        return [
+            {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
+            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+            {
+                "id": "match",
+                "tool": "matchText",
+                "arguments": {
+                    "description": description,
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": top,
+                },
+            },
+        ]
+
+    if target_scope == "registry" or (wants_registry and "gettrack" not in hint and operation != "count" and not wants_visual_match and not wants_registry_in_list):
+        if hull:
+            # 查库后仍可能需要视觉匹配；若 hint 只写查库则先 getRegistry
+            return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
+        if description:
+            return [
+                {"id": "registry", "tool": "listRegistry", "arguments": {}},
+                {
+                    "id": "match",
+                    "tool": "matchText",
+                    "arguments": {
+                        "description": description,
+                        "galleryImages": {
+                            "$ref": "registry.registryReferences",
+                            "$default": {"$ref": "registry.registryItems"},
+                        },
+                        "topK": top,
+                    },
+                },
+            ]
+        # 无描述的在库关系：给完整对照链，避免只 list 库
+        if registry_relation in {"in", "out"}:
+            return _match_image_from_list_registry()
+        return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
+
+    # replan 明确要求查库（尚未要求视觉匹配）
+    if wants_registry and any(token in hint for token in ("先验库", "getregistry", "listregistry", "matchhull", "在库")):
+        if hull:
+            return [
+                {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
+                {"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}},
+            ]
+        if registry_relation in {"in", "out"} or wants_registry_in_list:
+            return _match_image_from_list_registry()
+        return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
+
+    track_args = _track_args(with_hull=bool(hull))
+    calls: list[dict[str, Any]] = [
+        {"id": "tracks", "tool": "getTrack", "arguments": track_args},
+    ]
+    if operation == "count":
+        calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+        calls.append({
+            "id": "dedup",
+            "tool": "dedupTracks",
+            "arguments": {
+                "tracks": {"$ref": "tracks.tracks"},
+                "keyframesByTrack": {"$ref": "frames.keyframesByTrack"},
+            },
+        })
+        return calls
+    if description:
+        calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+        calls.append({
+            "id": "match",
+            "tool": "matchText",
+            "arguments": {
+                "description": description,
+                "galleryImages": {"$ref": "frames.keyframes"},
+                "topK": top,
+            },
+        })
+        return calls
+    if hull:
+        calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+        return calls
+    # both + in 且无描述：默认在库对照视觉链
+    if wants_registry and registry_relation == "in":
+        return _match_image_from_list_registry()
+    calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
+    return calls
+
+
+def _apply_retrieval_limits(
+    calls: list[dict[str, Any]],
+    *,
+    broad_match_top_k: int,
+) -> list[dict[str, Any]]:
+    """修正模型计划中的广泛库图匹配参数，避免退回普通检索上限。"""
+    has_list_registry = False
+    has_match_image = False
+    has_unfiltered_track = False
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        tool_name = str(call.get("tool") or "")
+        arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+        if tool_name == "listRegistry":
+            has_list_registry = True
+        elif tool_name == "matchImage":
+            has_match_image = True
+        elif tool_name == "getTrack" and not str(arguments.get("hullNumber") or "").strip():
+            has_unfiltered_track = True
+
+    # 只有“全库 + 全轨迹 + 图像匹配”才属于广泛匹配；指定舷号的单库匹配仍沿用普通 topK。
+    if not (has_list_registry and has_unfiltered_track and has_match_image):
+        return calls
+
+    broad_top = _normalize_broad_match_top_k(broad_match_top_k)
+    normalized: list[dict[str, Any]] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        item = dict(call)
+        arguments = dict(item.get("arguments") or {})
+        tool_name = str(item.get("tool") or "")
+        if tool_name == "getTrack" and not str(arguments.get("hullNumber") or "").strip():
+            arguments["limit"] = 0
+        elif tool_name == "matchImage":
+            arguments["topK"] = broad_top
+        item["arguments"] = arguments
+        normalized.append(item)
+    return normalized
+
+
 def build_sea_agent_graph(
     llm: AgentLLMService,
     tools: ToolService,
     *,
     max_rounds: int = 3,
     query_top_k: int | None = None,
+    broad_match_top_k: int | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ):
     """编译四 Agent LangGraph。"""
     model = build_chat_model(llm)
     reference_time = datetime.now().astimezone()
     default_top_k = int(query_top_k or 3)
+    default_broad_match_top_k = _normalize_broad_match_top_k(broad_match_top_k)
 
     @tool("handoff_to_plan", args_schema=HandoffToPlanArgs)
     def handoff_to_plan(intent: dict[str, Any] | None = None, note: str = "") -> str:
@@ -321,189 +560,6 @@ def build_sea_agent_graph(
             return {"ok": True, "skillId": skill_id, "content": body}
 
         return _load
-
-    def _default_plan_calls(
-        intent: dict[str, Any],
-        top_k: int,
-        *,
-        replan_hint: str = "",
-    ) -> list[dict[str, Any]]:
-        """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
-        hull = str(intent.get("hullNumber") or "").strip()
-        description = str(intent.get("description") or "").strip()
-        time_range = intent.get("timeRange")
-        operation = str(intent.get("operation") or "list")
-        target_scope = str(intent.get("targetScope") or "track_memory")
-        top = max(1, min(20, int(top_k or 3)))
-        hint_raw = str(replan_hint or intent.get("nextAgentFocus") or "")
-        hint = hint_raw.lower()
-        wants_registry = (
-            target_scope in {"registry", "both"}
-            or str(intent.get("registryRelation") or "any") in {"in", "out"}
-            or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
-        )
-        # 视觉匹配：库参考图 ↔ 视频关键帧（舷号 OCR 未命中 / 在库列表）
-        wants_visual_match = any(
-            token in hint
-            for token in (
-                "matchimage", "match_image", "视觉匹配", "图像匹配", "图匹配",
-                "registryreferences", "关键帧匹配", "库图", "对照视频",
-            )
-        ) or ("match" in hint and "image" in hint)
-        registry_relation = str(intent.get("registryRelation") or "any")
-        # 「有哪些在库船出现」：list + in + both/all，禁止当描述 matchText
-        wants_registry_in_list = (
-            registry_relation == "in"
-            and operation == "list"
-            and not hull
-            and (
-                target_scope in {"both", "registry"}
-                or str(intent.get("questionType") or "") == "registry_in_list"
-                or any(token in hint for token in ("listregistry", "在库", "哪些", "matchimage", "matchhull"))
-            )
-        )
-        # 伪描述：整句问法残留，不当 matchText description
-        bogus_description = bool(
-            description
-            and (
-                any(token in description for token in ("哪些", "在库", "先验库", "有哪些", "未在库"))
-                or description in {"船", "船舶", "船只", "目标"}
-            )
-        )
-        if bogus_description:
-            description = ""
-
-        def _track_args(*, with_hull: bool) -> dict[str, Any]:
-            args: dict[str, Any] = {"offset": 0, "limit": 60}
-            if time_range:
-                args["timeRange"] = time_range
-            if with_hull and hull:
-                args["hullNumber"] = hull
-            return args
-
-        def _match_image_from_list_registry() -> list[dict[str, Any]]:
-            return [
-                {"id": "registry", "tool": "listRegistry", "arguments": {}},
-                {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
-                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                {
-                    "id": "match",
-                    "tool": "matchImage",
-                    "arguments": {
-                        "queryImages": {"$ref": "registry.registryReferences"},
-                        "galleryImages": {"$ref": "frames.keyframes"},
-                        "topK": top,
-                    },
-                },
-            ]
-
-        # 在库船列表（视频中出现的库船）：listRegistry → getTrack → getFrames → matchImage
-        if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
-            return _match_image_from_list_registry()
-
-        # 已有/待查先验库后做视觉匹配：不带舷号扫视频轨迹 → 关键帧 → matchImage
-        if wants_visual_match and hull:
-            return [
-                {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
-                {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
-                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                {
-                    "id": "match",
-                    "tool": "matchImage",
-                    "arguments": {
-                        # 只引用参考图列表；执行器会再从 registryItems.references 展开补齐
-                        "queryImages": {"$ref": "registry.registryReferences"},
-                        "galleryImages": {"$ref": "frames.keyframes"},
-                        "topK": top,
-                    },
-                },
-            ]
-        if wants_visual_match and description:
-            return [
-                {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
-                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                {
-                    "id": "match",
-                    "tool": "matchText",
-                    "arguments": {
-                        "description": description,
-                        "galleryImages": {"$ref": "frames.keyframes"},
-                        "topK": top,
-                    },
-                },
-            ]
-
-        if target_scope == "registry" or (wants_registry and "gettrack" not in hint and operation != "count" and not wants_visual_match and not wants_registry_in_list):
-            if hull:
-                # 查库后仍可能需要视觉匹配；若 hint 只写查库则先 getRegistry
-                return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
-            if description:
-                return [
-                    {"id": "registry", "tool": "listRegistry", "arguments": {}},
-                    {
-                        "id": "match",
-                        "tool": "matchText",
-                        "arguments": {
-                            "description": description,
-                            "galleryImages": {
-                                "$ref": "registry.registryReferences",
-                                "$default": {"$ref": "registry.registryItems"},
-                            },
-                            "topK": top,
-                        },
-                    },
-                ]
-            # 无描述的在库关系：给完整对照链，避免只 list 库
-            if registry_relation in {"in", "out"}:
-                return _match_image_from_list_registry()
-            return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
-
-        # replan 明确要求查库（尚未要求视觉匹配）
-        if wants_registry and any(token in hint for token in ("先验库", "getregistry", "listregistry", "matchhull", "在库")):
-            if hull:
-                return [
-                    {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
-                    {"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}},
-                ]
-            if registry_relation in {"in", "out"} or wants_registry_in_list:
-                return _match_image_from_list_registry()
-            return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
-
-        track_args = _track_args(with_hull=bool(hull))
-        calls: list[dict[str, Any]] = [
-            {"id": "tracks", "tool": "getTrack", "arguments": track_args},
-        ]
-        if operation == "count":
-            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
-            calls.append({
-                "id": "dedup",
-                "tool": "dedupTracks",
-                "arguments": {
-                    "tracks": {"$ref": "tracks.tracks"},
-                    "keyframesByTrack": {"$ref": "frames.keyframesByTrack"},
-                },
-            })
-            return calls
-        if description:
-            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
-            calls.append({
-                "id": "match",
-                "tool": "matchText",
-                "arguments": {
-                    "description": description,
-                    "galleryImages": {"$ref": "frames.keyframes"},
-                    "topK": top,
-                },
-            })
-            return calls
-        if hull:
-            calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
-            return calls
-        # both + in 且无描述：默认在库对照视觉链
-        if wants_registry and registry_relation == "in":
-            return _match_image_from_list_registry()
-        calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
-        return calls
 
     def _tool_event(name: str, arguments: dict[str, Any], result: dict[str, Any], *, round_number: int) -> None:
         call_id = f"{name}-{round_number}-{abs(hash(json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str))) % 10_000}"
@@ -855,6 +911,7 @@ def build_sea_agent_graph(
                 "question": question,
                 "referenceTime": reference_time.isoformat(timespec="seconds"),
                 "queryTopK": state.get("query_top_k") or default_top_k,
+                "broadMatchTopK": _normalize_broad_match_top_k(state.get("broad_match_top_k", default_broad_match_top_k)),
                 "intentSchema": {
                     "targetScope": "track_memory|registry|both",
                     "targetKind": "hull|description|all",
@@ -1070,6 +1127,9 @@ def build_sea_agent_graph(
             plan_calls = _default_plan_calls(
                 intent,
                 state.get("query_top_k") or default_top_k,
+                broad_match_top_k=_normalize_broad_match_top_k(
+                    state.get("broad_match_top_k", default_broad_match_top_k)
+                ),
                 replan_hint=replan_hint,
             )
             used_default_plan = True
@@ -1127,6 +1187,7 @@ def build_sea_agent_graph(
                     "round": round_number,
                     "maxRounds": state.get("max_rounds") or max_rounds,
                     "queryTopK": state.get("query_top_k") or default_top_k,
+                    "broadMatchTopK": _normalize_broad_match_top_k(state.get("broad_match_top_k", default_broad_match_top_k)),
                     "replanHint": replan_hint or None,
                     "workingScopeKeys": list((state.get("working_scope") or {}).keys())[:24],
                     "availableTools": [
@@ -1139,6 +1200,7 @@ def build_sea_agent_graph(
                         "描述：getTrack → getFrames → matchText(galleryImages=$ref frames.keyframes)",
                         "先验库舷号：getRegistry(hullNumber)",
                         "视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
+                        "广泛多库多轨迹：listRegistry → getTrack(limit=0) → getFrames → matchImage，使用 broadMatchTopK；0 表示不截断，不要复用 queryTopK",
                         "有 replanHint 时优先落实其中点名的工具链",
                         "无法规划时才 handoff_to_reflect",
                     ],
@@ -1160,13 +1222,21 @@ def build_sea_agent_graph(
             handoff = out.get("handoff") or {}
             target = str(handoff.get("handoff") or "observe")
             plan_hint = str(handoff.get("planHint") or handoff.get("goal") or "")
-            plan_calls = PlanExecutor.sanitize_calls(handoff.get("calls"))
+            plan_calls = _apply_retrieval_limits(
+                PlanExecutor.sanitize_calls(handoff.get("calls")),
+                broad_match_top_k=_normalize_broad_match_top_k(
+                    state.get("broad_match_top_k", default_broad_match_top_k)
+                ),
+            )
 
             # 模型未给出 calls 时，按意图 + replanHint 生成最小可执行链
             if target != "reflect" and not plan_calls:
                 plan_calls = _default_plan_calls(
                     intent,
                     state.get("query_top_k") or default_top_k,
+                    broad_match_top_k=_normalize_broad_match_top_k(
+                        state.get("broad_match_top_k", default_broad_match_top_k)
+                    ),
                     replan_hint=replan_hint,
                 )
                 used_default_plan = True
@@ -1244,12 +1314,20 @@ def build_sea_agent_graph(
         """确定性执行 Plan 的 calls（对齐 old Observer），不把完整工具结果塞进 ReAct 对话。"""
         loop_count = int(state.get("loop_count") or 0)
         round_number = loop_count + 1
-        plan_calls = PlanExecutor.sanitize_calls(state.get("plan_calls") or [])
+        plan_calls = _apply_retrieval_limits(
+            PlanExecutor.sanitize_calls(state.get("plan_calls") or []),
+            broad_match_top_k=_normalize_broad_match_top_k(
+                state.get("broad_match_top_k", default_broad_match_top_k)
+            ),
+        )
         if not plan_calls:
             # 无 calls 时再兜底一次
             plan_calls = _default_plan_calls(
                 state.get("intent") or {},
                 state.get("query_top_k") or default_top_k,
+                broad_match_top_k=_normalize_broad_match_top_k(
+                    state.get("broad_match_top_k", default_broad_match_top_k)
+                ),
                 replan_hint=str((state.get("reflection") or {}).get("nextAction") or state.get("plan_hint") or ""),
             )
 
@@ -1868,14 +1946,17 @@ def run_sea_agent(
     *,
     max_rounds: int = 3,
     query_top_k: int | None = None,
+    broad_match_top_k: int | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentState:
     top_k = max(1, min(20, int(query_top_k or 3)))
+    broad_top_k = _normalize_broad_match_top_k(broad_match_top_k)
     app = build_sea_agent_graph(
         llm,
         tools,
         max_rounds=max_rounds,
         query_top_k=top_k,
+        broad_match_top_k=broad_top_k,
         event_handler=event_handler,
     )
     initial: AgentState = {
@@ -1894,5 +1975,6 @@ def run_sea_agent(
         "loop_count": 0,
         "max_rounds": max_rounds,
         "query_top_k": top_k,
+        "broad_match_top_k": broad_top_k,
     }
     return app.invoke(initial, config={"recursion_limit": max(32, max_rounds * 20)})

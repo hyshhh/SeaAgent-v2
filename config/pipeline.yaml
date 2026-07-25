@@ -34,6 +34,8 @@ pipeline:
     null_margin: 0.30
   retrieval:
     top_k: 3
+    # 广泛多库、多轨迹图像匹配；0 表示不截断
+    broad_match_top_k: 0
     text_match: 0.62
     text_exclude: 0.42
     image_match: 0.72

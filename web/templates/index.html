@@ -311,7 +311,8 @@
       <section class="panel settings-card">
         <div class="panel-head"><div><span class="eyebrow">特征检索与问答</span><h3>匹配与闭环参数</h3></div></div>
         <div class="settings-fields">
-          <label>候选数量<input data-setting="pipeline.retrieval.top_k" type="number"><small>每次特征匹配返回的最高候选数量。</small></label>
+          <label>普通检索候选数量<input data-setting="pipeline.retrieval.top_k" type="number"><small>单目标描述、舷号等普通检索返回的最高候选数量。</small></label>
+          <label>广泛库图匹配数量<input data-setting="pipeline.retrieval.broad_match_top_k" type="number"><small>多库、多轨迹库图匹配的最高返回数量；设置为 0 表示不截断。</small></label>
           <label>文本匹配阈值<input data-setting="pipeline.retrieval.text_match" type="number"><small>描述与关键帧匹配的直接接受阈值。</small></label>
           <label>文本排除阈值<input data-setting="pipeline.retrieval.text_exclude" type="number"><small>描述匹配低于该值时直接排除。</small></label>
           <label>图像匹配阈值<input data-setting="pipeline.retrieval.image_match" type="number"><small>参考图与关键帧匹配的直接接受阈值。</small></label>

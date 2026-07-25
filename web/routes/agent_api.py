@@ -96,6 +96,7 @@ async def memory_summary(request: Request):
         "qaEvidenceCount": qa_memory["evidenceCount"],
         "maxRounds": max_rounds,
         "retrievalTopK": int(config["pipeline"]["retrieval"].get("top_k", 3)),
+        "broadMatchTopK": max(0, int(config["pipeline"]["retrieval"].get("broad_match_top_k", 0))),
     }
 
 @router.get("/api/memory/tracks/{track_id}/frames")

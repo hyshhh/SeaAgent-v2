@@ -36,6 +36,7 @@
 - `getFrames`: `trackIds`（$ref）
 - `getRegistry`: `hullNumber`
 - `matchImage`: `queryImages` + `galleryImages` + `topK`（一侧库图、一侧关键帧）
+- 广泛多库、多轨迹链（`listRegistry → getTrack(全量) → getFrames → matchImage`）使用系统提供的 `broadMatchTopK`，不要复用普通 `queryTopK`；其中 `0` 表示不截断。
 - `matchText`: `description` + `galleryImages`（description 必须是外观短语，不是「哪些在库船」）
 - `matchHull`: `hullNumberArray`
 

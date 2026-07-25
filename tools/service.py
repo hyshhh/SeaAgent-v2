@@ -542,8 +542,14 @@ class ToolService:
                 seen_tracks.add(tid)
             deduped.append(item)
         matches = deduped
-        if topK:
-            matches = matches[: max(1, int(topK))]
+        # 广泛库图匹配允许 topK=0 表示不截断；正数才限制返回轨迹数。
+        if topK is not None:
+            try:
+                match_limit = max(0, int(topK))
+            except (TypeError, ValueError):
+                match_limit = 0
+            if match_limit > 0:
+                matches = matches[:match_limit]
         confirmed = [m for m in matches if m.get("scoreBand") == "match"]
         uncertain = [m for m in matches if m.get("scoreBand") == "uncertain"]
         mismatch = [m for m in matches if m.get("scoreBand") == "mismatch"]

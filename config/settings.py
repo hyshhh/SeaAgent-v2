@@ -59,6 +59,7 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.aggregation.confirmed_count": {"type": "int", "min": 1, "max": 6, "step": 1},
     "pipeline.aggregation.null_margin": {"type": "float", "min": 0.0, "max": 20.0, "step": 0.01},
     "pipeline.retrieval.top_k": {"type": "int", "min": 1, "max": 20, "step": 1},
+    "pipeline.retrieval.broad_match_top_k": {"type": "int", "min": 0, "max": 100000, "step": 1},
     "pipeline.retrieval.text_match": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.text_exclude": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.image_match": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
