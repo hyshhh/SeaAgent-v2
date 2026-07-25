@@ -128,7 +128,12 @@ class PlanExecutor:
         summary = {
             "calls": [self.summarize_observation(item) for item in observations],
             "executedCount": sum(1 for item in observations if not item.get("skipped")),
-            "failedCount": sum(1 for item in observations if (item.get("result") or {}).get("ok") is False),
+            # 依赖未满足而 skip 不算失败
+            "failedCount": sum(
+                1
+                for item in observations
+                if not item.get("skipped") and (item.get("result") or {}).get("ok") is False
+            ),
             "skippedCount": sum(1 for item in observations if item.get("skipped")),
         }
         return {

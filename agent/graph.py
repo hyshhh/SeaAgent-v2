@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -110,20 +110,61 @@ def _safe_json(text: str) -> dict[str, Any]:
         return {"raw": text}
 
 
+def _content_parts(content: Any) -> tuple[str, str]:
+    """从消息 content 拆出 (可见正文, 思考/推理)。"""
+    if content is None:
+        return "", ""
+    if isinstance(content, str):
+        text = content.strip()
+        # 兼容 <think>…</think> 与纯正文
+        think_bits = re.findall(r"<think>(.*?)</think>", text, flags=re.S | re.I)
+        if think_bits:
+            cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I).strip()
+            return cleaned, "\n".join(bit.strip() for bit in think_bits if bit.strip())
+        return text, ""
+    if isinstance(content, list):
+        texts: list[str] = []
+        thinks: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                kind = str(item.get("type") or "")
+                if kind in {"thinking", "reasoning", "reason"}:
+                    thinks.append(str(item.get("thinking") or item.get("text") or item.get("content") or ""))
+                elif kind == "text":
+                    texts.append(str(item.get("text") or ""))
+                else:
+                    texts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                texts.append(str(item))
+        body, nested = _content_parts("\n".join(texts))
+        thinking = "\n".join([*(t for t in thinks if t.strip()), nested]).strip()
+        return body, thinking
+    return str(content).strip(), ""
+
+
 def _last_ai_text(messages: list[Any]) -> str:
     for message in reversed(messages or []):
         if isinstance(message, AIMessage):
-            content = message.content
-            if isinstance(content, list):
-                parts = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(str(item.get("text") or ""))
-                    else:
-                        parts.append(str(item))
-                return "\n".join(parts).strip()
-            return str(content or "").strip()
+            body, _ = _content_parts(message.content)
+            if body:
+                return body
     return ""
+
+
+def _last_ai_thinking(messages: list[Any]) -> str:
+    chunks: list[str] = []
+    for message in messages or []:
+        if isinstance(message, AIMessage):
+            _, thinking = _content_parts(message.content)
+            if thinking:
+                chunks.append(thinking)
+            # 部分适配器把推理放在 additional_kwargs
+            extra = getattr(message, "additional_kwargs", None) or {}
+            for key in ("reasoning_content", "thinking", "reasoning"):
+                value = extra.get(key)
+                if value:
+                    chunks.append(str(value))
+    return "\n".join(chunk.strip() for chunk in chunks if chunk and str(chunk).strip()).strip()
 
 
 def _emit(handler: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
@@ -280,7 +321,12 @@ def build_sea_agent_graph(
 
         return _load
 
-    def _default_plan_calls(intent: dict[str, Any], top_k: int) -> list[dict[str, Any]]:
+    def _default_plan_calls(
+        intent: dict[str, Any],
+        top_k: int,
+        *,
+        replan_hint: str = "",
+    ) -> list[dict[str, Any]]:
         """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
         hull = str(intent.get("hullNumber") or "").strip()
         description = str(intent.get("description") or "").strip()
@@ -288,12 +334,17 @@ def build_sea_agent_graph(
         operation = str(intent.get("operation") or "list")
         target_scope = str(intent.get("targetScope") or "track_memory")
         top = max(1, min(20, int(top_k or 3)))
+        hint = str(replan_hint or intent.get("nextAgentFocus") or "").lower()
+        wants_registry = (
+            target_scope in {"registry", "both"}
+            or str(intent.get("registryRelation") or "any") in {"in", "out"}
+            or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
+        )
 
-        if target_scope == "registry":
+        if target_scope == "registry" or (wants_registry and "gettrack" not in hint and operation != "count"):
             if hull:
                 return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
             if description:
-                # 对齐 old：listRegistry → matchText；优先参考图，缺图时用 registryItems 关键字弱匹配
                 return [
                     {"id": "registry", "tool": "listRegistry", "arguments": {}},
                     {
@@ -308,6 +359,15 @@ def build_sea_agent_graph(
                             "topK": top,
                         },
                     },
+                ]
+            return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
+
+        # replan 明确要求查库时，即使 scope 仍是 track_memory 也走库
+        if wants_registry and any(token in hint for token in ("先验库", "getregistry", "listregistry", "matchhull", "在库")):
+            if hull:
+                return [
+                    {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
+                    {"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}},
                 ]
             return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
 
@@ -343,10 +403,9 @@ def build_sea_agent_graph(
             })
             return calls
         if hull:
+            # 舷号存在判断：getTrack 即可；有轨迹再取关键帧。不硬塞 matchText/matchHull
             calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
-            calls.append({"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}})
             return calls
-        # 列表/存在：先取轨迹，再取关键帧供展示
         calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
         return calls
 
@@ -377,8 +436,8 @@ def build_sea_agent_graph(
         build_load_skill_tool("intent_agent", _skill_loader("intent_agent")),
         handoff_to_plan,
     ]
+    # Plan 不再暴露 loadSkill：core skill 已注入 system prompt，避免反复 load 触顶/超时
     plan_tools = [
-        build_load_skill_tool("plan_agent", _skill_loader("plan_agent")),
         handoff_to_observe,
         handoff_to_reflect,
     ]
@@ -408,6 +467,7 @@ def build_sea_agent_graph(
                 "evidenceGap": (state.get("reflection") or {}).get("evidenceGap"),
             },
         )
+        event_round = 0 if role == "intent" else max(1, round_number or 1)
         _emit(
             event_handler,
             {
@@ -416,7 +476,7 @@ def build_sea_agent_graph(
                 "message": f"{title} 开始（skills: {', '.join(skill_ids) or 'core'}）",
                 "enabledSkills": skill_ids,
                 "role": role,
-                "round": round_number,
+                "round": event_round,
             },
         )
         if role:
@@ -427,8 +487,7 @@ def build_sea_agent_graph(
                     "title": title,
                     "message": f"{title} 开始",
                     "role": role,
-                    # Intent 全局一轮；Plan/Observe/Reflect 从 1 计
-                    "round": 0 if role == "intent" else max(1, round_number),
+                    "round": event_round,
                 },
             )
 
@@ -439,26 +498,125 @@ def build_sea_agent_graph(
             name=name,
         )
         invoke_error = ""
-        try:
-            result = agent.invoke(
-                {"messages": [HumanMessage(content=user_content)]},
-                config={"recursion_limit": recursion_limit},
-            )
-            messages = result.get("messages") or []
-        except Exception as error:
-            # 内层 ReAct 触顶或模型异常时不炸穿外层图，交给节点级 handoff 兜底
-            invoke_error = str(error)
-            messages = []
+        messages: list[Any] = []
+        streamed_thinking = ""
+        streamed_text = ""
+
+        def _emit_delta(delta: str, *, kind: str = "thinking") -> None:
+            if not delta or not role:
+                return
             _emit(
                 event_handler,
                 {
-                    "type": "status",
+                    "type": "agent_delta",
                     "title": title,
-                    "message": f"{title} 提前结束：{invoke_error[:160]}",
+                    "message": "",
                     "role": role,
-                    "round": round_number,
+                    "round": event_round,
+                    "kind": kind,
+                    "delta": delta,
                 },
             )
+
+        try:
+            # messages：边生成边推思考；values：拿最终 messages，避免二次 invoke 拖垮超时
+            final_values: dict[str, Any] | None = None
+            try:
+                stream = agent.stream(
+                    {"messages": [HumanMessage(content=user_content)]},
+                    config={"recursion_limit": recursion_limit},
+                    stream_mode=["messages", "values"],
+                )
+            except TypeError:
+                # 旧版 langgraph 不支持 list stream_mode
+                stream = agent.stream(
+                    {"messages": [HumanMessage(content=user_content)]},
+                    config={"recursion_limit": recursion_limit},
+                    stream_mode="messages",
+                )
+            for item in stream:
+                mode = None
+                data: Any = item
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+                    mode, data = item[0], item[1]
+                if mode == "values" or (
+                    mode is None
+                    and isinstance(data, dict)
+                    and "messages" in data
+                    and not isinstance(data.get("messages"), tuple)
+                ):
+                    if isinstance(data, dict):
+                        final_values = data
+                    continue
+                # messages 模式：data 多为 (message, metadata)
+                message = data[0] if isinstance(data, tuple) and data else data
+                if not isinstance(message, (AIMessageChunk, AIMessage, ToolMessage, HumanMessage)):
+                    continue
+                # 完整消息（非 chunk）直接入列，保证 handoff ToolMessage 可解析
+                if isinstance(message, (AIMessage, ToolMessage, HumanMessage)) and not isinstance(message, AIMessageChunk):
+                    messages.append(message)
+                if isinstance(message, (AIMessageChunk, AIMessage)):
+                    body, thinking = _content_parts(getattr(message, "content", None))
+                    extra = getattr(message, "additional_kwargs", None) or {}
+                    for key in ("reasoning_content", "thinking", "reasoning"):
+                        if extra.get(key):
+                            thinking = f"{thinking}\n{extra.get(key)}".strip() if thinking else str(extra.get(key))
+                    response_meta = getattr(message, "response_metadata", None) or {}
+                    for key in ("reasoning_content", "thinking", "reasoning"):
+                        if response_meta.get(key):
+                            thinking = f"{thinking}\n{response_meta.get(key)}".strip() if thinking else str(response_meta.get(key))
+                    if thinking:
+                        piece = thinking
+                        if streamed_thinking and thinking.startswith(streamed_thinking):
+                            piece = thinking[len(streamed_thinking):]
+                        elif streamed_thinking and streamed_thinking.endswith(thinking):
+                            piece = ""
+                        if piece:
+                            streamed_thinking += piece
+                            _emit_delta(piece, kind="thinking")
+                    if body and isinstance(message, AIMessageChunk):
+                        piece = body
+                        if streamed_text and body.startswith(streamed_text):
+                            piece = body[len(streamed_text):]
+                        if piece:
+                            streamed_text += piece
+                            _emit_delta(piece, kind="token")
+            if final_values and isinstance(final_values.get("messages"), list):
+                # values 含完整对话，优先于边收边攒的 messages
+                messages = list(final_values.get("messages") or [])
+            elif not messages:
+                # 仅当流式完全没拿到状态时才 invoke 一次（不再双重重试）
+                result = agent.invoke(
+                    {"messages": [HumanMessage(content=user_content)]},
+                    config={"recursion_limit": recursion_limit},
+                )
+                messages = result.get("messages") or []
+        except Exception as error:
+            invoke_error = str(error)
+            if not messages:
+                # 流式失败时只做一次非流式兜底
+                try:
+                    result = agent.invoke(
+                        {"messages": [HumanMessage(content=user_content)]},
+                        config={"recursion_limit": recursion_limit},
+                    )
+                    messages = result.get("messages") or []
+                    invoke_error = ""
+                except Exception as error2:
+                    invoke_error = str(error2)
+                    messages = []
+            if invoke_error:
+                _emit(
+                    event_handler,
+                    {
+                        "type": "status",
+                        "title": title,
+                        "message": f"{title} 提前结束：{invoke_error[:160]}",
+                        "role": role,
+                        "round": event_round,
+                    },
+                )
+
         tool_chain: list[str] = []
         tool_records: list[dict[str, Any]] = []
         handoff: dict[str, Any] | None = None
@@ -487,6 +645,10 @@ def build_sea_agent_graph(
                     handoff = payload
                     continue
                 if not tname or tname.startswith("handoff") or tname == "loadSkill":
+                    # loadSkill 结果可当作思考补充展示
+                    if tname == "loadSkill" and role:
+                        skill_id = arguments.get("skillId") or payload.get("skillId") or ""
+                        _emit_delta(f"\n[已加载 skill: {skill_id}]\n", kind="thinking")
                     continue
                 call_id = tool_call_id or f"{tname}-{len(tool_records)+1}"
                 scope_updates[call_id] = payload
@@ -505,22 +667,10 @@ def build_sea_agent_graph(
                     **summary,
                 })
 
-        text = _last_ai_text(messages)
+        text = _last_ai_text(messages) or streamed_text.strip()
+        thinking = _last_ai_thinking(messages) or streamed_thinking.strip()
         if invoke_error and not text:
             text = f"{title} 未正常结束：{invoke_error[:200]}"
-        event_round = 0 if role == "intent" else max(1, round_number or 1)
-        if text:
-            _emit(
-                event_handler,
-                {
-                    "type": "agent_delta",
-                    "title": title,
-                    "message": "",
-                    "role": role,
-                    "round": event_round,
-                    "delta": text[:500] + ("…" if len(text) > 500 else ""),
-                },
-            )
         if role:
             end_event: dict[str, Any] = {
                 "type": "agent_end",
@@ -528,8 +678,10 @@ def build_sea_agent_graph(
                 "message": text[:300] if text else f"{title} 完成",
                 "role": role,
                 "round": event_round,
+                "thinking": thinking[:2000] if thinking else "",
                 "modelSummary": {
                     "summary": text[:500] if text else "",
+                    "thinking": thinking[:800] if thinking else "",
                     "goal": (handoff or {}).get("goal") or (handoff or {}).get("planHint") or "",
                     "reason": (handoff or {}).get("reason") or invoke_error or "",
                     "answerHint": (handoff or {}).get("answerHint") or "",
@@ -549,24 +701,12 @@ def build_sea_agent_graph(
                 ],
             }
             if role == "planner":
-                # 优先使用 handoff.calls；否则从 planHint 文本抽工具名作展示
                 handoff_calls = PlanExecutor.sanitize_calls((handoff or {}).get("calls"))
                 if handoff_calls:
                     end_event["calls"] = [
                         {"id": c["id"], "tool": c["tool"], "arguments": c.get("arguments") or {}}
                         for c in handoff_calls
                     ]
-                else:
-                    tools_in_hint = []
-                    for name_candidate in (
-                        "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
-                        "matchHull", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks",
-                    ):
-                        blob = f"{(handoff or {}).get('planHint') or ''} {(handoff or {}).get('goal') or ''} {text}"
-                        if name_candidate in blob:
-                            tools_in_hint.append(name_candidate)
-                    if tools_in_hint and not end_event["calls"]:
-                        end_event["calls"] = [{"id": f"plan-{i+1}", "tool": tool_name} for i, tool_name in enumerate(tools_in_hint)]
                 end_event["planBlueprint"] = [
                     {
                         "stepId": str(call.get("id") or f"step-{i+1}"),
@@ -574,10 +714,14 @@ def build_sea_agent_graph(
                         "tools": [call.get("tool")],
                         "optional": False,
                     }
-                    for i, call in enumerate(end_event["calls"])
+                    for i, call in enumerate(end_event.get("calls") or [])
                 ]
-                if invoke_error and not handoff:
-                    end_event["fallback"] = "规划超时，已使用默认检索计划"
+                if (invoke_error or not handoff_calls) and not handoff:
+                    end_event["fallback"] = "规划未完成 handoff，将使用默认检索计划"
+                elif invoke_error and handoff:
+                    end_event["fallback"] = ""
+                # Plan 的 agent_end 一律延后到 plan_node，确保含最终 calls
+                end_event["_defer_emit"] = True
             if role == "reflector":
                 end_event["state"] = (handoff or {}).get("state") or (
                     "replan" if (handoff or {}).get("handoff") == "plan" or (handoff or {}).get("replan") else "uncertain"
@@ -588,7 +732,10 @@ def build_sea_agent_graph(
                     (state.get("intent") or {}).get("successCriteria")
                     or (state.get("intent") or {}).get("expectedOutcome")
                 )
-            _emit(event_handler, end_event)
+            if end_event.get("_defer_emit"):
+                end_event.pop("_defer_emit", None)
+            else:
+                _emit(event_handler, end_event)
 
         return {
             "handoff": handoff,
@@ -599,6 +746,8 @@ def build_sea_agent_graph(
             "skill_ids": skill_ids,
             "plan_calls": plan_calls,
             "invoke_error": invoke_error,
+            "thinking": thinking,
+            "deferred_end_event": end_event if role == "planner" else None,
         }
 
     def intent_node(state: AgentState) -> Command:
@@ -746,58 +895,40 @@ def build_sea_agent_graph(
         round_number = loop_count + 1
         intent = state.get("intent") or {}
         reflection = state.get("reflection") or {}
-        scope_keys = list((state.get("working_scope") or {}).keys())
+        # 压缩意图字段，降低规划超时概率
+        compact_intent = {
+            k: intent.get(k)
+            for k in (
+                "operation", "targetScope", "targetKind", "registryRelation",
+                "hullNumber", "description", "timeRange", "timeExpression",
+                "targetItems", "expectedOutcome", "successCriteria", "nextAgentFocus",
+                "questionType",
+            )
+            if intent.get(k) not in (None, "", [], {})
+        }
         user = json.dumps(
             {
-                "task": "规划本轮检索；必须调用 handoff_to_observe(goal, calls, planHint) 或 handoff_to_reflect",
+                "task": "立刻调用 handoff_to_observe(goal, calls, planHint)。禁止只输出正文，禁止执行业务工具。",
                 "question": state.get("question"),
-                "intent": intent,
+                "intent": compact_intent,
                 "loop": loop_count,
                 "round": round_number,
                 "maxRounds": state.get("max_rounds") or max_rounds,
                 "queryTopK": state.get("query_top_k") or default_top_k,
-                "previousReflection": reflection,
-                "workingScopeKeys": scope_keys,
+                "replanHint": (reflection.get("nextAction") or reflection.get("evidenceGap") or reflection.get("reason") or ""),
+                "workingScopeKeys": list((state.get("working_scope") or {}).keys())[:24],
                 "availableTools": [
                     "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
                     "matchHull", "matchText", "matchImage", "verifyTarget", "showEvidence", "dedupTracks",
                 ],
-                "callSchema": {
-                    "id": "本轮唯一调用 id，如 tracks/frames/match",
-                    "tool": "工具名",
-                    "arguments": "参数对象；跨步骤用 {\"$ref\": \"{callId}.{field}\"}",
-                },
-                "examples": [
-                    {
-                        "desc": "描述存在判断",
-                        "calls": [
-                            {"id": "tracks", "tool": "getTrack", "arguments": {"timeRange": intent.get("timeRange"), "offset": 0, "limit": 60}},
-                            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                            {"id": "match", "tool": "matchText", "arguments": {
-                                "description": intent.get("description") or "目标描述",
-                                "galleryImages": {"$ref": "frames.keyframes"},
-                                "topK": state.get("query_top_k") or default_top_k,
-                            }},
-                        ],
-                    },
-                    {
-                        "desc": "舷号查询",
-                        "calls": [
-                            {"id": "tracks", "tool": "getTrack", "arguments": {"hullNumber": intent.get("hullNumber"), "timeRange": intent.get("timeRange")}},
-                            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-                        ],
-                    },
-                    {
-                        "desc": "先验库描述筛选",
-                        "calls": [
-                            {"id": "registry", "tool": "listRegistry", "arguments": {}},
-                            {"id": "match", "tool": "matchText", "arguments": {
-                                "description": intent.get("description") or "目标描述",
-                                "galleryImages": {"$ref": "registry.registryReferences"},
-                                "topK": state.get("query_top_k") or default_top_k,
-                            }},
-                        ],
-                    },
+                "rules": [
+                    "calls 至少 1 步；arguments 跨步骤用 {\"$ref\":\"{callId}.{field}\"}",
+                    "视频舷号：getTrack(hullNumber) → getFrames($ref trackIds)；不要硬塞 matchText",
+                    "描述：getTrack → getFrames → matchText(galleryImages=$ref frames.keyframes)",
+                    "先验库舷号：getRegistry(hullNumber) 或 listRegistry + matchHull",
+                    "先验库描述：listRegistry → matchText(galleryImages=$ref registry.registryReferences)",
+                    "replanHint 非空时优先落实该补洞，不要重复上轮完全相同的失败调用",
+                    "无法规划时才 handoff_to_reflect",
                 ],
             },
             ensure_ascii=False,
@@ -812,20 +943,81 @@ def build_sea_agent_graph(
             user,
             role="planner",
             round_number=round_number,
-            recursion_limit=8,
+            # 仅 handoff 工具：步数收紧，避免空转触顶
+            recursion_limit=4,
         )
         handoff = out.get("handoff") or {}
         target = str(handoff.get("handoff") or "observe")
         plan_hint = str(handoff.get("planHint") or handoff.get("goal") or "")
         plan_calls = PlanExecutor.sanitize_calls(handoff.get("calls"))
 
-        # 模型未给出 calls 时，按意图生成最小可执行链（仍是结构化 calls+$ref，非硬编码业务流程分支）
+        # 模型未给出 calls 时，按意图 + replanHint 生成最小可执行链
+        used_default_plan = False
         if target != "reflect" and not plan_calls:
-            plan_calls = _default_plan_calls(intent, state.get("query_top_k") or default_top_k)
+            plan_calls = _default_plan_calls(
+                intent,
+                state.get("query_top_k") or default_top_k,
+                replan_hint=str(
+                    reflection.get("nextAction")
+                    or reflection.get("evidenceGap")
+                    or reflection.get("reason")
+                    or ""
+                ),
+            )
+            used_default_plan = True
             if not plan_hint:
                 plan_hint = " → ".join(c["tool"] for c in plan_calls) or "无步骤"
             if out.get("invoke_error"):
                 plan_hint = f"[规划兜底] {plan_hint}"
+
+        # Plan agent_end 统一在此发出（含最终 calls）
+        deferred = out.get("deferred_end_event") or {
+            "type": "agent_end",
+            "title": "规划智能体（PlanAgent）",
+            "role": "planner",
+            "round": round_number,
+        }
+        end_event = dict(deferred)
+        end_event.update(
+            {
+                "type": "agent_end",
+                "title": "规划智能体（PlanAgent）",
+                "role": "planner",
+                "round": round_number,
+                "message": (plan_hint or end_event.get("message") or "规划完成")[:300],
+                "fallback": (
+                    "规划未完成 handoff，已使用默认检索计划"
+                    if used_default_plan
+                    else (end_event.get("fallback") or "")
+                ),
+                "calls": [
+                    {"id": c["id"], "tool": c["tool"], "arguments": c.get("arguments") or {}}
+                    for c in plan_calls
+                ],
+                "planBlueprint": [
+                    {
+                        "stepId": str(c.get("id") or f"step-{i+1}"),
+                        "title": f"执行 {c.get('tool')}",
+                        "tools": [c.get("tool")],
+                        "optional": False,
+                    }
+                    for i, c in enumerate(plan_calls)
+                ],
+                "modelSummary": {
+                    **(end_event.get("modelSummary") or {}),
+                    "summary": (plan_hint or "")[:500],
+                    "goal": plan_hint or (end_event.get("modelSummary") or {}).get("goal") or "",
+                    "reason": (
+                        out.get("invoke_error")
+                        or (end_event.get("modelSummary") or {}).get("reason")
+                        or ""
+                    )[:200],
+                },
+            }
+        )
+        if out.get("thinking") and not end_event.get("thinking"):
+            end_event["thinking"] = str(out.get("thinking") or "")[:2000]
+        _emit(event_handler, end_event)
 
         update: dict[str, Any] = {
             "plan_hint": plan_hint,
@@ -846,7 +1038,11 @@ def build_sea_agent_graph(
         plan_calls = PlanExecutor.sanitize_calls(state.get("plan_calls") or [])
         if not plan_calls:
             # 无 calls 时再兜底一次
-            plan_calls = _default_plan_calls(state.get("intent") or {}, state.get("query_top_k") or default_top_k)
+            plan_calls = _default_plan_calls(
+                state.get("intent") or {},
+                state.get("query_top_k") or default_top_k,
+                replan_hint=str((state.get("reflection") or {}).get("nextAction") or state.get("plan_hint") or ""),
+            )
 
         _emit(
             event_handler,
@@ -929,7 +1125,8 @@ def build_sea_agent_graph(
                         "id": item.get("id"),
                         "tool": item.get("tool"),
                         "arguments": {},
-                        "ok": item.get("ok") is not False and not item.get("skipped"),
+                        # skip 不算失败；仅真实执行失败才 ok=false
+                        "ok": False if (not item.get("skipped") and item.get("ok") is False) else True,
                         "skipped": bool(item.get("skipped")),
                         "error": item.get("error") or item.get("skipReason"),
                         "summary": item,
@@ -968,55 +1165,115 @@ def build_sea_agent_graph(
         limit = int(state.get("max_rounds") or max_rounds)
         intent = state.get("intent") or {}
         scope = state.get("working_scope") or {}
+        question = str(state.get("question") or "")
         # 成功证据：working_scope 中存在 ok 且含 tracks/matches/keyframes/registry 等
         has_tool_evidence = False
         evidence_bits: list[str] = []
+        track_counts: list[int] = []
+        registry_checked = False
         for key, value in scope.items():
             if not isinstance(value, dict) or value.get("ok") is False:
                 continue
+            # 空 tracks=[] 也算已执行 getTrack（否定证据）
+            if isinstance(value.get("tracks"), list):
+                n = len(value.get("tracks") or [])
+                track_counts.append(n)
+                evidence_bits.append(f"{key}:tracks={n}")
+                has_tool_evidence = True
+            if isinstance(value.get("trackIds"), list):
+                has_tool_evidence = True
+                evidence_bits.append(f"{key}:trackIds={len(value.get('trackIds') or [])}")
             if any(value.get(field) not in (None, [], {}) for field in (
-                "tracks", "trackIds", "keyframes", "keyframeIds", "matches",
+                "keyframes", "keyframeIds", "matches",
                 "registryItems", "registryReferences", "exactMatches",
                 "highThresholdShipCount", "uniqueCount", "count",
             )):
                 has_tool_evidence = True
-                if value.get("tracks") is not None:
-                    evidence_bits.append(f"{key}:tracks={len(value.get('tracks') or [])}")
                 if value.get("keyframes") is not None:
                     evidence_bits.append(f"{key}:keyframes={len(value.get('keyframes') or [])}")
                 if value.get("matches") is not None:
                     evidence_bits.append(f"{key}:matches={len(value.get('matches') or [])}")
                 if value.get("registryItems") is not None or value.get("registryReferences") is not None:
+                    registry_checked = True
                     evidence_bits.append(f"{key}:registry")
                 if value.get("exactMatches") is not None:
+                    registry_checked = True
                     evidence_bits.append(f"{key}:exactHull")
+            # getRegistry 命中单项 / 明确 found
+            if value.get("registryItem") is not None or value.get("found") in (True, False):
+                registry_checked = True
+                has_tool_evidence = True
+                evidence_bits.append(f"{key}:registryLookup")
         # 工具链非空也算有执行痕迹
         if not has_tool_evidence and (state.get("tool_chain") or state.get("tool_records")):
             has_tool_evidence = any(
                 isinstance(r, dict) and r.get("ok") is not False and not r.get("skipped")
                 for r in (state.get("tool_records") or [])
             )
+        tool_names = {
+            str(r.get("tool") or "")
+            for r in (state.get("tool_records") or [])
+            if isinstance(r, dict)
+        }
+        tool_names.update(str(t) for t in (state.get("tool_chain") or []))
+        if tool_names & {"getRegistry", "listRegistry", "matchHull"}:
+            registry_checked = True
+        zero_tracks = bool(track_counts) and max(track_counts) == 0
+        hull = str(intent.get("hullNumber") or "").strip()
+        target_scope = str(intent.get("targetScope") or "track_memory")
+        registry_relation = str(intent.get("registryRelation") or "any")
+        focus_blob = " ".join(
+            str(intent.get(k) or "")
+            for k in ("nextAgentFocus", "expectedOutcome", "successCriteria")
+        )
+        question_wants_registry = any(
+            token in question for token in ("先验库", "在库", "未在库", "库里", "名录")
+        ) or any(token in focus_blob for token in ("先验库", "在库", "未在库", "getRegistry", "listRegistry", "matchHull"))
+        scope_wants_registry = target_scope in {"registry", "both"} or registry_relation in {"in", "out"}
+        # 舷号存在：视频 0 轨迹且未查库、仍有余轮 → 默认补一轮先验库（用户期望对照名录，不只停在视频否定）
+        should_replan_registry = (
+            loop_count < limit
+            and bool(hull)
+            and zero_tracks
+            and not registry_checked
+        )
+        pure_video_sufficient = (
+            zero_tracks
+            and has_tool_evidence
+            and not should_replan_registry
+            and str(intent.get("operation") or "") == "existence"
+            and target_scope == "track_memory"
+            and not scope_wants_registry
+            and not question_wants_registry
+        )
         user = json.dumps(
             {
                 "task": "判定是否退出。replan→handoff_to_plan_replan；否则必须 handoff_finish",
-                "question": state.get("question"),
+                "question": question,
                 "expectedOutcome": intent.get("expectedOutcome"),
                 "successCriteria": intent.get("successCriteria"),
+                "nextAgentFocus": intent.get("nextAgentFocus"),
+                "targetScope": target_scope,
+                "registryRelation": registry_relation,
+                "hullNumber": hull or None,
                 "observation": state.get("observation_summary"),
                 "workingScopeKeys": list(scope.keys()),
                 "evidenceHints": evidence_bits[:20],
                 "hasToolEvidence": has_tool_evidence,
-                "toolChain": state.get("tool_chain") or [],
+                "zeroTracks": zero_tracks,
+                "registryChecked": registry_checked,
+                "shouldReplanRegistry": should_replan_registry,
+                "toolChain": list(tool_names)[:20],
                 "loop": loop_count,
                 "maxRounds": limit,
                 "notes": [
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
-                    "存在判断：getTrack 返回 0 条轨迹本身就是充分否定证据 → sufficient，结论写「未出现/未找到」",
-                    "先验库描述：listRegistry 有库项后应看 matchText；仅 list 且无匹配步骤时若模型只列了库，勿谎称已筛选",
+                    "shouldReplanRegistry=true 时必须 handoff_to_plan_replan，nextAction 写 getRegistry/listRegistry/matchHull",
+                    "纯视频存在判断且 zeroTracks 且 shouldReplanRegistry=false → 可 sufficient，结论写「未在视频中发现」",
+                    "先验库描述：listRegistry 有库项后应看 matchText；仅 list 且无匹配步骤时勿谎称已筛选",
                     "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                     "证据矛盾 → conflict",
-                    "描述匹配已有 matches 且非空 → 倾向 sufficient 或按分数解释",
                 ],
             },
             ensure_ascii=False,
@@ -1038,8 +1295,18 @@ def build_sea_agent_graph(
             recursion_limit=6,
         )
         handoff = out.get("handoff") or {}
-        # 未调用 handoff 时的硬兜底，保证图一定结束或 replan
-        if not handoff:
+        # 模型未 handoff / 误判 sufficient 时的硬兜底
+        if should_replan_registry:
+            if not handoff or handoff.get("handoff") == "finish" or str(handoff.get("state") or "") == "sufficient":
+                handoff = {
+                    "handoff": "plan",
+                    "replan": True,
+                    "state": "replan",
+                    "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
+                    "nextAction": f"使用 getRegistry(hullNumber={hull}) 或 listRegistry+matchHull 查先验库，勿重复相同 getTrack",
+                    "evidenceGap": "未查询先验库",
+                }
+        elif not handoff:
             if loop_count < limit and not has_tool_evidence:
                 handoff = {
                     "handoff": "plan",
@@ -1048,11 +1315,15 @@ def build_sea_agent_graph(
                     "nextAction": "补充 getTrack/getFrames 或匹配工具",
                     "evidenceGap": "working_scope 为空",
                 }
-            elif has_tool_evidence:
+            elif pure_video_sufficient or has_tool_evidence:
                 handoff = {
                     "handoff": "finish",
                     "state": "sufficient",
-                    "reason": "已有工具证据，模型未显式 handoff，按充分结束",
+                    "reason": (
+                        f"getTrack 返回 0 条轨迹，视频中未发现{hull or '目标'}"
+                        if pure_video_sufficient
+                        else "已有工具证据，模型未显式 handoff，按充分结束"
+                    ),
                     "answerHint": state.get("observation_summary") or "",
                 }
             else:

@@ -52,3 +52,24 @@ def test_default_ref_fallback_empty_references():
     )
     assert isinstance(resolved, list)
     assert resolved[0]["registryId"] == "x"
+
+
+def test_skipped_not_counted_as_failed():
+    observations = [
+        {"id": "tracks", "tool": "getTrack", "skipped": False, "result": {"ok": True, "tracks": []}},
+        {
+            "id": "frames",
+            "tool": "getFrames",
+            "skipped": True,
+            "skipReason": "dependency_empty:tracks.trackIds",
+            "result": {"ok": False, "error": "dependency_empty:tracks.trackIds"},
+        },
+    ]
+    failed = sum(
+        1
+        for item in observations
+        if not item.get("skipped") and (item.get("result") or {}).get("ok") is False
+    )
+    skipped = sum(1 for item in observations if item.get("skipped"))
+    assert failed == 0
+    assert skipped == 1

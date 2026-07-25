@@ -10,13 +10,17 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
 - `conflict`：证据互相矛盾，应停止并说明冲突
 - `uncertain`：信息不足且继续收益低，或已接近轮次上限
 
-## 判定顺序（概要）
+## 判定顺序
 1. 对照 expectedOutcome、successCriteria、observation 事实。
-2. acceptanceProgress 是**参考**，不是硬脚本。
-3. 本轮无任何成功工具结果且历史为空 → 不得 sufficient。
-4. 细则见可选 skill：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`（可用 loadSkill）。
+2. 本轮无任何成功工具结果且历史为空 → 不得 sufficient。
+3. **舷号存在判断（重要）**：
+   - 若任务包 `shouldReplanRegistry=true` → **必须 replan**，`nextAction` 写 getRegistry/listRegistry/matchHull，**禁止**直接 sufficient。
+   - 视频 getTrack=0 且尚未查先验库、仍有余轮 → 默认 replan 补一轮库对照，再结束。
+   - 仅当已查库，或 `shouldReplanRegistry=false` 且纯视频问题 → 0 轨迹可 sufficient，结论写「未在视频中发现」。
+4. 先验库描述：listRegistry 后应看 matchText；仅 list 勿谎称已筛选。
+5. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`。
 
-## 输出（done=true）
+## 输出
 ```json
 {
   "state": "sufficient|replan|conflict|uncertain",
@@ -27,4 +31,4 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
 ```
 
 ## 多轮
-可先 thought 分析观察与验收，再 done=true。一般 1～2 轮，不要空转。
+有明确缺口时优先 replan 一轮；不要空转。

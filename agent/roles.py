@@ -22,17 +22,29 @@ def role_system_prompt(
         lines = [f"- `{item['id']}`: {item.get('description') or item.get('title')}" for item in available]
         catalog_hint = "\n未加载可选技能（可用 loadSkill）：\n" + "\n".join(lines)
 
+    work_style = (
+        "## 工作方式\n"
+        "- 可多轮调用工具收集信息，再给出结论。\n"
+        "- 完成后调用对应的移交工具（handoff_*）把控制权交给下一 Agent。\n"
+        "- 只使用分配给你的工具，不要编造工具结果。\n"
+        "- 回答与 reason 使用简体中文。\n"
+    )
+    if agent_key == "plan_agent":
+        catalog_hint = ""
+        work_style = (
+            "## 工作方式\n"
+            "- 你只有 handoff 工具，不要尝试执行检索工具。\n"
+            "- 第一动作就调用 handoff_to_observe(goal, calls, planHint)。\n"
+            "- calls 用 $ref 串联；简体中文写 goal/planHint。\n"
+            "- 禁止只输出 JSON 正文而不调用工具。\n"
+        )
     prompt = (
         f"你是海域船舶监控系统的{title}。\n"
         f"职责：{responsibility}\n\n"
         f"## 本轮已启用 Skills：{', '.join(skill_ids) or '无'}\n"
         f"{skills_text or '（无 skill 正文）'}\n"
         f"{catalog_hint}\n\n"
-        "## 工作方式\n"
-        "- 可多轮调用工具收集信息，再给出结论。\n"
-        "- 完成后调用对应的移交工具（handoff_*）把控制权交给下一 Agent。\n"
-        "- 只使用分配给你的工具，不要编造工具结果。\n"
-        "- 回答与 reason 使用简体中文。\n"
+        f"{work_style}"
     )
     return prompt, skill_ids
 
@@ -43,9 +55,8 @@ INTENT_RESPONSIBILITY = (
 )
 
 PLAN_RESPONSIBILITY = (
-    "根据意图与历史证据规划本轮检索步骤，用 planHint 写清工具顺序与参数要点；"
-    "规划完成后必须调用 handoff_to_observe；若无法继续则 handoff_to_reflect。"
-    "不要反复 loadSkill；最多查阅一次细则后立即移交。"
+    "根据意图规划本轮最小 calls（含 $ref），然后立即调用 handoff_to_observe；"
+    "不要执行业务检索工具，不要长篇解释；无法规划时才 handoff_to_reflect。"
 )
 
 OBSERVE_RESPONSIBILITY = (
@@ -54,6 +65,6 @@ OBSERVE_RESPONSIBILITY = (
 )
 
 REFLECT_RESPONSIBILITY = (
-    "审计证据是否充分。state=replan 时 handoff_to_plan；"
-    "state 为 sufficient/conflict/uncertain 时 handoff_finish 结束循环。"
+    "审计证据是否充分。视频 0 轨迹且尚未查先验库、仍有余轮时，应 replan 并指示 getRegistry/matchHull；"
+    "state=replan 时 handoff_to_plan；sufficient/conflict/uncertain 时 handoff_finish。"
 )

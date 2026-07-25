@@ -251,8 +251,11 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
             }]
 
     if target_kind == "hull" and hull:
-        expected = f"确认舷号 {hull} 是否出现" if operation == "existence" else f"返回舷号 {hull} 相关结果"
-        focus = f"getTrack(hullNumber={hull})，必要时 matchHull/getFrames/showEvidence"
+        expected = f"确认舷号 {hull} 是否在视频中出现" if operation == "existence" else f"返回舷号 {hull} 相关结果"
+        if operation == "existence":
+            focus = f"先 getTrack(hullNumber={hull}) 查视频；若 0 轨迹且仍有余轮，再 getRegistry/matchHull 对照先验库"
+        else:
+            focus = f"getTrack(hullNumber={hull})，必要时 matchHull/getFrames/showEvidence"
     elif target_kind == "description" and description:
         expected = f"确认是否存在「{description}」" if operation == "existence" else f"返回与「{description}」匹配的轨迹"
         focus = f"getTrack → getFrames → matchText(description={description})"

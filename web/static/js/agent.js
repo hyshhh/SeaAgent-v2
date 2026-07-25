@@ -619,6 +619,7 @@ function compactAgentText(event) {
     if (calls.length) lines.push(`计划：${calls.map((call) => call.tool || '工具').join(' → ')}`);
     if (model.reason) lines.push(`依据：${compactAgentValue(model.reason, 140)}`);
     if (event.planRepair) lines.push('校验：上一版计划无效，已重新规划');
+    if (event.fallback) lines.push(`说明：${compactAgentValue(event.fallback, 120)}`);
     return lines.join('\n') || '本轮未生成可执行计划';
   }
   if (event.role === 'intent') {
@@ -1236,6 +1237,8 @@ function appendThoughtEvent(event) {
     card.classList.add('active');
     card.classList.remove('failed');
     card.dataset.streamText = '';
+    card.dataset.streamThinking = '';
+    card.dataset.streamToken = '';
     if (event.role === 'observer') card._toolLogs = [];
     const state = card.querySelector('.agent-thought-head em');
     if (state) state.textContent = roleRunningLabel(event.role);
@@ -1261,8 +1264,20 @@ function appendThoughtEvent(event) {
     const card = ensureAgentCard(event.round, event.role);
     if (!card || !event.delta) return;
     card.classList.add('active');
-    card.dataset.streamText = `${card.dataset.streamText || ''}${event.delta}`.slice(-1200);
-    setAgentStreamText(card, card.dataset.streamText, {cursor: true});
+    const kind = event.kind || 'thinking';
+    if (kind === 'token') {
+      card.dataset.streamToken = `${card.dataset.streamToken || ''}${event.delta}`.slice(-1600);
+    } else {
+      card.dataset.streamThinking = `${card.dataset.streamThinking || ''}${event.delta}`.slice(-2400);
+    }
+    const thinking = (card.dataset.streamThinking || '').trim();
+    const token = (card.dataset.streamToken || '').trim();
+    const live = [thinking ? `思考：\n${thinking}` : '', token ? `草稿：\n${token}` : '']
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(-2800);
+    card.dataset.streamText = live;
+    setAgentStreamText(card, live || '…', {cursor: true});
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_tool') {
     updateObserverToolEvent(event);
@@ -1273,20 +1288,40 @@ function appendThoughtEvent(event) {
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
     const isPlanCard = event.role === 'planner' || event.planOnly;
-    const planNote = isPlanCard ? (event.planRepair || event.fallback || '') : '';
     const summaryText = event.role === 'observer' && card._toolLogs?.length
       ? card._toolLogs.map((entry) => entry.text).join('\n')
       : compactAgentText(event) || '';
-    const finalText = planNote || summaryText || event.fallback || event.message || '本轮没有可展示信息';
+    const thinkingTrail = String(
+      event.thinking
+      || (event.modelSummary && event.modelSummary.thinking)
+      || card.dataset.streamThinking
+      || ''
+    ).trim();
+    // 结论优先用结构化摘要；fallback 仅作补充说明，避免盖掉真实计划
+    const conclusion = summaryText || event.message || event.fallback || '本轮没有可展示信息';
+    const finalText = thinkingTrail
+      ? `思考过程：\n${compactAgentValue(thinkingTrail, 900)}\n\n结论：\n${conclusion}`
+      : conclusion;
     setAgentStreamText(card, finalText);
+    card.dataset.streamText = finalText;
+    card.dataset.streamThinking = '';
+    card.dataset.streamToken = '';
     card.classList.remove('active');
-    const hasFailedCall = event.role === 'observer' && (event.calls || []).some((call) => call.skipped || call.ok === false);
-    const markFailed = isPlanCard ? false : Boolean(event.fallback || hasFailedCall);
+    const calls = event.calls || [];
+    const hasHardFail = event.role === 'observer' && calls.some((call) => !call.skipped && call.ok === false);
+    const onlySkipped = event.role === 'observer'
+      && calls.length > 0
+      && calls.every((call) => call.skipped || call.ok !== false)
+      && calls.some((call) => call.skipped)
+      && !hasHardFail;
+    const markFailed = isPlanCard ? false : Boolean((!isPlanCard && event.fallback) || hasHardFail);
     card.classList.toggle('failed', markFailed);
     let statusLabel = '完成';
     if (isPlanCard && event.planRepair) statusLabel = '已修正';
+    else if (isPlanCard && event.fallback) statusLabel = '已用默认计划';
     else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
-    else if (hasFailedCall) statusLabel = '部分失败';
+    else if (hasHardFail) statusLabel = '部分失败';
+    else if (onlySkipped) statusLabel = '部分跳过';
     else if (event.role === 'reflector') statusLabel = stateLabel(event.state);
     else if (event.role === 'intent') statusLabel = '完成';
     const state = card.querySelector('.agent-thought-head em');
