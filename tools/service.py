@@ -35,18 +35,38 @@ class ToolService:
     def getFrames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
         ids = [str(value) for value in dict.fromkeys(trackIds)]
         all_frames = self.repository.get_keyframes(ids, embedded_only=False)
-        vector_ids = [int(frame["keyframeVectorId"]) for frames in all_frames.values() for frame in frames if frame.get("isEmbedded") and frame.get("keyframeVectorId") is not None]
-        available_vectors = self.vectors.keyframes.get_many(vector_ids)
+        vector_ids = [
+            int(frame["keyframeVectorId"])
+            for frames in all_frames.values()
+            for frame in frames
+            if frame.get("keyframeVectorId") is not None
+        ]
+        available_vectors = self.vectors.keyframes.get_many(vector_ids) if vector_ids else {}
         grouped, discarded, missing = {}, [], []
         for track_id in ids:
-            valid = [frame for frame in all_frames.get(track_id, []) if frame["isEmbedded"] and frame.get("keyframeVectorId") is not None and int(frame["keyframeVectorId"]) in available_vectors]
-            invalid = [frame["keyframeId"] for frame in all_frames.get(track_id, []) if frame not in valid]
+            valid = []
+            invalid = []
+            for frame in all_frames.get(track_id, []):
+                vid = frame.get("keyframeVectorId")
+                if vid is not None and int(vid) in available_vectors:
+                    patched = dict(frame)
+                    patched["isEmbedded"] = True
+                    valid.append(patched)
+                else:
+                    invalid.append(frame.get("keyframeId"))
             grouped[track_id] = {"keyframeIds": [frame["keyframeId"] for frame in valid], "keyframes": valid}
             discarded.extend(invalid)
             if not valid:
                 missing.append(track_id)
         frames = [frame for group in grouped.values() for frame in group["keyframes"]]
-        return {"ok": True, "keyframeIds": [frame["keyframeId"] for frame in frames], "keyframes": frames, "keyframesByTrack": grouped, "discardedKeyframeIds": discarded, "unsearchableTrackIds": missing}
+        return {
+            "ok": True,
+            "keyframeIds": [frame["keyframeId"] for frame in frames],
+            "keyframes": frames,
+            "keyframesByTrack": grouped,
+            "discardedKeyframeIds": discarded,
+            "unsearchableTrackIds": missing,
+        }
 
     def getClip(self, trackId: str | int, timeRange: tuple[float, float] | None = None, scale: float | None = None) -> dict[str, Any]:
         track = self.repository.get_track(trackId)
@@ -180,11 +200,40 @@ class ToolService:
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
         items = self.repository.registry_by_hull(hullNumber)
         references = [reference for item in items for reference in item.get("references", [])]
-        vector_ids = [int(item["registryVectorId"]) for item in references if item.get("isEmbedded") and item.get("registryVectorId") is not None]
-        available_vectors = self.vectors.registry.get_many(vector_ids)
-        valid = [item for item in references if item["isEmbedded"] and item.get("registryVectorId") is not None and int(item["registryVectorId"]) in available_vectors]
-        discarded = [item["referenceId"] for item in references if item not in valid]
-        return {"ok": True, "found": bool(items), "searchable": bool(valid), "hullNumber": normalize_hull_number(hullNumber), "registryIds": [item["registryId"] for item in items], "registryItems": items, "registryReferenceIds": [item["referenceId"] for item in valid], "registryReferences": valid, "discardedReferenceIds": discarded}
+        # 以向量库是否命中为准，不唯 isEmbedded 标志（标志可能滞后）
+        candidate_ids = [
+            int(item["registryVectorId"])
+            for item in references
+            if item.get("registryVectorId") is not None
+        ]
+        available_vectors = self.vectors.registry.get_many(candidate_ids) if candidate_ids else {}
+        valid: list[dict[str, Any]] = []
+        discarded: list[str] = []
+        for item in references:
+            vid = item.get("registryVectorId")
+            if vid is None:
+                discarded.append(item.get("referenceId"))
+                continue
+            if int(vid) in available_vectors:
+                # 向量在库中即可搜；补齐 isEmbedded 供下游 matchImage 使用
+                patched = dict(item)
+                patched["isEmbedded"] = True
+                valid.append(patched)
+            else:
+                discarded.append(item.get("referenceId"))
+        return {
+            "ok": True,
+            "found": bool(items),
+            "searchable": bool(valid),
+            "hullNumber": normalize_hull_number(hullNumber),
+            "registryIds": [item["registryId"] for item in items],
+            "registryItems": items,
+            "registryReferenceIds": [item["referenceId"] for item in valid],
+            "registryReferences": valid,
+            "discardedReferenceIds": discarded,
+            "referenceCount": len(references),
+            "searchableReferenceCount": len(valid),
+        }
 
     def matchHull(self, hullNumberArray: Iterable[str | None]) -> dict[str, Any]:
         hull_numbers = list(dict.fromkeys(normalize_hull_number(value) for value in hullNumberArray if normalize_hull_number(value)))
@@ -294,15 +343,42 @@ class ToolService:
         queryImages = self._flatten_image_records(queryImages)
         galleryImages = self._flatten_image_records(galleryImages)
         if not queryImages or not galleryImages:
-            return {"ok": True, "matchMode": "image_to_image", "queryType": None, "matches": [], "missingKeyframeIds": [], "missingRegistryReferenceIds": []}
-        query_keyframes = [item for item in queryImages if item.get("trackId") is not None and item.get("keyframeVectorId") is not None and item.get("isEmbedded")]
-        query_references = [item for item in queryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
-        gallery_keyframes = [item for item in galleryImages if item.get("trackId") is not None and item.get("keyframeVectorId") is not None and item.get("isEmbedded")]
-        gallery_references = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
-        query_is_track = bool(query_keyframes) and bool(gallery_references) and not query_references and not gallery_keyframes
-        query_is_registry = bool(query_references) and bool(gallery_keyframes) and not query_keyframes and not gallery_references
+            return {
+                "ok": True,
+                "matchMode": "image_to_image",
+                "queryType": None,
+                "matches": [],
+                "missingKeyframeIds": [],
+                "missingRegistryReferenceIds": [],
+                "visualAttempted": True,
+                "hint": "queryImages 或 galleryImages 为空",
+            }
+        # 有 vectorId 即可参与匹配；不强制 isEmbedded（避免标志滞后导致库图/关键帧被丢弃）
+        def _is_keyframe(item: dict[str, Any]) -> bool:
+            return item.get("trackId") is not None and item.get("keyframeVectorId") is not None
+
+        def _is_reference(item: dict[str, Any]) -> bool:
+            return item.get("registryId") is not None and item.get("registryVectorId") is not None
+
+        query_keyframes = [item for item in queryImages if _is_keyframe(item)]
+        query_references = [item for item in queryImages if _is_reference(item)]
+        gallery_keyframes = [item for item in galleryImages if _is_keyframe(item)]
+        gallery_references = [item for item in galleryImages if _is_reference(item)]
+        # 允许两侧各有一侧为库图、一侧为关键帧；若两侧都混入，优先「query=库 / gallery=帧」
+        query_is_registry = bool(query_references) and bool(gallery_keyframes)
+        query_is_track = (not query_is_registry) and bool(query_keyframes) and bool(gallery_references)
         if not query_is_track and not query_is_registry:
-            return {"ok": False, "error": "one_keyframe_side_and_one_registry_side_required", "matchMode": "image_to_image", "matches": []}
+            return {
+                "ok": False,
+                "error": "one_keyframe_side_and_one_registry_side_required",
+                "matchMode": "image_to_image",
+                "matches": [],
+                "visualAttempted": True,
+                "hint": (
+                    f"query: kf={len(query_keyframes)} ref={len(query_references)}; "
+                    f"gallery: kf={len(gallery_keyframes)} ref={len(gallery_references)}"
+                ),
+            }
         keyframes = query_keyframes if query_is_track else gallery_keyframes
         references = gallery_references if query_is_track else query_references
         frame_vectors = self.vectors.keyframes.get_many(item["keyframeVectorId"] for item in keyframes)

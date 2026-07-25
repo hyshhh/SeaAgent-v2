@@ -59,31 +59,12 @@ class PlanExecutor:
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
-            dependency_issue = self._dependency_issue(call.get("arguments", {}), working)
-            if dependency_issue:
-                result = {"ok": False, "error": dependency_issue, "tool": tool}
-                observation = {
-                    "id": call_id,
-                    "tool": tool,
-                    "arguments": {},
-                    "skipped": True,
-                    "skipReason": dependency_issue,
-                    "result": result,
-                }
-                working[call_id] = result
-                observations.append(observation)
-                tool_records.append(self._skipped_record(observation))
-                self._emit(on_tool_event, "skipped", observation)
-                continue
-
-            arguments = self._resolve(call.get("arguments", {}), working)
-            # matchImage：库参考图为空时尝试从 registryItems.references 展开
+            # matchImage：禁止因 $ref 空列表提前 skip；先 resolve+从 scope 补图再执行
             if tool == "matchImage":
+                arguments = self._resolve(call.get("arguments", {}), working)
                 arguments = self._enrich_match_image_args(arguments, working)
-            argument_issue = self._required_argument_issue(tool, arguments)
-            if argument_issue:
-                # 视觉匹配缺图：写入空 matches 结果（不算 skip），避免 Reflect 无限 replan
-                if tool == "matchImage" and argument_issue.startswith("argument_missing:"):
+                argument_issue = self._required_argument_issue(tool, arguments)
+                if argument_issue:
                     result = {
                         "ok": True,
                         "matchMode": "image_to_image",
@@ -117,6 +98,69 @@ class PlanExecutor:
                     tool_chain.append(tool)
                     self._emit(on_tool_event, "completed", observation)
                     continue
+                self._emit(
+                    on_tool_event,
+                    "running",
+                    {"id": call_id, "tool": tool, "arguments": self._compact_args(arguments)},
+                )
+                try:
+                    result = self.tools.execute(tool, arguments)
+                    if not isinstance(result, dict):
+                        result = {"ok": False, "error": "tool_result_invalid", "tool": tool}
+                except Exception as error:
+                    result = {"ok": False, "error": f"tool_execution_failed:{error}", "tool": tool}
+                if isinstance(result, dict):
+                    result.setdefault("visualAttempted", True)
+                observation = {
+                    "id": call_id,
+                    "tool": tool,
+                    "arguments": self._compact_args(arguments),
+                    "result": result,
+                    "skipped": False,
+                }
+                working[call_id] = result
+                observations.append(observation)
+                tool_chain.append(tool)
+                summary = self.summarize_observation(observation)
+                tool_records.append({
+                    "id": call_id,
+                    "tool": tool,
+                    "arguments": observation.get("arguments") or {},
+                    "result": result,
+                    "summary": summary,
+                    "ok": result.get("ok") is not False,
+                    "skipped": False,
+                    "phase": "completed" if result.get("ok") is not False else "failed",
+                    "error": result.get("error"),
+                    **summary,
+                })
+                self._emit(
+                    on_tool_event,
+                    "completed" if result.get("ok") is not False else "failed",
+                    observation,
+                )
+                continue
+
+            dependency_issue = self._dependency_issue(call.get("arguments", {}), working)
+            if dependency_issue:
+                result = {"ok": False, "error": dependency_issue, "tool": tool}
+                observation = {
+                    "id": call_id,
+                    "tool": tool,
+                    "arguments": {},
+                    "skipped": True,
+                    "skipReason": dependency_issue,
+                    "result": result,
+                }
+                working[call_id] = result
+                observations.append(observation)
+                tool_records.append(self._skipped_record(observation))
+                self._emit(on_tool_event, "skipped", observation)
+                continue
+
+            arguments = self._resolve(call.get("arguments", {}), working)
+            argument_issue = self._required_argument_issue(tool, arguments)
+            if argument_issue:
                 result = {"ok": False, "error": argument_issue, "tool": tool}
                 observation = {
                     "id": call_id,
@@ -294,6 +338,7 @@ class PlanExecutor:
             refs = value.get("registryReferences")
             if isinstance(refs, list) and refs:
                 images.extend([r for r in refs if isinstance(r, dict)])
+                continue
             for item in value.get("registryItems") or []:
                 if not isinstance(item, dict):
                     continue
@@ -305,10 +350,12 @@ class PlanExecutor:
                 nested = one.get("references") or one.get("registryReferences") or []
                 if isinstance(nested, list):
                     images.extend([r for r in nested if isinstance(r, dict)])
-        # 去重
+        # 优先保留带向量 id 的参考图
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for img in images:
+            if img.get("registryVectorId") is None and not img.get("imagePath"):
+                continue
             key = str(img.get("referenceId") or img.get("registryVectorId") or id(img))
             if key in seen:
                 continue

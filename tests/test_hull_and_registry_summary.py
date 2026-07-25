@@ -105,16 +105,18 @@ def test_visual_match_default_plan_shape():
 
 
 def test_should_replan_visual_when_registry_found_without_searchable_flag():
-    """无可搜参考图时不应无限视觉 replan；有 searchable 且未尝试 match 才 replan。"""
+    """库有 found/items 时也应尝试视觉 replan；已 attempted 则停止。"""
     registry_checked = True
     registry_searchable = False
+    registry_found = True
+    registry_has_items = True
     visual_attempted = False
     zero_tracks = True
     hull = "小蓝320"
     loop_count = 1
     limit = 3
     op = "existence"
-    can_try_visual = bool(registry_searchable)
+    can_try_visual = bool(registry_searchable or registry_found or registry_has_items)
     should_replan_visual = (
         loop_count < limit
         and bool(hull)
@@ -124,25 +126,11 @@ def test_should_replan_visual_when_registry_found_without_searchable_flag():
         and op in {"existence", "list", "explain", "time", ""}
         and zero_tracks
     )
-    assert not can_try_visual
-    assert not should_replan_visual
+    assert can_try_visual
+    assert should_replan_visual
 
-    # 有可搜图且未尝试 → 应 replan
-    can_try_visual2 = True
-    should_replan_visual2 = (
-        loop_count < limit
-        and bool(hull)
-        and registry_checked
-        and can_try_visual2
-        and not visual_attempted
-        and zero_tracks
-    )
-    assert should_replan_visual2
-
-    # 已尝试 matchImage → 不再 replan
-    visual_attempted3 = True
-    should_replan_visual3 = can_try_visual2 and not visual_attempted3
-    assert not should_replan_visual3
+    visual_attempted2 = True
+    assert not (can_try_visual and not visual_attempted2)
 
 
 def test_match_image_missing_args_records_attempt():

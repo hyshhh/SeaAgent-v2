@@ -1425,14 +1425,13 @@ def build_sea_agent_graph(
             and not registry_checked
             and op in {"existence", "list", "explain", "time", ""}
         )
-        # 2) 已查库且**有可搜参考图**，但还没 matchImage → 视觉补洞
-        #    无向量参考图时无法 matchImage，不应无限 replan
+        # 2) 已查库且有库参考图/可搜向量，但还没 matchImage → 视觉补洞
+        #    found 库项 + references 也算 can_try（不单靠 searchable 标志）
         visual_attempted = visual_matched or any(
             isinstance(r, dict)
             and r.get("tool") in {"matchImage", "matchText"}
             for r in (state.get("tool_records") or [])
         )
-        # 从 tool_records 再确认 match 是否已尝试（含 skip / 空 matches）
         for r in state.get("tool_records") or []:
             if not isinstance(r, dict):
                 continue
@@ -1441,7 +1440,7 @@ def build_sea_agent_graph(
                 res = r.get("result") if isinstance(r.get("result"), dict) else {}
                 if isinstance(res.get("matches"), list) or res.get("visualAttempted"):
                     visual_matched = True
-        can_try_visual = bool(registry_searchable)
+        can_try_visual = bool(registry_searchable or registry_found or registry_has_items)
         should_replan_visual = (
             loop_count < limit
             and bool(hull)
