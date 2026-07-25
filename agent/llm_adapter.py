@@ -15,6 +15,7 @@ def build_chat_model(llm: AgentLLMService | None = None, config: dict[str, Any] 
     else:
         from config import load_config
         settings = (config or load_config())["llm"]
+    thinking = bool(settings.get("enable_thinking", False))
     return ChatOpenAI(
         model=str(settings.get("model") or "gpt-4o-mini"),
         api_key=str(settings.get("api_key") or "EMPTY"),
@@ -22,10 +23,9 @@ def build_chat_model(llm: AgentLLMService | None = None, config: dict[str, Any] 
         temperature=float(settings.get("temperature") or 0.0),
         timeout=float(settings.get("timeout_seconds") or 60),
         max_retries=1,
-        model_kwargs={
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": bool(settings.get("enable_thinking", False))},
-                "enable_thinking": bool(settings.get("enable_thinking", False)),
-            }
+        # 显式传 extra_body，避免 langchain 提示应写在 model_kwargs 外
+        extra_body={
+            "chat_template_kwargs": {"enable_thinking": thinking},
+            "enable_thinking": thinking,
         },
     )

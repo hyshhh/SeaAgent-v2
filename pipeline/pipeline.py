@@ -61,6 +61,8 @@ class ShipPipeline:
         seen_track_ids: set[str] = set()
         last_detections: list[Detection] = []
         start = time.time()
+        stream_every = max(1, int(self._config["pipeline"].get("stream_write_every_n_frames", 2)))
+        stream_jpeg_quality = int(self._config["pipeline"].get("stream_jpeg_quality", 65))
         try:
             while True:
                 if stop_file and stop_file.exists():
@@ -84,9 +86,9 @@ class ShipPipeline:
                 display_frame = self._renderer.render(frame, last_detections, self._memory.display_tracks(), self._fps.get_all_fps(), frame_index) if self._demo_enabled or writer or display or stream_path or self._raw_stdout else frame
                 if writer:
                     writer.write(display_frame)
-                if stream_path:
+                if stream_path and (processed % stream_every == 0):
                     temp = stream_path / "latest.tmp.jpg"
-                    cv2.imwrite(str(temp), display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    cv2.imwrite(str(temp), display_frame, [cv2.IMWRITE_JPEG_QUALITY, stream_jpeg_quality])
                     temp.replace(stream_path / "latest.jpg")
                 if self._raw_stdout:
                     output_frame = display_frame

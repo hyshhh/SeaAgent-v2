@@ -143,7 +143,8 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
         "totalTrackCount",
         "keyframeCount",
         "matchCount",
-        "registryCount",
+        "registryItemCount",
+        "registryReferenceCount",
         "exactMatchHullCount",
         "highThresholdShipCount",
         "lowThresholdShipCount",
@@ -155,6 +156,7 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     ):
         if payload.get(key) is not None:
             summary[key] = payload.get(key)
+    # registryCount 仅在下方按 registryItems 优先计算，避免被参考图数覆盖
     if payload.get("tracks") is not None and summary.get("trackCount") is None:
         try:
             summary["trackCount"] = len(payload.get("tracks") or [])
@@ -170,9 +172,17 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
             summary["keyframeCount"] = len(payload.get("keyframes") or [])
         except Exception:
             pass
-    if payload.get("registryItems") is not None and summary.get("registryCount") is None:
+    if payload.get("registryItems") is not None:
         try:
             summary["registryCount"] = len(payload.get("registryItems") or [])
+            summary["registryItemCount"] = summary["registryCount"]
+        except Exception:
+            pass
+    if payload.get("registryReferences") is not None:
+        try:
+            summary["registryReferenceCount"] = len(payload.get("registryReferences") or [])
+            if summary.get("registryCount") is None:
+                summary["registryCount"] = summary["registryReferenceCount"]
         except Exception:
             pass
     if payload.get("matchedHullNumbers") is not None and summary.get("exactMatchHullCount") is None:
@@ -282,6 +292,23 @@ def build_sea_agent_graph(
         if target_scope == "registry":
             if hull:
                 return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
+            if description:
+                # 对齐 old：listRegistry → matchText；优先参考图，缺图时用 registryItems 关键字弱匹配
+                return [
+                    {"id": "registry", "tool": "listRegistry", "arguments": {}},
+                    {
+                        "id": "match",
+                        "tool": "matchText",
+                        "arguments": {
+                            "description": description,
+                            "galleryImages": {
+                                "$ref": "registry.registryReferences",
+                                "$default": {"$ref": "registry.registryItems"},
+                            },
+                            "topK": top,
+                        },
+                    },
+                ]
             return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
 
         track_args: dict[str, Any] = {"offset": 0, "limit": 60}
@@ -640,8 +667,15 @@ def build_sea_agent_graph(
                 intent["targetKind"] = "hull"
 
         # 模型 handoff 残缺时，用规则补全 description / operation 等
-        if not intent.get("hullNumber") and inferred.get("hullNumber"):
-            intent["hullNumber"] = inferred["hullNumber"]
+        # 规则舷号更完整时覆盖（避免 extractHull 旧结果只剩数字）
+        inferred_hull = str(inferred.get("hullNumber") or "").strip()
+        current_hull = str(intent.get("hullNumber") or "").strip()
+        if inferred_hull and (
+            not current_hull
+            or (current_hull.isdigit() and inferred_hull != current_hull and current_hull in inferred_hull)
+            or (len(inferred_hull) > len(current_hull) and current_hull and current_hull in inferred_hull)
+        ):
+            intent["hullNumber"] = inferred_hull
         if not intent.get("description") and inferred.get("description"):
             intent["description"] = inferred["description"]
         if not intent.get("targetItems") and inferred.get("targetItems"):
@@ -753,6 +787,17 @@ def build_sea_agent_graph(
                             {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
                         ],
                     },
+                    {
+                        "desc": "先验库描述筛选",
+                        "calls": [
+                            {"id": "registry", "tool": "listRegistry", "arguments": {}},
+                            {"id": "match", "tool": "matchText", "arguments": {
+                                "description": intent.get("description") or "目标描述",
+                                "galleryImages": {"$ref": "registry.registryReferences"},
+                                "topK": state.get("query_top_k") or default_top_k,
+                            }},
+                        ],
+                    },
                 ],
             },
             ensure_ascii=False,
@@ -767,7 +812,7 @@ def build_sea_agent_graph(
             user,
             role="planner",
             round_number=round_number,
-            recursion_limit=10,
+            recursion_limit=8,
         )
         handoff = out.get("handoff") or {}
         target = str(handoff.get("handoff") or "observe")
@@ -966,7 +1011,9 @@ def build_sea_agent_graph(
                 "maxRounds": limit,
                 "notes": [
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
-                    "无成功工具结果时禁止 sufficient",
+                    "存在判断：getTrack 返回 0 条轨迹本身就是充分否定证据 → sufficient，结论写「未出现/未找到」",
+                    "先验库描述：listRegistry 有库项后应看 matchText；仅 list 且无匹配步骤时若模型只列了库，勿谎称已筛选",
+                    "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                     "证据矛盾 → conflict",
                     "描述匹配已有 matches 且非空 → 倾向 sufficient 或按分数解释",

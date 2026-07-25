@@ -1116,7 +1116,9 @@ function toolResultText(call) {
   if (summary.trackCount != null) return `${summary.trackCount} 条轨迹`;
   if (summary.keyframeCount != null) return `${summary.keyframeCount} 张关键帧`;
   if (summary.matchCount != null) return `${summary.matchCount} 条匹配结果`;
+  if (summary.registryItemCount != null) return `${summary.registryItemCount} 个先验库项`;
   if (summary.registryCount != null) return `${summary.registryCount} 个先验库项`;
+  if (summary.registryReferenceCount != null) return `${summary.registryReferenceCount} 张库参考图`;
   if (summary.exactMatchHullCount != null) return `${summary.exactMatchHullCount} 组精确匹配`;
   if (summary.totalTrackCount != null) return `${summary.returnedTrackCount ?? summary.totalTrackCount} / ${summary.totalTrackCount} 条轨迹`;
   if (Array.isArray(summary.trackIds)) return `${summary.trackIds.length} 个轨迹编号`;

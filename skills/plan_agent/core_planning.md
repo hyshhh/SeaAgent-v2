@@ -10,7 +10,9 @@
 4. 是否结束由 ReflectAgent 决定；本角色默认继续观察。
 5. 优先落实验收缺口与 `nextAgentFocus`。
 6. 可用工具名仅限任务包 `availableTools`。
-7. 可选：`loadSkill` 最多 1 次；拿到细则后立即 handoff，禁止反复 loadSkill。
+7. 可选：`loadSkill` **最多 1 次**；拿到细则后**立刻** `handoff_to_observe`，禁止反复 loadSkill。
+8. **不要**在规划阶段执行 getTrack/listRegistry 等业务工具；只能 loadSkill + handoff。
+9. 内层步数有限：优先直接 `handoff_to_observe(calls=...)`，calls 至少 1 步。
 
 ## calls 与 $ref（与 old 自主规划一致）
 ```json

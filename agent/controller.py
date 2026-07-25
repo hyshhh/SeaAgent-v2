@@ -43,6 +43,7 @@ class AgentController:
         self.display_record: dict[str, Any] | None = None
         self.display_groups: list[dict[str, Any]] = []
         self.working_scope: dict[str, Any] = {}
+        self._pending_registry_items: list[dict[str, Any]] = []
 
     def _emit(self, event_type: str, title: str, message: str, **payload: Any) -> None:
         if not self.event_handler:
@@ -58,6 +59,7 @@ class AgentController:
         self.rounds, self.tool_chain, self.tool_records = [], [], []
         self.display_record, self.display_groups = None, []
         self.working_scope = {}
+        self._pending_registry_items: list[dict[str, Any]] = []
         agent_settings = self.config.get("pipeline", {}).get("agent", {})
         self.max_rounds = int(agent_settings.get("max_rounds", self.max_rounds))
         self.display_limit = int(agent_settings.get("display_limit", self.display_limit))
@@ -117,6 +119,11 @@ class AgentController:
         registry_items = self._collect_registry()
         count_value = self._collect_count()
         answer_hint = reason
+        operation = str(self.meta.get("operation") or "")
+        target_kind = str(self.meta.get("targetKind") or "")
+        target_scope = str(self.meta.get("targetScope") or "")
+        description = str(self.meta.get("description") or "").strip()
+        hull = str(self.meta.get("hullNumber") or "").strip()
 
         if count_value is not None:
             return self._finish(
@@ -130,6 +137,22 @@ class AgentController:
         if matches:
             supported = [m for m in matches if m.get("scoreBand") != "mismatch"]
             if supported:
+                # 先验库描述匹配：展示命中库项，不把整库当结果
+                if target_scope == "registry" and not tracks:
+                    matched_items = self._registry_items_from_matches(supported)
+                    return self._finish(
+                        f"找到 {len(matched_items) or len(supported)} 个匹配库项" if matched_items or supported else "找到匹配目标",
+                        [],
+                        answer_hint or f"描述「{description}」命中 {len(supported)} 条候选",
+                        state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
+                        extra={
+                            "matches": matches,
+                            "registryItems": matched_items or registry_items,
+                            "planMode": "langgraph",
+                            "targetScope": "registry",
+                        },
+                        display={"tracks": [], "includeClips": False, "includeRegistry": True},
+                    )
                 return self._finish(
                     "找到匹配目标",
                     tracks or self._tracks_from_matches(supported),
@@ -138,13 +161,35 @@ class AgentController:
                     extra={"matches": matches, "planMode": "langgraph"},
                     display={"tracks": tracks or self._tracks_from_matches(supported), "includeClips": True},
                 )
-            return self._finish("未找到匹配目标", [], answer_hint, state, extra={"matches": matches, "planMode": "langgraph"})
+            no_match_conclusion = "未找到匹配目标"
+            if operation == "existence":
+                no_match_conclusion = f"未发现符合条件的目标" + (f"（{description or hull}）" if (description or hull) else "")
+            return self._finish(
+                no_match_conclusion,
+                [],
+                answer_hint or "匹配结果均为 mismatch",
+                "sufficient" if operation == "existence" else state,
+                extra={"matches": matches, "planMode": "langgraph"},
+            )
         if registry_items and not tracks:
-            # 标记 targetScope，前端 registry-only 证据列可直接使用
             if not self.meta.get("targetScope"):
                 self.meta["targetScope"] = "registry"
+            # 有描述却没有 match 结果时：说明只 list 了库，未完成筛选
+            if description and target_kind == "description":
+                return self._finish(
+                    "先验库已列出但未完成描述筛选",
+                    [],
+                    answer_hint or f"已读取 {len(registry_items)} 个库项，缺少 matchText 筛选结果",
+                    "uncertain" if state == "sufficient" else state,
+                    extra={
+                        "registryItems": registry_items,
+                        "planMode": "langgraph",
+                        "targetScope": self.meta.get("targetScope") or "registry",
+                    },
+                    display={"tracks": [], "includeClips": False, "includeRegistry": True},
+                )
             return self._finish(
-                "已查询先验库",
+                f"先验库共 {len(registry_items)} 个库项" if not description else "已查询先验库",
                 [],
                 answer_hint,
                 state,
@@ -156,7 +201,10 @@ class AgentController:
                 display={"tracks": [], "includeClips": False, "includeRegistry": True},
             )
         if tracks:
-            conclusion = "已定位相关轨迹" if state == "sufficient" else "仅获得部分轨迹证据"
+            if operation == "existence":
+                conclusion = "确认出现" if state == "sufficient" else "疑似出现（证据不完整）"
+            else:
+                conclusion = "已定位相关轨迹" if state == "sufficient" else "仅获得部分轨迹证据"
             return self._finish(
                 conclusion,
                 tracks,
@@ -165,8 +213,19 @@ class AgentController:
                 extra={"planMode": "langgraph"},
                 display={"tracks": tracks, "includeClips": True},
             )
-        conclusion = "证据存在冲突" if state == "conflict" else "未找到可靠证据"
-        return self._finish(conclusion, [], answer_hint, state, extra={"planMode": "langgraph"})
+        # 0 轨迹/0 匹配：存在判断应给明确否定，而不是「未找到可靠证据」+ 误导标签
+        if state == "conflict":
+            return self._finish("证据存在冲突", [], answer_hint, state, extra={"planMode": "langgraph"})
+        if operation == "existence":
+            label = hull or description or "目标"
+            return self._finish(
+                f"未发现「{label}」",
+                [],
+                answer_hint or "检索范围内无对应轨迹或匹配",
+                "sufficient",
+                extra={"planMode": "langgraph", "found": False},
+            )
+        return self._finish("未找到可靠证据", [], answer_hint, state, extra={"planMode": "langgraph"})
 
     def _collect_tracks(self) -> list[dict[str, Any]]:
         collected: dict[str, dict[str, Any]] = {}
@@ -200,6 +259,27 @@ class AgentController:
                         matches.append(match)
         matches.sort(key=lambda item: float(item.get("embeddingScore") or item.get("score") or 0), reverse=True)
         return matches
+
+    def _registry_items_from_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """从 matchText/matchImage 的库侧命中还原 registryItems，供前端只展示命中项。"""
+        by_id: dict[str, dict[str, Any]] = {}
+        all_items = {str(item.get("registryId")): item for item in self._collect_registry() if item.get("registryId")}
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            rid = str(match.get("matchedRegistryId") or match.get("registryId") or "")
+            if not rid:
+                continue
+            base = dict(all_items.get(rid) or {})
+            base.setdefault("registryId", rid)
+            if match.get("hullNumber"):
+                base.setdefault("hullNumber", match.get("hullNumber"))
+            if match.get("embeddingScore") is not None:
+                base["embeddingScore"] = match.get("embeddingScore")
+            if match.get("scoreBand"):
+                base["scoreBand"] = match.get("scoreBand")
+            by_id[rid] = base
+        return list(by_id.values())
 
     def _collect_registry(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -270,6 +350,11 @@ class AgentController:
         display: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         display = display if display is not None else {"tracks": tracks}
+        # 供 _display_tracks 优先使用的命中库项（避免展示整库）
+        if extra and isinstance(extra.get("registryItems"), list):
+            self._pending_registry_items = list(extra["registryItems"])
+        else:
+            self._pending_registry_items = []
         self._display_tracks(
             display.get("tracks") or [],
             display.get("includeClips", True) is not False,
@@ -312,9 +397,16 @@ class AgentController:
             return
         unique_tracks = list({str(item["trackId"]): item for item in tracks if item.get("trackId") is not None}.values())
         if not unique_tracks:
-            # 仅先验库结果：从 working_scope 抽参考图 ID，供前端 registry-only 展示
+            # 仅先验库结果：优先用本轮合成得到的 registry 命中项，再回退 working_scope
             reference_ids: list[str] = []
+            preferred_items: list[dict[str, Any]] = []
             if include_registry:
+                preferred_items = list(self._pending_registry_items or [])
+                sources = [preferred_items] if preferred_items else []
+                if not sources:
+                    for value in self.working_scope.values():
+                        if isinstance(value, dict) and value.get("registryItems"):
+                            sources.append(value.get("registryItems") or [])
                 for value in self.working_scope.values():
                     if not isinstance(value, dict):
                         continue
@@ -322,7 +414,7 @@ class AgentController:
                         for item in value.get(key) or []:
                             if item is not None:
                                 reference_ids.append(str(item))
-                    for item in value.get("registryItems") or []:
+                    for item in (preferred_items or value.get("registryItems") or []):
                         if not isinstance(item, dict):
                             continue
                         for ref in item.get("references") or []:
@@ -338,6 +430,12 @@ class AgentController:
                                 for ref in item.get("references") or []:
                                     if isinstance(ref, dict) and ref.get("referenceId"):
                                         reference_ids.append(str(ref["referenceId"]))
+                # 有命中库项但无参考图 ID 时，仍按库项生成展示组
+                if preferred_items and not reference_ids:
+                    for item in preferred_items:
+                        for ref in item.get("references") or []:
+                            if isinstance(ref, dict) and ref.get("referenceId"):
+                                reference_ids.append(str(ref["referenceId"]))
                 reference_ids = list(dict.fromkeys(reference_ids))
                 if hasattr(self.tools, "_representative_registry_reference_ids"):
                     try:
@@ -349,14 +447,23 @@ class AgentController:
                 "mode": "lazy",
                 "trackCount": 0,
                 "registryReferenceCount": len(reference_ids),
+                "registryItemCount": len(preferred_items) if preferred_items else 0,
             }
             if reference_ids:
-                # evidence 汇总依赖 display_groups 的 id 列表
                 self.display_groups.append({
                     "trackId": None,
                     "keyframeIds": [],
                     "shipSegmentIds": [],
                     "registryReferenceIds": reference_ids[:12],
+                })
+            elif preferred_items:
+                # 无向量参考图时仍把库项 ID 放进 evidence，前端可按 registryItems 渲染
+                self.display_groups.append({
+                    "trackId": None,
+                    "keyframeIds": [],
+                    "shipSegmentIds": [],
+                    "registryReferenceIds": [],
+                    "registryItems": preferred_items[:12],
                 })
             return
         # 按相似度粗排（有分数的靠前）

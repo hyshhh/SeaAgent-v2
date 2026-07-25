@@ -18,16 +18,24 @@ def _rules() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def clear_target_parser_cache() -> None:
+    """测试或热更新规则后清空缓存。"""
+    _rules.cache_clear()
+    _compiled.cache_clear()
+
+
 @lru_cache(maxsize=1)
 def _compiled() -> dict[str, Any]:
     rules = _rules()
     flags = re.IGNORECASE
+    # 默认允许中文+字母数字舷号（如 小蓝320）
+    default_hull = r"[0-9A-Za-z一-鿿-]{2,16}$"
     return {
         "query_words": tuple(str(w) for w in (rules.get("query_words") or [])),
         "split": re.compile(str(rules.get("split_pattern") or r"[，,、；;]+")),
         "leading": re.compile(str(rules.get("leading_pattern") or r"^"), flags),
         "trailing": re.compile(str(rules.get("trailing_pattern") or r"$")),
-        "hull": re.compile(str(rules.get("hull_pattern") or r"[0-9A-Za-z-]{3,16}$")),
+        "hull": re.compile(str(rules.get("hull_pattern") or default_hull)),
         "ordinal": re.compile(str(rules.get("ordinal_prefix_pattern") or r"^")),
         "hull_label": re.compile(str(rules.get("hull_label_prefix_pattern") or r"^"), flags),
         "trim_chars": str(rules.get("trim_chars") or " \t\r\n：:，,、；;。！？?!"),
@@ -84,18 +92,39 @@ def normalize_target_items(value: Any) -> list[dict[str, str | None]]:
 
 
 def extract_hull_number(question: str) -> str | None:
-    """从问题中抽取可能的舷号（规则辅助，供 Intent/Plan 工具调用）。"""
-    explicit = re.search(r"[舷弦]号\s*[:：]?\s*([0-9A-Za-z-]+)", question, re.I)
+    """从问题中抽取可能的舷号（规则辅助，供 Intent/Plan 工具调用）。
+
+    支持「舷号 小蓝320」「舷号：A01」等中文+字母数字形态，与 memory.normalize_hull_number 对齐。
+    """
+    text = str(question or "")
+    # 显式「舷号/弦号」后：允许中文名+编号（如 小蓝320），直到空白/标点/问句尾巴
+    explicit = re.search(
+        r"[舷弦]号\s*[:：]?\s*"
+        r"([0-9A-Za-z一-鿿][0-9A-Za-z一-鿿-]{0,15})"
+        r"(?=\s|[，,、；;。！？?!的吗呢啊呀有没是在库中出现]|$)",
+        text,
+        re.I,
+    )
     if explicit:
-        return explicit.group(1).upper()
-    if not any(token in question for token in ("船", "出现", "轨迹", "编号", "时间", "有没有", "是否", "库")):
+        hull = re.sub(r"[^0-9A-Za-z一-鿿-]", "", explicit.group(1)).upper()
+        if hull and not re.fullmatch(r"\d{1,2}", hull):
+            return hull
+    if not any(token in text for token in ("船", "出现", "轨迹", "编号", "时间", "有没有", "是否", "库", "舷号", "弦号")):
         return None
-    for value in re.findall(r"(?<![\d:：-])([0-9A-Za-z]{3,8})(?![\d:：-])", question):
-        if value.isdigit() and len(value) < 3:
+    # 裸舷号：纯字母数字 3–8 位；或「中文+数字」如 小蓝320
+    for value in re.findall(
+        r"(?<![\d:：A-Za-z一-鿿])"
+        r"((?:[一-鿿]{1,6})?[0-9A-Za-z]{2,8}|[0-9A-Za-z]{3,8})"
+        r"(?![\d:：A-Za-z])",
+        text,
+    ):
+        compact = re.sub(r"[^0-9A-Za-z一-鿿-]", "", value).upper()
+        if not compact or re.fullmatch(r"\d{1,2}", compact):
             continue
-        if re.fullmatch(r"\d{1,2}", value):
+        # 排除常见非舷号词
+        if compact in {"YOLO", "HTTP", "JSON", "API"}:
             continue
-        return value.upper()
+        return compact
     return None
 
 

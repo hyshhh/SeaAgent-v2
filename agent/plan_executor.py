@@ -155,12 +155,30 @@ class PlanExecutor:
                 present, resolved = cls._read_with_presence(scope, reference)
                 if not present:
                     if "$default" in value:
-                        resolved = value["$default"]
+                        # $default 可以是字面量或嵌套 $ref
+                        default_value = value["$default"]
+                        if isinstance(default_value, dict) and "$ref" in default_value:
+                            issue = cls._dependency_issue(default_value, scope)
+                            if issue:
+                                return issue
+                            resolved = cls._read(scope, str(default_value.get("$ref") or ""))
+                        else:
+                            resolved = default_value
                     else:
                         return f"dependency_field_missing:{reference}"
                 if cls._empty_dependency(resolved):
-                    return f"dependency_empty:{reference}"
+                    if "$default" in value:
+                        default_value = value["$default"]
+                        if isinstance(default_value, dict) and "$ref" in default_value:
+                            issue = cls._dependency_issue(default_value, scope)
+                            if issue:
+                                return issue
+                        # 空主引用时允许回退 default，不在此判 empty
+                    else:
+                        return f"dependency_empty:{reference}"
             for item in value.values():
+                if isinstance(value, dict) and "$ref" in value and item is value.get("$default"):
+                    continue
                 issue = cls._dependency_issue(item, scope)
                 if issue:
                     return issue
@@ -234,6 +252,12 @@ class PlanExecutor:
         if "$ref" not in value:
             return {key: self._resolve(item, scope) for key, item in value.items()}
         resolved = self._read(scope, value["$ref"])
+        if self._empty_dependency(resolved) and "$default" in value:
+            default_value = value["$default"]
+            if isinstance(default_value, dict) and "$ref" in default_value:
+                resolved = self._resolve(default_value, scope)
+            else:
+                resolved = default_value
         if value.get("$map") and isinstance(resolved, list):
             resolved = [self._read(item, value["$map"]) for item in resolved]
         if value.get("$compact") and isinstance(resolved, list):
@@ -308,10 +332,14 @@ class PlanExecutor:
         matches = result.get("matches")
         if isinstance(matches, list):
             summary["matchCount"] = len(matches)
+        # 库项数与参考图数分开统计，避免 searchable 参考图为 0 时把库项数盖成 0
         if isinstance(result.get("registryItems"), list):
             summary["registryCount"] = len(result["registryItems"])
+            summary["registryItemCount"] = len(result["registryItems"])
         if isinstance(result.get("registryReferences"), list):
-            summary["registryCount"] = len(result["registryReferences"])
+            summary["registryReferenceCount"] = len(result["registryReferences"])
+            if summary.get("registryCount") is None:
+                summary["registryCount"] = len(result["registryReferences"])
         if isinstance(result.get("exactMatches"), dict):
             summary["exactMatchHullCount"] = len(result["exactMatches"])
         for key in (

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import uuid
@@ -203,10 +204,28 @@ class ToolService:
     def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
         if not description.strip():
             return {"ok": False, "error": "description_required", "matches": []}
+        # 直接传入 registryItems 列表时保留，供无参考图时的关键字弱匹配
+        raw_registry_items: list[dict[str, Any]] = []
+        if isinstance(galleryImages, list):
+            raw_registry_items = [
+                item for item in galleryImages
+                if isinstance(item, dict)
+                and item.get("registryId") is not None
+                and (item.get("description") is not None or item.get("hullNumber") is not None)
+            ]
         galleryImages = self._flatten_image_records(galleryImages)
-        if not galleryImages:
+        if not galleryImages and not raw_registry_items:
             return {"ok": False, "error": "galleryImages_required", "matches": [], "hint": "请先 getFrames 或 listRegistry，再把 keyframes/registryReferences 作为 galleryImages"}
         registry_images = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
+        # 可嵌入库图为空时：对库项描述做关键字弱匹配
+        if not registry_images:
+            text_items = raw_registry_items or [
+                item for item in galleryImages
+                if (item.get("registryId") is not None or item.get("hullNumber") is not None)
+                and (item.get("description") or item.get("hullNumber"))
+            ]
+            if text_items:
+                return self._match_registry_by_text(description, text_items, topK)
         if registry_images:
             query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
             vectors = self.vectors.registry.get_many(item["registryVectorId"] for item in registry_images)
@@ -451,6 +470,56 @@ class ToolService:
             return tool(**arguments)
         except Exception as error:
             return {"ok": False, "error": str(error), "tool": name}
+
+    def _match_registry_by_text(
+        self,
+        description: str,
+        items: list[dict[str, Any]],
+        topK: int | None,
+    ) -> dict[str, Any]:
+        """无可用向量时：按描述关键字对库项做弱匹配（颜色/船型等）。"""
+        query = str(description or "").strip().lower()
+        tokens = [t for t in re.findall(r"[一-鿿]{1,4}|[a-z0-9]{2,}", query) if t not in {"哪些", "哪个", "什么", "有没有", "是否", "数据库", "先验库", "船", "船舶"}]
+        if not tokens:
+            tokens = [query] if query else []
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for item in items:
+            text = f"{item.get('description') or ''} {item.get('hullNumber') or ''} {' '.join(item.get('aliases') or [])}".lower()
+            if not text.strip():
+                continue
+            hits = sum(1 for token in tokens if token and token in text)
+            if not hits:
+                continue
+            score = hits / max(1, len(tokens))
+            # 强颜色词（如黄色）命中时抬高
+            if any(token in text for token in tokens if token in {"黄", "黄色", "蓝", "蓝色", "白", "白色", "灰", "灰色", "红", "红色"}):
+                score = min(1.0, score + 0.25)
+            band = "match" if score >= 0.66 else "uncertain" if score >= 0.34 else "mismatch"
+            if band == "mismatch":
+                continue
+            scored.append((score, {
+                "matchedRegistryId": item.get("registryId"),
+                "registryId": item.get("registryId"),
+                "hullNumber": item.get("hullNumber"),
+                "description": item.get("description"),
+                "embeddingScore": round(score, 6),
+                "scoreBand": band,
+                "matchMode": "text_keyword_registry",
+                "registryReferenceIds": [
+                    ref.get("referenceId")
+                    for ref in (item.get("references") or [])
+                    if isinstance(ref, dict) and ref.get("referenceId")
+                ],
+            }))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        limit = max(1, min(20, int(topK or self.settings.get("top_k") or 3)))
+        matches = [item for _, item in scored[:limit]]
+        return {
+            "ok": True,
+            "matchMode": "text_keyword_registry",
+            "matches": matches,
+            "hint": "当前库参考图不可检索，已用描述关键字弱匹配库项",
+        }
 
     def _band(self, score: float, mode: str) -> str:
         match = float(self.settings[f"{mode}_match"])

@@ -273,7 +273,14 @@ class TrackMemoryBuilder:
         track_dir.mkdir(parents=True, exist_ok=True)
         image_path = track_dir / f"{record['keyframeId']}.jpg"
         pending_path = track_dir / f".{record['keyframeId']}.pending.jpg"
-        if not cv2.imwrite(str(pending_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+        # 嵌入前先缩小，降低同步 encode 的卡顿（主线程在 drain 时会阻塞）
+        embed_crop = crop
+        max_side = int(self.settings.get("embed_max_side", 384))
+        h, w = crop.shape[:2]
+        if max(h, w) > max_side > 0:
+            scale = max_side / float(max(h, w))
+            embed_crop = cv2.resize(crop, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+        if not cv2.imwrite(str(pending_path), embed_crop, [cv2.IMWRITE_JPEG_QUALITY, 85]):
             raise OSError(f"关键帧保存失败：{pending_path}")
         vector_id = stable_vector_id(record["keyframeId"])
         vector = None
@@ -285,6 +292,9 @@ class TrackMemoryBuilder:
             pending_path.unlink(missing_ok=True)
             self.trace.append({"event": "keyframe_commit_rejected", "trackId": record["trackId"], "reason": "embedding_failed"})
             return None
+        # 落盘保留更高清原图，向量已用缩小图算过
+        if not cv2.imwrite(str(pending_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90]):
+            raise OSError(f"关键帧保存失败：{pending_path}")
         record.update(keyframePath=str(image_path), keyframeVectorId=vector_id, isEmbedded=True)
         table_rows = self.repository.keyframes.rows()
         index_path = self.vectors.keyframes.path

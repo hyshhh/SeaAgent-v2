@@ -1,13 +1,17 @@
 pipeline:
   max_parallel_pipelines: 1
-  candidate_every_n_frames: 10
-  candidate_pool_size: 12
+  # 候选帧抽样间隔（越大越不卡；识别仍异步）
+  candidate_every_n_frames: 15
+  candidate_pool_size: 8
   keyframe_pool_size: 6
   max_stale_frames: 90
-  recognition_workers: 2
-  recognition_timeout_seconds: 60
+  recognition_workers: 3
+  recognition_timeout_seconds: 45
   min_crop_width: 80
   min_crop_height: 80
+  # 监控推流写盘间隔（帧）；每帧写盘会造成周期性卡顿
+  stream_write_every_n_frames: 2
+  stream_jpeg_quality: 65
   target_fps: 0
   save_output_video: true
   demo: true
