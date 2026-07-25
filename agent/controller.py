@@ -215,19 +215,33 @@ class AgentController:
                     conclusion = "仅有灰区匹配，未达确认阈值"
                     finish_state = "uncertain" if operation == "existence" else state
                     hint = answer_hint or f"共 {len(uncertain)} 条 uncertain，最高分未达 match 阈值"
+                # matchImage 命中时必须展示库参考图；matchText 也可能带库侧 id
+                has_registry_side = bool(registry_items) or any(
+                    m.get("matchedRegistryId")
+                    or m.get("matchedRegistryReferenceIds")
+                    or m.get("queryRegistryReferenceIds")
+                    for m in supported
+                )
+                extra_payload: dict[str, Any] = {
+                    "matches": ranked,
+                    "planMode": "langgraph",
+                    "matchCount": len(supported),
+                    "confirmedMatchCount": len(confirmed),
+                    "found": bool(confirmed),
+                }
+                if has_registry_side and registry_items:
+                    extra_payload["registryItems"] = registry_items
                 return self._finish(
                     conclusion,
                     hit_tracks[: self.display_limit],
                     hint,
                     finish_state,
-                    extra={
-                        "matches": ranked,
-                        "planMode": "langgraph",
-                        "matchCount": len(supported),
-                        "confirmedMatchCount": len(confirmed),
-                        "found": bool(confirmed),
+                    extra=extra_payload,
+                    display={
+                        "tracks": hit_tracks[: self.display_limit],
+                        "includeClips": True,
+                        "includeRegistry": has_registry_side,
                     },
-                    display={"tracks": hit_tracks[: self.display_limit], "includeClips": True},
                 )
             # 有打分结果但无一达到 match/uncertain：仍按分数展示 top 候选作证据，禁止证据区空白
             candidate_tracks = self._tracks_ranked_by_matches(ranked, tracks)[: self.display_limit]
@@ -754,28 +768,48 @@ class AgentController:
                         segment_ids = [str(clip["shipSegmentId"])]
                 except Exception:
                     pass
-            reference_ids: list[str] = []
-            if include_registry:
-                raw_refs = self._ids(track, "matchedRegistryReferenceIds", "registryReferenceIds")
-                if not raw_refs:
-                    for value in self.working_scope.values():
-                        if not isinstance(value, dict):
+            # 库参考图：有 matchImage 结果时始终尝试挂上，不依赖 include_registry 开关
+            raw_refs = self._ids(track, "matchedRegistryReferenceIds", "registryReferenceIds", "queryRegistryReferenceIds")
+            if not raw_refs:
+                for value in self.working_scope.values():
+                    if not isinstance(value, dict):
+                        continue
+                    for match in value.get("matches") or []:
+                        if not isinstance(match, dict):
                             continue
-                        for match in value.get("matches") or []:
-                            if not isinstance(match, dict):
-                                continue
-                            mid = str(match.get("matchedTrackId") or match.get("trackId") or "")
-                            if mid != track_id:
-                                continue
-                            for rid in match.get("matchedRegistryReferenceIds") or match.get("queryRegistryReferenceIds") or []:
-                                if rid is not None:
-                                    raw_refs.append(str(rid))
-                if hasattr(self.tools, "_representative_registry_reference_ids"):
-                    try:
-                        raw_refs = self.tools._representative_registry_reference_ids(raw_refs)
-                    except Exception:
-                        pass
-                reference_ids = list(dict.fromkeys(str(x) for x in raw_refs if x is not None))[:3]
+                        mid = str(match.get("matchedTrackId") or match.get("trackId") or "")
+                        if mid != track_id:
+                            continue
+                        for rid in (
+                            match.get("matchedRegistryReferenceIds")
+                            or match.get("queryRegistryReferenceIds")
+                            or []
+                        ):
+                            if rid is not None:
+                                raw_refs.append(str(rid))
+                        # 仅有 matchedRegistryId 时，从库项 references 展开
+                        rid_item = match.get("matchedRegistryId")
+                        if rid_item and not raw_refs:
+                            for reg in self._collect_registry():
+                                if str(reg.get("registryId") or "") != str(rid_item):
+                                    continue
+                                for ref in reg.get("references") or []:
+                                    if isinstance(ref, dict) and ref.get("referenceId"):
+                                        raw_refs.append(str(ref["referenceId"]))
+            if include_registry and not raw_refs:
+                # 无匹配参考图时，用本轮库项代表图兜底
+                for item in self._pending_registry_items or self._collect_registry():
+                    if not isinstance(item, dict):
+                        continue
+                    for ref in item.get("references") or []:
+                        if isinstance(ref, dict) and ref.get("referenceId"):
+                            raw_refs.append(str(ref["referenceId"]))
+            if hasattr(self.tools, "_representative_registry_reference_ids") and raw_refs:
+                try:
+                    raw_refs = list(self.tools._representative_registry_reference_ids(raw_refs))
+                except Exception:
+                    pass
+            reference_ids = list(dict.fromkeys(str(x) for x in raw_refs if x is not None))[:3]
             group: dict[str, Any] = {
                 "trackId": track_id,
                 "clipTrackId": track_id,

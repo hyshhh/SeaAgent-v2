@@ -374,3 +374,50 @@ def test_mismatch_matches_still_rank_for_display():
     ranked = AgentController._tracks_ranked_by_matches(ctrl, matches)
     assert [str(t["trackId"]) for t in ranked] == ["7", "3"]
     assert ranked[0]["matchedKeyframeIds"] == ["ka"]
+
+
+def test_display_tracks_attaches_registry_refs_from_match_image():
+    """matchImage 命中后，证据组必须带上 matchedRegistryReferenceIds。"""
+    from agent.controller import AgentController
+
+    ctrl = object.__new__(AgentController)
+    ctrl.tools = type("T", (), {})()
+    ctrl.display_record = None
+    ctrl.display_groups = []
+    ctrl._pending_registry_items = []
+    ctrl.working_scope = {
+        "match": {
+            "ok": True,
+            "matches": [
+                {
+                    "matchedTrackId": "7",
+                    "matchedRegistryId": "r003",
+                    "embeddingScore": 0.83,
+                    "scoreBand": "match",
+                    "matchedKeyframeIds": ["kf-7"],
+                    "matchedRegistryReferenceIds": ["ref-c406", "ref-71f5"],
+                }
+            ],
+        },
+        "tracks": {"ok": True, "tracks": [{"trackId": "7"}]},
+        "registry": {
+            "ok": True,
+            "registryItems": [{"registryId": "r003", "hullNumber": "003", "references": [{"referenceId": "ref-c406"}]}],
+        },
+    }
+    tracks = AgentController._tracks_ranked_by_matches(
+        ctrl,
+        [
+            {
+                "matchedTrackId": "7",
+                "embeddingScore": 0.83,
+                "scoreBand": "match",
+                "matchedKeyframeIds": ["kf-7"],
+                "matchedRegistryReferenceIds": ["ref-c406", "ref-71f5"],
+            }
+        ],
+    )
+    AgentController._display_tracks(ctrl, tracks, include_clips=False, include_registry=True)
+    assert ctrl.display_groups
+    refs = ctrl.display_groups[0].get("registryReferenceIds") or []
+    assert "ref-c406" in refs
