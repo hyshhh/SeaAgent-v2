@@ -199,7 +199,31 @@ class ToolService:
 
     def getRegistry(self, hullNumber: str) -> dict[str, Any]:
         items = self.repository.registry_by_hull(hullNumber)
-        references = [reference for item in items for reference in item.get("references", [])]
+        # 库项自带 references；再按 registryId 扫一遍表，避免嵌套漏图
+        references: list[dict[str, Any]] = []
+        seen_ref: set[str] = set()
+        for item in items:
+            for reference in item.get("references") or []:
+                if not isinstance(reference, dict):
+                    continue
+                rid = str(reference.get("referenceId") or "")
+                if rid and rid in seen_ref:
+                    continue
+                if rid:
+                    seen_ref.add(rid)
+                references.append(reference)
+        if items:
+            extra = self.repository.registry_references(
+                [str(item.get("registryId")) for item in items if item.get("registryId")],
+                embedded_only=False,
+            )
+            for reference in extra:
+                rid = str(reference.get("referenceId") or "")
+                if rid and rid in seen_ref:
+                    continue
+                if rid:
+                    seen_ref.add(rid)
+                references.append(reference)
         # 以向量库是否命中为准，不唯 isEmbedded 标志（标志可能滞后）
         candidate_ids = [
             int(item["registryVectorId"])
@@ -215,12 +239,18 @@ class ToolService:
                 discarded.append(item.get("referenceId"))
                 continue
             if int(vid) in available_vectors:
-                # 向量在库中即可搜；补齐 isEmbedded 供下游 matchImage 使用
                 patched = dict(item)
                 patched["isEmbedded"] = True
                 valid.append(patched)
             else:
                 discarded.append(item.get("referenceId"))
+        # 向量索引未命中时：仍返回原始 references，让 matchImage / 展示能看到库图
+        # searchable 仍以向量命中为准
+        export_refs = valid if valid else [
+            dict(item, isEmbedded=bool(item.get("isEmbedded")))
+            for item in references
+            if isinstance(item, dict)
+        ]
         return {
             "ok": True,
             "found": bool(items),
@@ -228,8 +258,8 @@ class ToolService:
             "hullNumber": normalize_hull_number(hullNumber),
             "registryIds": [item["registryId"] for item in items],
             "registryItems": items,
-            "registryReferenceIds": [item["referenceId"] for item in valid],
-            "registryReferences": valid,
+            "registryReferenceIds": [item["referenceId"] for item in export_refs if item.get("referenceId")],
+            "registryReferences": export_refs,
             "discardedReferenceIds": discarded,
             "referenceCount": len(references),
             "searchableReferenceCount": len(valid),

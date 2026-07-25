@@ -165,13 +165,16 @@ def test_match_image_missing_args_records_attempt():
 
 
 def test_match_image_default_from_registry_items():
-    """registryReferences 空时可用 registryItems.references 补齐。"""
+    """registryReferences 空时从 registryItems.references 展开补齐 queryImages。"""
     class _FakeTools:
         @staticmethod
         def execute(name, arguments):
             assert name == "matchImage"
-            assert arguments.get("queryImages")
-            assert arguments.get("galleryImages")
+            query = arguments.get("queryImages") or []
+            gallery = arguments.get("galleryImages") or []
+            assert query, "queryImages 应被补齐"
+            assert query[0].get("referenceId") == "ref1"
+            assert gallery
             return {"ok": True, "matches": [{"matchedTrackId": "1", "embeddingScore": 0.8, "scoreBand": "match"}]}
 
     executor = PlanExecutor(tools=_FakeTools())
@@ -191,6 +194,7 @@ def test_match_image_default_from_registry_items():
                             "registryId": "r1",
                             "registryVectorId": 1,
                             "isEmbedded": True,
+                            "imagePath": "a.jpg",
                         }
                     ],
                 }
@@ -214,10 +218,7 @@ def test_match_image_default_from_registry_items():
                 "id": "match",
                 "tool": "matchImage",
                 "arguments": {
-                    "queryImages": {
-                        "$ref": "registry.registryReferences",
-                        "$default": {"$ref": "registry.registryItems"},
-                    },
+                    "queryImages": {"$ref": "registry.registryReferences"},
                     "galleryImages": {"$ref": "frames.keyframes"},
                     "topK": 3,
                 },
@@ -225,6 +226,18 @@ def test_match_image_default_from_registry_items():
         ],
         scope=scope,
     )
-    assert executed["tool_records"][0]["skipped"] is False
-    assert executed["tool_records"][0]["ok"] is True
-    assert executed["tool_records"][0]["result"].get("matches")
+    record = executed["tool_records"][0]
+    assert record["skipped"] is False
+    assert record["ok"] is True
+    assert record["result"].get("matches")
+    # 压缩展示应是 referenceId，不是 null
+    assert record["arguments"]["queryImages"] == ["ref1"]
+
+
+def test_compact_args_prefers_registry_id_over_null():
+    compact = PlanExecutor._compact_args({
+        "queryImages": [{"registryId": "r1", "hullNumber": "小蓝320", "description": "蓝船"}],
+        "galleryImages": [{"keyframeId": "k1"}],
+    })
+    assert compact["queryImages"] == ["r1"]
+    assert compact["galleryImages"] == ["k1"]

@@ -317,17 +317,69 @@ class PlanExecutor:
 
     @classmethod
     def _enrich_match_image_args(cls, arguments: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
-        """queryImages/galleryImages 为空时，从 working_scope 最近的库/帧结果补齐。"""
+        """保证 query=库参考图、gallery=关键帧；空列表/库项外壳时从 scope 展开补齐。"""
         args = dict(arguments or {})
-        if cls._empty_dependency(args.get("queryImages")):
-            recovered = cls._collect_registry_images(scope)
-            if recovered:
-                args["queryImages"] = recovered
-        if cls._empty_dependency(args.get("galleryImages")):
+        # 1) 先把 registryItems 外壳 / 嵌套 references 展成参考图列表
+        query = cls._expand_to_registry_images(args.get("queryImages"))
+        if not query:
+            query = cls._collect_registry_images(scope)
+        if query:
+            args["queryImages"] = query
+        gallery = args.get("galleryImages")
+        if cls._empty_dependency(gallery) or (
+            isinstance(gallery, list) and gallery and not any(
+                isinstance(x, dict) and x.get("keyframeId") is not None for x in gallery
+            )
+        ):
             recovered = cls._collect_keyframes(scope)
             if recovered:
                 args["galleryImages"] = recovered
         return args
+
+    @classmethod
+    def _expand_to_registry_images(cls, value: Any) -> list[dict[str, Any]]:
+        """把 registryReferences / registryItems / 嵌套 references 统一展成参考图记录。"""
+        images: list[dict[str, Any]] = []
+
+        def visit(node: Any) -> None:
+            if isinstance(node, (list, tuple)):
+                for child in node:
+                    visit(child)
+                return
+            if not isinstance(node, dict):
+                return
+            # 已是参考图
+            if node.get("referenceId") is not None or node.get("registryVectorId") is not None:
+                if node.get("registryId") is not None or node.get("referenceId") is not None:
+                    images.append(node)
+                    return
+            # 工具结果外壳
+            if isinstance(node.get("registryReferences"), list):
+                visit(node["registryReferences"])
+            if isinstance(node.get("references"), list):
+                visit(node["references"])
+            if isinstance(node.get("registryItems"), list):
+                visit(node["registryItems"])
+            # 单条库项
+            if node.get("registryId") is not None and (
+                isinstance(node.get("references"), list) or isinstance(node.get("registryReferences"), list)
+            ):
+                visit(node.get("references") or node.get("registryReferences") or [])
+
+        visit(value)
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            if img.get("registryVectorId") is None and not img.get("imagePath") and not img.get("referenceId"):
+                continue
+            key = str(img.get("referenceId") or img.get("registryVectorId") or id(img))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(img)
+        return unique
 
     @classmethod
     def _collect_registry_images(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
@@ -335,27 +387,20 @@ class PlanExecutor:
         for value in (scope or {}).values():
             if not isinstance(value, dict) or value.get("ok") is False:
                 continue
+            # 优先可搜参考图
             refs = value.get("registryReferences")
             if isinstance(refs, list) and refs:
-                images.extend([r for r in refs if isinstance(r, dict)])
-                continue
-            for item in value.get("registryItems") or []:
-                if not isinstance(item, dict):
-                    continue
-                nested = item.get("references") or item.get("registryReferences") or []
-                if isinstance(nested, list):
-                    images.extend([r for r in nested if isinstance(r, dict)])
+                images.extend(cls._expand_to_registry_images(refs))
+            # 再展开库项嵌套 references（即使 searchable 列表为空）
+            items = value.get("registryItems")
+            if isinstance(items, list) and items:
+                images.extend(cls._expand_to_registry_images(items))
             one = value.get("registryItem")
             if isinstance(one, dict):
-                nested = one.get("references") or one.get("registryReferences") or []
-                if isinstance(nested, list):
-                    images.extend([r for r in nested if isinstance(r, dict)])
-        # 优先保留带向量 id 的参考图
+                images.extend(cls._expand_to_registry_images(one))
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for img in images:
-            if img.get("registryVectorId") is None and not img.get("imagePath"):
-                continue
             key = str(img.get("referenceId") or img.get("registryVectorId") or id(img))
             if key in seen:
                 continue
@@ -458,10 +503,20 @@ class PlanExecutor:
         compact = {}
         for key, value in (arguments or {}).items():
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                compact[key] = [
-                    item.get("keyframeId") or item.get("referenceId") or item.get("trackId")
-                    for item in value
-                ]
+                labels = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        labels.append(str(item))
+                        continue
+                    label = (
+                        item.get("keyframeId")
+                        or item.get("referenceId")
+                        or item.get("registryId")
+                        or item.get("trackId")
+                        or item.get("hullNumber")
+                    )
+                    labels.append(label if label is not None else f"<dict:{len(item)}>")
+                compact[key] = labels
             elif isinstance(value, dict) and len(str(value)) > 500:
                 compact[key] = f"<object:{len(value)} keys>"
             else:

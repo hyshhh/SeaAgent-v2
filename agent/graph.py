@@ -369,11 +369,8 @@ def build_sea_agent_graph(
                     "id": "match",
                     "tool": "matchImage",
                     "arguments": {
-                        # 优先可搜参考图；空时执行器会从 registryItems.references 再补
-                        "queryImages": {
-                            "$ref": "registry.registryReferences",
-                            "$default": {"$ref": "registry.registryItems"},
-                        },
+                        # 只引用参考图列表；执行器会再从 registryItems.references 展开补齐
+                        "queryImages": {"$ref": "registry.registryReferences"},
                         "galleryImages": {"$ref": "frames.keyframes"},
                         "topK": top,
                     },
