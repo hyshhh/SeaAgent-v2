@@ -134,9 +134,23 @@ class AgentController:
                 extra={"count": count_value, "planMode": "langgraph"},
                 display={"tracks": tracks, "includeClips": True},
             )
+        registry_relation = str(self.meta.get("registryRelation") or "")
+        question_type = str(self.meta.get("questionType") or "")
+        is_registry_in_list = (
+            registry_relation == "in"
+            and operation == "list"
+            and not hull
+            and (target_scope in {"both", "registry"} or question_type == "registry_in_list")
+        )
+        # 伪描述：用户整句当 matchText 时，命中不可信
+        bogus_description = bool(
+            description
+            and any(token in description for token in ("哪些", "有哪些", "在库", "未在库", "先验库", "库船"))
+        )
+
         if matches:
             supported = [m for m in matches if m.get("scoreBand") != "mismatch"]
-            if supported:
+            if supported and not (is_registry_in_list and bogus_description):
                 # 先验库描述匹配：展示命中库项，不把整库当结果
                 if target_scope == "registry" and not tracks:
                     matched_items = self._registry_items_from_matches(supported)
@@ -153,6 +167,28 @@ class AgentController:
                         },
                         display={"tracks": [], "includeClips": False, "includeRegistry": True},
                     )
+                # 在库列表 + matchImage 命中：按匹配轨迹/库项列名单
+                if is_registry_in_list:
+                    hit_tracks = tracks or self._tracks_from_matches(supported)
+                    hit_items = self._registry_items_from_matches(supported)
+                    return self._finish(
+                        f"视频中出现 {len(supported)} 个在库匹配"
+                        + (f"（{len(hit_tracks)} 条轨迹）" if hit_tracks else ""),
+                        hit_tracks[: self.display_limit],
+                        answer_hint or "listRegistry + matchImage 对照完成",
+                        state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
+                        extra={
+                            "matches": matches,
+                            "registryItems": hit_items or registry_items,
+                            "planMode": "langgraph",
+                            "targetScope": "both",
+                        },
+                        display={
+                            "tracks": hit_tracks[: self.display_limit],
+                            "includeClips": True,
+                            "includeRegistry": True,
+                        },
+                    )
                 return self._finish(
                     "找到匹配目标",
                     tracks or self._tracks_from_matches(supported),
@@ -160,6 +196,15 @@ class AgentController:
                     state,
                     extra={"matches": matches, "planMode": "langgraph"},
                     display={"tracks": tracks or self._tracks_from_matches(supported), "includeClips": True},
+                )
+            if is_registry_in_list:
+                return self._finish(
+                    "未在视频中发现在库船舶匹配" if not supported else "未找到可信在库匹配",
+                    [],
+                    answer_hint or "库图与视频关键帧无有效匹配；若仅 matchText(问句) 则证据无效",
+                    "sufficient" if state in {"sufficient", "uncertain"} else state,
+                    extra={"matches": matches, "registryItems": registry_items, "planMode": "langgraph", "targetScope": "both"},
+                    display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
                 )
             no_match_conclusion = "未找到匹配目标"
             if operation == "existence":

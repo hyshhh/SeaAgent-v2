@@ -272,13 +272,41 @@ class ToolService:
 
     def listRegistry(self) -> dict[str, Any]:
         items = self.repository.list_registry()
-        references = [reference for item in items for reference in item.get("references", [])]
-        vector_ids = [int(item["registryVectorId"]) for item in references if item.get("isEmbedded") and item.get("registryVectorId") is not None]
-        available_vectors = self.vectors.registry.get_many(vector_ids)
-        valid = [item for item in references if item["isEmbedded"] and item.get("registryVectorId") is not None and int(item["registryVectorId"]) in available_vectors]
-        discarded = [item["referenceId"] for item in references if item not in valid]
-        searchable_ids = {item["registryId"] for item in valid}
-        return {"ok": True, "registryItems": items, "registryReferenceIds": [item["referenceId"] for item in valid], "registryReferences": valid, "discardedReferenceIds": discarded, "unsearchableRegistryIds": [item["registryId"] for item in items if item["registryId"] not in searchable_ids]}
+        references = [reference for item in items for reference in item.get("references", []) if isinstance(reference, dict)]
+        vector_ids = [
+            int(item["registryVectorId"])
+            for item in references
+            if item.get("registryVectorId") is not None
+        ]
+        available_vectors = self.vectors.registry.get_many(vector_ids) if vector_ids else {}
+        valid: list[dict[str, Any]] = []
+        discarded: list[str] = []
+        for item in references:
+            vid = item.get("registryVectorId")
+            if vid is not None and int(vid) in available_vectors:
+                patched = dict(item)
+                patched["isEmbedded"] = True
+                valid.append(patched)
+            else:
+                discarded.append(str(item.get("referenceId") or ""))
+        # 与 getRegistry 一致：索引未命中时仍导出原始 references，供 matchImage 现场编码
+        export_refs = valid if valid else [dict(item) for item in references]
+        searchable_ids = {item.get("registryId") for item in valid if item.get("registryId")}
+        return {
+            "ok": True,
+            "found": bool(items),
+            "searchable": bool(valid),
+            "registryItems": items,
+            "registryReferenceIds": [item["referenceId"] for item in export_refs if item.get("referenceId")],
+            "registryReferences": export_refs,
+            "discardedReferenceIds": discarded,
+            "unsearchableRegistryIds": [
+                item["registryId"] for item in items
+                if item.get("registryId") and item["registryId"] not in searchable_ids
+            ],
+            "referenceCount": len(references),
+            "searchableReferenceCount": len(valid),
+        }
 
     def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
         if not description.strip():
@@ -411,36 +439,106 @@ class ToolService:
             }
         keyframes = query_keyframes if query_is_track else gallery_keyframes
         references = gallery_references if query_is_track else query_references
-        frame_vectors = self.vectors.keyframes.get_many(item["keyframeVectorId"] for item in keyframes)
-        reference_vectors = self.vectors.registry.get_many(item["registryVectorId"] for item in references)
-        missing_keyframes = [item["keyframeId"] for item in keyframes if int(item["keyframeVectorId"]) not in frame_vectors]
-        missing_references = [item["referenceId"] for item in references if int(item["registryVectorId"]) not in reference_vectors]
+        # 索引未命中时按图片路径现场编码，避免“有 referenceId 却 0 匹配”
+        frame_vectors, recovered_frames = self._ensure_image_vectors(
+            keyframes,
+            vector_key="keyframeVectorId",
+            path_keys=("keyframePath", "imagePath", "path"),
+            index=self.vectors.keyframes,
+            owner_key="keyframeId",
+        )
+        reference_vectors, recovered_refs = self._ensure_image_vectors(
+            references,
+            vector_key="registryVectorId",
+            path_keys=("imagePath", "keyframePath", "path"),
+            index=self.vectors.registry,
+            owner_key="referenceId",
+        )
+        missing_keyframes = [
+            item.get("keyframeId")
+            for item in keyframes
+            if item.get("keyframeVectorId") is None or int(item["keyframeVectorId"]) not in frame_vectors
+        ]
+        missing_references = [
+            item.get("referenceId")
+            for item in references
+            if item.get("registryVectorId") is None or int(item["registryVectorId"]) not in reference_vectors
+        ]
         frames_by_track = self._group(keyframes, "trackId")
         refs_by_registry = self._group(references, "registryId")
         matches = []
+        scored_pairs = 0
         for track_id, track_frames in frames_by_track.items():
             for registry_id, registry_refs in refs_by_registry.items():
                 frame_scores = []
                 for frame in track_frames:
-                    frame_vector = frame_vectors.get(int(frame["keyframeVectorId"]))
-                    candidates = [(float(np.dot(frame_vector, reference_vectors[int(reference["registryVectorId"])])), reference) for reference in registry_refs if frame_vector is not None and int(reference["registryVectorId"]) in reference_vectors]
+                    vid = frame.get("keyframeVectorId")
+                    if vid is None:
+                        continue
+                    frame_vector = frame_vectors.get(int(vid))
+                    if frame_vector is None:
+                        continue
+                    candidates = []
+                    for reference in registry_refs:
+                        rid = reference.get("registryVectorId")
+                        if rid is None:
+                            continue
+                        ref_vector = reference_vectors.get(int(rid))
+                        if ref_vector is None:
+                            continue
+                        candidates.append((float(np.dot(frame_vector, ref_vector)), reference))
                     if candidates:
                         score, reference = max(candidates, key=lambda item: item[0])
                         frame_scores.append((score, frame, reference))
+                        scored_pairs += 1
                 top = sorted(frame_scores, key=lambda item: item[0], reverse=True)[:2]
                 if not top:
                     continue
                 score = float(np.mean([item[0] for item in top]))
                 matched_keyframes = [item[1]["keyframeId"] for item in top]
                 matched_references = list(dict.fromkeys(item[2]["referenceId"] for item in top))
-                matches.append({"matchedTrackId": track_id, "matchedRegistryId": registry_id, "embeddingScore": round(score, 6), "scoreBand": self._band(score, "image"), "queryKeyframeIds": matched_keyframes if query_is_track else [], "queryRegistryReferenceIds": matched_references if query_is_registry else [], "matchedKeyframeIds": matched_keyframes, "matchedRegistryReferenceIds": matched_references})
+                matches.append({
+                    "matchedTrackId": track_id,
+                    "matchedRegistryId": registry_id,
+                    "embeddingScore": round(score, 6),
+                    "scoreBand": self._band(score, "image"),
+                    "queryKeyframeIds": matched_keyframes if query_is_track else [],
+                    "queryRegistryReferenceIds": matched_references if query_is_registry else [],
+                    "matchedKeyframeIds": matched_keyframes,
+                    "matchedRegistryReferenceIds": matched_references,
+                })
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
         if topK:
-            owner_key = "matchedTrackId" if query_is_track else "matchedRegistryId"
-            owner_ids = frames_by_track if query_is_track else refs_by_registry
-            matches = [item for owner_id in owner_ids for item in [entry for entry in matches if entry[owner_key] == owner_id][:topK]]
-            matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
-        return {"ok": True, "matchMode": "image_to_image", "queryType": "track" if query_is_track else "registry", "matches": matches, "missingKeyframeIds": missing_keyframes, "missingRegistryReferenceIds": missing_references}
+            # 全局 topK，不要按 owner 再截成空（旧逻辑在某些分组下会丢全部分数）
+            matches = matches[: max(1, int(topK))]
+        hint = None
+        if not matches:
+            if missing_references and not reference_vectors:
+                hint = "库参考图向量均未命中索引且无法从 imagePath 编码"
+            elif missing_keyframes and not frame_vectors:
+                hint = "关键帧向量均未命中索引且无法从 keyframePath 编码"
+            elif scored_pairs == 0:
+                hint = (
+                    f"两侧记录齐全但无有效向量对：refs={len(references)} frames={len(keyframes)} "
+                    f"refVec={len(reference_vectors)} frameVec={len(frame_vectors)}"
+                )
+            else:
+                hint = "完成比对但无超过阈值的配对"
+        return {
+            "ok": True,
+            "matchMode": "image_to_image",
+            "queryType": "track" if query_is_track else "registry",
+            "matches": matches,
+            "missingKeyframeIds": missing_keyframes,
+            "missingRegistryReferenceIds": missing_references,
+            "recoveredKeyframeCount": recovered_frames,
+            "recoveredRegistryReferenceCount": recovered_refs,
+            "queryReferenceCount": len(references),
+            "galleryKeyframeCount": len(keyframes),
+            "scoredPairCount": scored_pairs,
+            "visualAttempted": True,
+            "hint": hint,
+        }
 
     def verifyTarget(self, description: str | None = None, registryReferenceIds: list[str] | None = None, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None) -> dict[str, Any]:
         """支持三类核验：
@@ -626,6 +724,77 @@ class ToolService:
             "matches": matches,
             "hint": "当前库参考图不可检索，已用描述关键字弱匹配库项",
         }
+
+    def _ensure_image_vectors(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        vector_key: str,
+        path_keys: tuple[str, ...],
+        index: Any,
+        owner_key: str,
+    ) -> tuple[dict[int, np.ndarray], int]:
+        """先读 FAISS；缺失时按本地图片路径现场编码并写回索引。"""
+        ids = [
+            int(item[vector_key])
+            for item in records
+            if isinstance(item, dict) and item.get(vector_key) is not None
+        ]
+        vectors: dict[int, np.ndarray] = {}
+        if ids:
+            try:
+                vectors = dict(index.get_many(ids))
+            except Exception:
+                vectors = {}
+        missing_records = [
+            item for item in records
+            if isinstance(item, dict)
+            and item.get(vector_key) is not None
+            and int(item[vector_key]) not in vectors
+        ]
+        recovered = 0
+        if not missing_records:
+            return vectors, recovered
+
+        path_list: list[str] = []
+        id_list: list[int] = []
+        for item in missing_records:
+            path = None
+            for key in path_keys:
+                value = item.get(key)
+                if value:
+                    path = str(value)
+                    break
+            if not path:
+                continue
+            file_path = Path(path)
+            if not file_path.is_file():
+                # 相对路径尝试拼到项目根
+                alt = Path.cwd() / path
+                if alt.is_file():
+                    file_path = alt
+                else:
+                    continue
+            path_list.append(str(file_path))
+            id_list.append(int(item[vector_key]))
+
+        if not path_list:
+            return vectors, recovered
+        try:
+            encoded = self.embedder.encode_images(path_list)
+        except Exception:
+            return vectors, recovered
+        if encoded is None or len(encoded) == 0:
+            return vectors, recovered
+        for vector_id, vector in zip(id_list, encoded):
+            vectors[int(vector_id)] = np.asarray(vector, dtype=np.float32)
+            recovered += 1
+        # 尽力写回索引，失败不影响本轮匹配
+        try:
+            index.add_many(id_list, np.asarray(encoded, dtype=np.float32))
+        except Exception:
+            pass
+        return vectors, recovered
 
     def _band(self, score: float, mode: str) -> str:
         match = float(self.settings[f"{mode}_match"])

@@ -26,6 +26,24 @@ def test_infer_hull_existence():
     assert "未检测到" not in criteria
 
 
+def test_infer_registry_in_list_not_matchtext_query():
+    """「有哪些在库船出现」不得抽成 description / matchText 问句。"""
+    clear_target_parser_cache()
+    fields = infer_intent_fields("有哪些在库船出现？")
+    assert fields["operation"] == "list"
+    assert fields["registryRelation"] == "in"
+    assert fields["targetScope"] == "both"
+    assert fields["targetKind"] == "all"
+    assert not fields.get("description")
+    assert fields.get("questionType") == "registry_in_list"
+    focus = str(fields.get("nextAgentFocus") or "").lower()
+    criteria = str(fields.get("successCriteria") or "").lower()
+    assert "listregistry" in focus or "listregistry" in criteria
+    assert "matchimage" in focus or "matchimage" in criteria
+    assert "matchtext" not in focus
+    assert "ocr" not in criteria or "matchimage" in criteria
+
+
 def test_registry_summary_prefers_items_over_references():
     observation = {
         "id": "registry",
@@ -102,6 +120,71 @@ def test_visual_match_default_plan_shape():
     assert wants_visual(hint)
     assert "matchimage" in hint.lower()
     assert "不带hull" in hint or "不带hullnumber" in hint.lower()
+
+
+def test_registry_in_list_default_plan_calls():
+    """在库列表默认链：listRegistry → getTrack → getFrames → matchImage。"""
+    intent = {
+        "operation": "list",
+        "registryRelation": "in",
+        "targetScope": "both",
+        "targetKind": "all",
+        "questionType": "registry_in_list",
+        "hullNumber": None,
+        "description": None,
+        "nextAgentFocus": (
+            "①listRegistry；②getTrack(全量)；③getFrames；"
+            "④matchImage(query=registry.registryReferences, gallery=frames.keyframes)"
+        ),
+    }
+    tools = [c["tool"] for c in _default_plan_calls_for_test(intent, top_k=3)]
+    assert tools == ["listRegistry", "getTrack", "getFrames", "matchImage"]
+
+
+def _default_plan_calls_for_test(intent: dict, top_k: int = 3) -> list[dict]:
+    """与 agent.graph._default_plan_calls 在库列表分支对齐的轻量复现，供契约测试。"""
+    hull = str(intent.get("hullNumber") or "").strip()
+    description = str(intent.get("description") or "").strip()
+    operation = str(intent.get("operation") or "list")
+    target_scope = str(intent.get("targetScope") or "track_memory")
+    registry_relation = str(intent.get("registryRelation") or "any")
+    hint = str(intent.get("nextAgentFocus") or "").lower()
+    top = max(1, min(20, int(top_k or 3)))
+    wants_registry = (
+        target_scope in {"registry", "both"}
+        or registry_relation in {"in", "out"}
+        or any(token in hint for token in ("先验库", "在库", "listregistry", "matchimage"))
+    )
+    wants_visual_match = any(
+        token in hint
+        for token in ("matchimage", "视觉匹配", "registryreferences", "库图")
+    )
+    wants_registry_in_list = (
+        registry_relation == "in"
+        and operation == "list"
+        and not hull
+        and (
+            target_scope in {"both", "registry"}
+            or str(intent.get("questionType") or "") == "registry_in_list"
+            or any(token in hint for token in ("listregistry", "在库", "哪些", "matchimage"))
+        )
+    )
+    if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
+        return [
+            {"id": "registry", "tool": "listRegistry", "arguments": {}},
+            {"id": "tracks", "tool": "getTrack", "arguments": {"offset": 0, "limit": 60}},
+            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+            {
+                "id": "match",
+                "tool": "matchImage",
+                "arguments": {
+                    "queryImages": {"$ref": "registry.registryReferences"},
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": top,
+                },
+            },
+        ]
+    return [{"id": "tracks", "tool": "getTrack", "arguments": {"offset": 0, "limit": 60}}]
 
 
 def test_should_replan_visual_when_registry_found_without_searchable_flag():

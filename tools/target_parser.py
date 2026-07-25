@@ -151,6 +151,9 @@ def extract_description(question: str) -> str | None:
         # 明确舷号问句时不把整句当描述
         if re.search(r"[舷弦]号", text):
             return None
+    # 「哪些/有哪些 + 在库船」是列表问法，不是外观描述
+    if _is_registry_list_question(text):
+        return None
     # 去掉常见问句壳子，保留外观短语
     cleaned = text
     for pattern in (
@@ -174,6 +177,12 @@ def extract_description(question: str) -> str | None:
         r"统计",
         r"多少艘?",
         r"几艘",
+        r"有哪些",
+        r"哪些",
+        r"哪几[艘条个]?",
+        r"在库(?:船舶|船只|船)?",
+        r"库内(?:船舶|船只|船)?",
+        r"先验库(?:中|里)?(?:的)?(?:船舶|船只|船)?",
         r"一个",
         r"一条",
         r"一艘",
@@ -190,7 +199,28 @@ def extract_description(question: str) -> str | None:
     # 纯数字/短舷号形态不当描述
     if re.fullmatch(r"[0-9A-Za-z-]{2,12}", cleaned):
         return None
+    # 问句残留词不当描述
+    if re.fullmatch(r"(?:船|船舶|船只|目标|对象|记录|结果|列表)+", cleaned):
+        return None
+    if any(token in cleaned for token in ("哪些", "有哪些", "在库", "未在库", "先验库")):
+        return None
     return cleaned
+
+
+def _is_registry_list_question(text: str) -> bool:
+    """「有哪些在库船出现 / 哪些库船在视频里」类列表问法。"""
+    t = str(text or "")
+    has_list_word = any(token in t for token in ("哪些", "有哪些", "哪几", "列出", "名单", "列表"))
+    has_registry = any(token in t for token in ("在库", "库内", "库船", "先验库", "名录"))
+    has_video = any(token in t for token in ("出现", "视频", "监控", "轨迹", "画面", "看到", "找到"))
+    # 仅问库列表（无视频）也算 registry list
+    if has_list_word and has_registry:
+        return True
+    if has_registry and has_video and not re.search(r"[舷弦]号", t) and not extract_hull_number(t):
+        # 「在库船出现了吗」更像 existence of relation，仍走 in-list 管线更合理
+        if any(token in t for token in ("哪些", "有哪些", "哪几", "列出")):
+            return True
+    return False
 
 
 def infer_intent_fields(question: str) -> dict[str, Any]:
@@ -203,8 +233,13 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
 
     existence_tokens = ("有没有", "是否", "有无", "出现", "存在", "看到", "找到")
     count_tokens = ("多少", "几艘", "数量", "几个", "计数")
+    registry_list_q = _is_registry_list_question(text)
+
     if any(token in text for token in count_tokens):
         operation = "count"
+    elif registry_list_q:
+        # 「有哪些在库船出现」是列表，不是对问句本身做 existence/matchText
+        operation = "list"
     elif any(token in text for token in existence_tokens):
         operation = "existence"
     else:
@@ -212,21 +247,23 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
 
     if "未在库" in text or "不在库" in text or "库外" in text:
         registry_relation = "out"
-    elif "在库" in text or "库内" in text or "先验库" in text:
+    elif "在库" in text or "库内" in text or "先验库" in text or "库船" in text:
         registry_relation = "in"
     else:
         registry_relation = "any"
 
     if hull:
         target_kind = "hull"
-    elif description:
+    elif description and not registry_list_q:
         target_kind = "description"
     else:
         target_kind = "all"
+        if registry_list_q:
+            description = None
 
-    if "先验库" in text and "轨迹" not in text and "视频" not in text and "监控" not in text:
+    if "先验库" in text and "轨迹" not in text and "视频" not in text and "监控" not in text and "出现" not in text:
         target_scope = "registry"
-    elif "先验库" in text or "在库" in text or "未在库" in text:
+    elif "先验库" in text or "在库" in text or "未在库" in text or "库船" in text or registry_list_q:
         target_scope = "both"
     else:
         target_scope = "track_memory"
@@ -250,7 +287,21 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
                 "description": description,
             }]
 
-    if target_kind == "hull" and hull:
+    if registry_list_q and registry_relation == "in" and not hull:
+        expected = "列出视频中出现且属于先验库的船舶（舷号/库项）"
+        criteria = (
+            "完成 listRegistry 取在库名录；getTrack 取视频轨迹；"
+            "优先 matchHull(轨迹舷号↔库)；库有参考图时 getFrames→matchImage(库图↔关键帧)；"
+            "汇总在库且出现的船舶列表。禁止把用户整句当 matchText 描述"
+        )
+        focus = (
+            "①listRegistry；②getTrack(全量，不带hull)；③getFrames；"
+            "④matchImage(query=registry.registryReferences, gallery=frames.keyframes)；"
+            "若轨迹已有 OCR 舷号可并行 matchHull"
+        )
+        question_type = "registry_in_list"
+        confidence = 0.85
+    elif target_kind == "hull" and hull:
         if operation == "existence":
             # 存在判断≠「0 轨迹即未出现」：OCR 未命中后仍应库对照 + 视觉匹配
             expected = (
@@ -271,14 +322,20 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
             expected = f"返回舷号 {hull} 相关轨迹/库证据"
             criteria = "轨迹或库项+关键证据足以回答"
             focus = f"getTrack(hullNumber={hull})，必要时 getRegistry/getFrames/matchImage/showEvidence"
+        question_type = f"{target_kind}_{operation}"
+        confidence = 0.72
     elif target_kind == "description" and description:
         expected = f"确认是否存在「{description}」" if operation == "existence" else f"返回与「{description}」匹配的轨迹"
         criteria = "完成轨迹检索与描述匹配（matchText），再下结论"
         focus = f"getTrack → getFrames → matchText(description={description})"
+        question_type = f"{target_kind}_{operation}"
+        confidence = 0.72
     else:
         expected = "返回相关轨迹"
         criteria = "工具结果足以回答用户问题"
         focus = "先 getTrack 筛选轨迹，再按需匹配"
+        question_type = f"{target_kind}_{operation}"
+        confidence = 0.35
 
     return {
         "targetScope": target_scope,
@@ -291,8 +348,8 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
         "expectedOutcome": expected,
         "successCriteria": criteria,
         "nextAgentFocus": focus,
-        "questionType": f"{target_kind}_{operation}",
-        "intentConfidence": 0.72 if (hull or description) else 0.35,
+        "questionType": question_type,
+        "intentConfidence": confidence if (hull or description or registry_list_q) else 0.35,
     }
 
 

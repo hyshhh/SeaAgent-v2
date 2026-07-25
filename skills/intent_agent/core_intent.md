@@ -22,8 +22,10 @@
 ## 验收与焦点（强制）
 - 舷号「有没有/是否出现」：`successCriteria` **禁止**写成「未检测到舷号=未出现」或「0 轨迹即可否定」。
 - `nextAgentFocus` 须写分阶段：`getTrack(hull)` → 0 轨迹 `getRegistry` → 有库图则 `getTrack(不带hull)→getFrames→matchImage`。
+- **「有哪些在库船出现」**：`operation=list`，`registryRelation=in`，`targetScope=both`，**不要**填 description；验收走 listRegistry + matchImage(库图↔关键帧)，**禁止** OCR 识别「用户问句」或 matchText(整句)。
 - 细则见始终启用的 `acceptance_fields` / `target_identity`。
 
 ## 禁止
 - 禁止只输出 JSON 正文而不调用 `handoff_to_plan`
 - 禁止编造绝对日期
+- 禁止把列表问法的「哪些/在库船」写成外观 `description`

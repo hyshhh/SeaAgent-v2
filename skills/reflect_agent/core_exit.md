@@ -21,8 +21,13 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
      - 匹配数 >0 → sufficient，说明视频中疑似命中；
      - 匹配数=0 且轨迹过滤也为 0 → sufficient，结论「库中有记录但视频未发现」。
    - 两个 shouldReplan 均为 false 且（已 visual 或库无可视资料）→ 才可 sufficient「未在视频中发现」。
-4. 先验库描述：listRegistry 后应看 matchText；仅 list 勿谎称已筛选。
-5. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`（always）。
+4. **在库船列表**（`isRegistryInList` / `shouldReplanRegistryList*`）：
+   - 未 listRegistry / 未 matchImage → **禁止 sufficient**；
+   - **matchText(用户问句/「哪些在库」)** 不算完成验收；
+   - 正确链：`listRegistry → getTrack → getFrames → matchImage`；
+   - 已 matchImage 后按匹配结果列在库且出现的船，可 sufficient。
+5. 先验库描述：listRegistry 后应看 matchText；仅 list 勿谎称已筛选。
+6. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`（always）。
 
 ## 输出
 ```json

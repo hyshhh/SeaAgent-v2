@@ -342,7 +342,7 @@ def build_sea_agent_graph(
             or str(intent.get("registryRelation") or "any") in {"in", "out"}
             or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
         )
-        # 视觉匹配：库参考图 ↔ 视频关键帧（舷号 OCR 未命中后的补洞）
+        # 视觉匹配：库参考图 ↔ 视频关键帧（舷号 OCR 未命中 / 在库列表）
         wants_visual_match = any(
             token in hint
             for token in (
@@ -350,6 +350,28 @@ def build_sea_agent_graph(
                 "registryreferences", "关键帧匹配", "库图", "对照视频",
             )
         ) or ("match" in hint and "image" in hint)
+        registry_relation = str(intent.get("registryRelation") or "any")
+        # 「有哪些在库船出现」：list + in + both/all，禁止当描述 matchText
+        wants_registry_in_list = (
+            registry_relation == "in"
+            and operation == "list"
+            and not hull
+            and (
+                target_scope in {"both", "registry"}
+                or str(intent.get("questionType") or "") == "registry_in_list"
+                or any(token in hint for token in ("listregistry", "在库", "哪些", "matchimage", "matchhull"))
+            )
+        )
+        # 伪描述：整句问法残留，不当 matchText description
+        bogus_description = bool(
+            description
+            and (
+                any(token in description for token in ("哪些", "在库", "先验库", "有哪些", "未在库"))
+                or description in {"船", "船舶", "船只", "目标"}
+            )
+        )
+        if bogus_description:
+            description = ""
 
         def _track_args(*, with_hull: bool) -> dict[str, Any]:
             args: dict[str, Any] = {"offset": 0, "limit": 60}
@@ -358,6 +380,26 @@ def build_sea_agent_graph(
             if with_hull and hull:
                 args["hullNumber"] = hull
             return args
+
+        def _match_image_from_list_registry() -> list[dict[str, Any]]:
+            return [
+                {"id": "registry", "tool": "listRegistry", "arguments": {}},
+                {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
+                {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+                {
+                    "id": "match",
+                    "tool": "matchImage",
+                    "arguments": {
+                        "queryImages": {"$ref": "registry.registryReferences"},
+                        "galleryImages": {"$ref": "frames.keyframes"},
+                        "topK": top,
+                    },
+                },
+            ]
+
+        # 在库船列表（视频中出现的库船）：listRegistry → getTrack → getFrames → matchImage
+        if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
+            return _match_image_from_list_registry()
 
         # 已有/待查先验库后做视觉匹配：不带舷号扫视频轨迹 → 关键帧 → matchImage
         if wants_visual_match and hull:
@@ -391,7 +433,7 @@ def build_sea_agent_graph(
                 },
             ]
 
-        if target_scope == "registry" or (wants_registry and "gettrack" not in hint and operation != "count" and not wants_visual_match):
+        if target_scope == "registry" or (wants_registry and "gettrack" not in hint and operation != "count" and not wants_visual_match and not wants_registry_in_list):
             if hull:
                 # 查库后仍可能需要视觉匹配；若 hint 只写查库则先 getRegistry
                 return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
@@ -411,6 +453,9 @@ def build_sea_agent_graph(
                         },
                     },
                 ]
+            # 无描述的在库关系：给完整对照链，避免只 list 库
+            if registry_relation in {"in", "out"}:
+                return _match_image_from_list_registry()
             return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
 
         # replan 明确要求查库（尚未要求视觉匹配）
@@ -420,6 +465,8 @@ def build_sea_agent_graph(
                     {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}},
                     {"id": "matchHull", "tool": "matchHull", "arguments": {"hullNumberArray": [hull]}},
                 ]
+            if registry_relation in {"in", "out"} or wants_registry_in_list:
+                return _match_image_from_list_registry()
             return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
 
         track_args = _track_args(with_hull=bool(hull))
@@ -452,6 +499,9 @@ def build_sea_agent_graph(
         if hull:
             calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
             return calls
+        # both + in 且无描述：默认在库对照视觉链
+        if wants_registry and registry_relation == "in":
+            return _match_image_from_list_registry()
         calls.append({"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}})
         return calls
 
@@ -874,6 +924,15 @@ def build_sea_agent_graph(
             intent["hullNumber"] = inferred_hull
         if not intent.get("description") and inferred.get("description"):
             intent["description"] = inferred["description"]
+        # 伪描述：把「哪些在库船」当 description → 清空，避免 matchText(问句)
+        desc_now = str(intent.get("description") or "").strip()
+        if desc_now and (
+            any(token in desc_now for token in ("哪些", "有哪些", "在库", "未在库", "先验库", "库船"))
+            or desc_now in {"船", "船舶", "船只", "目标", "对象"}
+            or str(inferred.get("questionType") or "") == "registry_in_list"
+        ):
+            if not inferred.get("description") or str(inferred.get("questionType") or "") == "registry_in_list":
+                intent["description"] = None
         if not intent.get("targetItems") and inferred.get("targetItems"):
             intent["targetItems"] = inferred["targetItems"]
         if intent.get("targetItems"):
@@ -882,6 +941,14 @@ def build_sea_agent_graph(
             "existence", "list", "time", "count", "explain",
         }:
             intent["operation"] = inferred.get("operation") or "list"
+        # 在库列表问法：强制 list + in + both（覆盖模型误判 existence/OCR）
+        if str(inferred.get("questionType") or "") == "registry_in_list":
+            intent["operation"] = "list"
+            intent["registryRelation"] = "in"
+            intent["targetScope"] = inferred.get("targetScope") or "both"
+            intent["targetKind"] = "all"
+            intent["description"] = None
+            intent["questionType"] = "registry_in_list"
         if not intent.get("targetKind") or intent.get("targetKind") == "all":
             if intent.get("hullNumber"):
                 intent["targetKind"] = "hull"
@@ -893,7 +960,7 @@ def build_sea_agent_graph(
             intent["targetScope"] = inferred.get("targetScope") or "track_memory"
         if not intent.get("registryRelation"):
             intent["registryRelation"] = inferred.get("registryRelation") or "any"
-        # 验收/焦点：残缺或过窄（仅 getTrack、把 0 轨迹当否定）时用规则覆盖
+        # 验收/焦点：残缺或过窄（仅 getTrack、把 0 轨迹当否定、OCR-only 在库列表）时用规则覆盖
         def _acceptance_too_narrow(value: Any) -> bool:
             text = str(value or "").strip()
             if not text:
@@ -913,6 +980,13 @@ def build_sea_agent_graph(
                 )
                 if mentions_track and not mentions_followup and len(text) < 80:
                     return True
+            # 在库列表却写成 OCR 舷号比对 / matchText 问句
+            if str(intent.get("registryRelation") or "") == "in" and str(intent.get("operation") or "") == "list":
+                ocr_only = ("ocr" in low or "识别舷号" in text) and "matchimage" not in low and "库图" not in text
+                matchtext_query = "matchtext" in low and any(t in text for t in ("哪些", "在库", "用户问题"))
+                no_visual = "listregistry" not in low and "matchimage" not in low and "库图" not in text
+                if ocr_only or matchtext_query or (no_visual and ("ocr" in low or "舷号" in text)):
+                    return True
             return False
 
         if _acceptance_too_narrow(intent.get("expectedOutcome")) and inferred.get("expectedOutcome"):
@@ -921,6 +995,11 @@ def build_sea_agent_graph(
             intent["successCriteria"] = inferred["successCriteria"]
         if _acceptance_too_narrow(intent.get("nextAgentFocus")) and inferred.get("nextAgentFocus"):
             intent["nextAgentFocus"] = inferred["nextAgentFocus"]
+        # registry_in_list 始终用规则验收覆盖模型 OCR 写法
+        if str(inferred.get("questionType") or "") == "registry_in_list":
+            for key in ("expectedOutcome", "successCriteria", "nextAgentFocus"):
+                if inferred.get(key):
+                    intent[key] = inferred[key]
         if not intent.get("questionType"):
             intent["questionType"] = inferred.get("questionType")
         if intent.get("intentConfidence") is None:
@@ -1447,10 +1526,35 @@ def build_sea_agent_graph(
             and op in {"existence", "list", "explain", "time", ""}
             and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both", ""})
         )
+        # 3) 「有哪些在库船出现」：已 list 库但未做 matchImage，应 replan 视觉对照
+        is_registry_in_list = (
+            registry_relation == "in"
+            and op == "list"
+            and not hull
+            and (
+                target_scope in {"both", "registry"}
+                or str(intent.get("questionType") or "") == "registry_in_list"
+            )
+        )
+        should_replan_registry_list_visual = (
+            loop_count < limit
+            and is_registry_in_list
+            and registry_checked
+            and can_try_visual
+            and not visual_attempted
+        )
+        # 4) 在库列表完全没查库
+        should_replan_registry_list = (
+            loop_count < limit
+            and is_registry_in_list
+            and not registry_checked
+        )
         pure_video_sufficient = (
             has_tool_evidence
             and not should_replan_registry
             and not should_replan_visual
+            and not should_replan_registry_list
+            and not should_replan_registry_list_visual
             and op == "existence"
             and registry_checked
             and (visual_attempted or not can_try_visual)
@@ -1479,7 +1583,9 @@ def build_sea_agent_graph(
                 "visualAttempted": visual_attempted,
                 "matchCount": match_count_total,
                 "shouldReplanRegistry": should_replan_registry,
-                "shouldReplanVisual": should_replan_visual,
+                "shouldReplanVisual": should_replan_visual or should_replan_registry_list_visual,
+                "shouldReplanRegistryList": should_replan_registry_list,
+                "isRegistryInList": is_registry_in_list,
                 "zeroTracks": zero_tracks,
                 "hullFilteredZero": hull_filtered_zero,
                 "toolChain": list(tool_names)[:20],
@@ -1489,10 +1595,13 @@ def build_sea_agent_graph(
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
                     "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
                     "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
+                    "isRegistryInList=true：问题是「哪些在库船出现」，禁止用 matchText(用户问句) 当证据",
+                    "shouldReplanRegistryList=true → replan：listRegistry→getTrack→getFrames→matchImage",
                     "禁止在 shouldReplan*=true 时 sufficient",
                     "visualAttempted=true 或 matchCount 已给出 → 勿再要求 matchImage",
                     "canTryVisual=false（无可搜库图）且已查库 → 可 sufficient「库有记录但无法视觉匹配/视频未发现」",
                     "全量 getTrack 有轨迹但 matchCount=0 且 hull 过滤为 0 → 结论仍是视频未确认该舷号，不是「确认出现」",
+                    "matchText 的 description 若是用户整句/含「哪些在库」→ 无效，须 replan 走 matchImage",
                     "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                 ],
@@ -1540,6 +1649,22 @@ def build_sea_agent_graph(
                     "galleryImages=$ref frames.keyframes)"
                 ),
                 "evidenceGap": "已有可搜库图但未做库图↔视频关键帧匹配",
+            }
+        elif should_replan_registry_list or should_replan_registry_list_visual:
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "在库船列表需 listRegistry + 库图↔视频关键帧 matchImage，禁止 matchText(用户问句)",
+                "nextAction": (
+                    "listRegistry → getTrack(不带hullNumber) → getFrames($ref trackIds) → "
+                    "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
+                ),
+                "evidenceGap": (
+                    "未列出先验库" if should_replan_registry_list
+                    else "已有库图但未做库图↔视频关键帧匹配（在库列表）"
+                ),
             }
         elif not handoff:
             if loop_count < limit and not has_tool_evidence:
@@ -1592,6 +1717,24 @@ def build_sea_agent_graph(
                     f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber) → getFrames → matchImage"
                 ),
                 "evidenceGap": "未做库图↔视频关键帧匹配",
+            }
+        elif (
+            str(handoff.get("state") or "") == "sufficient"
+            and is_registry_in_list
+            and not visual_attempted
+            and loop_count < limit
+        ):
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "在库船列表尚未完成库图↔视频匹配，matchText(问句) 不算充分",
+                "nextAction": (
+                    "listRegistry → getTrack(不带hullNumber) → getFrames → "
+                    "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
+                ),
+                "evidenceGap": "在库列表缺少 matchImage",
             }
         elif (
             str(handoff.get("state") or "") == "sufficient"
