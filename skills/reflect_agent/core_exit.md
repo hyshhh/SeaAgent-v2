@@ -13,10 +13,14 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
 ## 判定顺序
 1. 对照 expectedOutcome、successCriteria、observation 事实。
 2. 本轮无任何成功工具结果且历史为空 → 不得 sufficient。
-3. **舷号存在判断（重要）**：
-   - 若任务包 `shouldReplanRegistry=true` → **必须 replan**，`nextAction` 写 getRegistry/listRegistry/matchHull，**禁止**直接 sufficient。
-   - 视频 getTrack=0 且尚未查先验库、仍有余轮 → 默认 replan 补一轮库对照，再结束。
-   - 仅当已查库，或 `shouldReplanRegistry=false` 且纯视频问题 → 0 轨迹可 sufficient，结论写「未在视频中发现」。
+3. **舷号存在判断（分阶段）**：
+   - `shouldReplanRegistry=true` → **必须 replan**，nextAction=`getRegistry(hullNumber=…)`。
+   - `shouldReplanVisual=true` → **必须 replan**，nextAction 写完整视觉链：
+     `getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)`。
+   - 已查库且已 matchImage/matchText 后：
+     - 匹配数 >0 → sufficient，说明视频中疑似命中；
+     - 匹配数=0 且轨迹过滤也为 0 → sufficient，结论「库中有记录但视频未发现」。
+   - 两个 shouldReplan 均为 false 且纯视频 0 轨迹 → sufficient「未在视频中发现」。
 4. 先验库描述：listRegistry 后应看 matchText；仅 list 勿谎称已筛选。
 5. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`。
 
@@ -31,4 +35,4 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
 ```
 
 ## 多轮
-有明确缺口时优先 replan 一轮；不要空转。
+有明确缺口时优先 replan；视觉匹配完成后再结束，不要停在「只查了库」。

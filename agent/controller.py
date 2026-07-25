@@ -188,6 +188,25 @@ class AgentController:
                     },
                     display={"tracks": [], "includeClips": False, "includeRegistry": True},
                 )
+            # 舷号：库中有记录，但视频轨迹/视觉匹配未命中
+            if operation == "existence" and hull:
+                labels = "、".join(
+                    str(item.get("hullNumber") or item.get("registryId") or "")
+                    for item in registry_items[:3]
+                    if item.get("hullNumber") or item.get("registryId")
+                )
+                return self._finish(
+                    f"未在视频中发现「{hull}」" + (f"（先验库有：{labels}）" if labels else "（先验库有记录）"),
+                    [],
+                    answer_hint or f"getTrack 无轨迹；先验库命中 {len(registry_items)} 项，视觉匹配未给出视频轨迹",
+                    "sufficient" if state in {"sufficient", "uncertain"} else state,
+                    extra={
+                        "registryItems": registry_items,
+                        "planMode": "langgraph",
+                        "targetScope": "both",
+                    },
+                    display={"tracks": [], "includeClips": False, "includeRegistry": True},
+                )
             return self._finish(
                 f"先验库共 {len(registry_items)} 个库项" if not description else "已查询先验库",
                 [],

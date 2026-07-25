@@ -65,6 +65,8 @@ OBSERVE_RESPONSIBILITY = (
 )
 
 REFLECT_RESPONSIBILITY = (
-    "审计证据是否充分。视频 0 轨迹且尚未查先验库、仍有余轮时，应 replan 并指示 getRegistry/matchHull；"
+    "审计证据是否充分。"
+    "视频 0 轨迹且未查库 → replan getRegistry；"
+    "已查库有参考图但未 matchImage → replan 视觉匹配（getTrack不带hull→getFrames→matchImage）；"
     "state=replan 时 handoff_to_plan；sufficient/conflict/uncertain 时 handoff_finish。"
 )

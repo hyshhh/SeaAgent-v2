@@ -1318,6 +1318,7 @@ function appendThoughtEvent(event) {
     card.classList.toggle('failed', markFailed);
     let statusLabel = '完成';
     if (isPlanCard && event.planRepair) statusLabel = '已修正';
+    else if (isPlanCard && event.fallback && String(event.fallback).includes('补洞')) statusLabel = '补洞计划';
     else if (isPlanCard && event.fallback) statusLabel = '已用默认计划';
     else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
     else if (hasHardFail) statusLabel = '部分失败';

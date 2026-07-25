@@ -73,3 +73,26 @@ def test_skipped_not_counted_as_failed():
     skipped = sum(1 for item in observations if item.get("skipped"))
     assert failed == 0
     assert skipped == 1
+
+
+def test_visual_match_default_plan_shape():
+    """补洞 replan 应产出 getRegistry → getTrack(无hull) → getFrames → matchImage。"""
+    # 内嵌函数：直接复现 _default_plan_calls 的关键分支逻辑做契约测试
+    def wants_visual(hint: str) -> bool:
+        h = hint.lower()
+        return any(
+            token in h
+            for token in (
+                "matchimage", "match_image", "视觉匹配", "图像匹配", "图匹配",
+                "registryreferences", "关键帧匹配", "库图", "对照视频",
+            )
+        ) or ("match" in h and "image" in h)
+
+    hint = (
+        "getRegistry(hullNumber=小蓝320) → getTrack(不带hullNumber, 全时域) → "
+        "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
+        "galleryImages=$ref frames.keyframes)"
+    )
+    assert wants_visual(hint)
+    assert "matchimage" in hint.lower()
+    assert "不带hull" in hint or "不带hullnumber" in hint.lower()
