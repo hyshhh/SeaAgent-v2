@@ -149,10 +149,20 @@ class AgentController:
         )
 
         if matches:
-            supported = [m for m in matches if m.get("scoreBand") != "mismatch"]
+            # mismatch 丢弃；uncertain 仅作灰区候选，match 才算确认命中
+            ranked = sorted(
+                [m for m in matches if isinstance(m, dict)],
+                key=lambda m: float(m.get("embeddingScore") or m.get("score") or 0),
+                reverse=True,
+            )
+            confirmed = [m for m in ranked if str(m.get("scoreBand") or "") == "match"]
+            uncertain = [m for m in ranked if str(m.get("scoreBand") or "") == "uncertain"]
+            supported = confirmed or uncertain  # 展示优先确认，否则灰区
+            # 展示轨迹必须按匹配分排序，禁止用 getTrack 全量列表的 1,2,3 顺序盖住
+            hit_tracks = self._tracks_ranked_by_matches(supported, tracks)
             if supported and not (is_registry_in_list and bogus_description):
                 # 先验库描述匹配：展示命中库项，不把整库当结果
-                if target_scope == "registry" and not tracks:
+                if target_scope == "registry" and not hit_tracks:
                     matched_items = self._registry_items_from_matches(supported)
                     return self._finish(
                         f"找到 {len(matched_items) or len(supported)} 个匹配库项" if matched_items or supported else "找到匹配目标",
@@ -160,28 +170,36 @@ class AgentController:
                         answer_hint or f"描述「{description}」命中 {len(supported)} 条候选",
                         state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
                         extra={
-                            "matches": matches,
+                            "matches": ranked,
                             "registryItems": matched_items or registry_items,
                             "planMode": "langgraph",
                             "targetScope": "registry",
+                            "matchCount": len(supported),
+                            "confirmedMatchCount": len(confirmed),
                         },
                         display={"tracks": [], "includeClips": False, "includeRegistry": True},
                     )
                 # 在库列表 + matchImage 命中：按匹配轨迹/库项列名单
                 if is_registry_in_list:
-                    hit_tracks = tracks or self._tracks_from_matches(supported)
                     hit_items = self._registry_items_from_matches(supported)
+                    label = (
+                        f"视频中确认 {len(confirmed)} 个在库匹配"
+                        if confirmed
+                        else f"视频中疑似 {len(uncertain)} 个在库匹配（相似度未达确认阈值）"
+                    )
                     return self._finish(
-                        f"视频中出现 {len(supported)} 个在库匹配"
-                        + (f"（{len(hit_tracks)} 条轨迹）" if hit_tracks else ""),
+                        label + (f"（{len(hit_tracks)} 条轨迹）" if hit_tracks else ""),
                         hit_tracks[: self.display_limit],
                         answer_hint or "listRegistry + matchImage 对照完成",
                         state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
                         extra={
-                            "matches": matches,
+                            "matches": ranked,
                             "registryItems": hit_items or registry_items,
                             "planMode": "langgraph",
                             "targetScope": "both",
+                            "matchCount": len(supported),
+                            "confirmedMatchCount": len(confirmed),
+                            "found": bool(confirmed),
                         },
                         display={
                             "tracks": hit_tracks[: self.display_limit],
@@ -189,21 +207,42 @@ class AgentController:
                             "includeRegistry": True,
                         },
                     )
+                if confirmed:
+                    conclusion = "找到匹配目标"
+                    finish_state = state if state in {"sufficient", "uncertain", "conflict"} else "sufficient"
+                    hint = answer_hint or f"共 {len(confirmed)} 条确认匹配（scoreBand=match）"
+                else:
+                    conclusion = "仅有灰区匹配，未达确认阈值"
+                    finish_state = "uncertain" if operation == "existence" else state
+                    hint = answer_hint or f"共 {len(uncertain)} 条 uncertain，最高分未达 match 阈值"
                 return self._finish(
-                    "找到匹配目标",
-                    tracks or self._tracks_from_matches(supported),
-                    answer_hint or f"共 {len(supported)} 条候选",
-                    state,
-                    extra={"matches": matches, "planMode": "langgraph"},
-                    display={"tracks": tracks or self._tracks_from_matches(supported), "includeClips": True},
+                    conclusion,
+                    hit_tracks[: self.display_limit],
+                    hint,
+                    finish_state,
+                    extra={
+                        "matches": ranked,
+                        "planMode": "langgraph",
+                        "matchCount": len(supported),
+                        "confirmedMatchCount": len(confirmed),
+                        "found": bool(confirmed),
+                    },
+                    display={"tracks": hit_tracks[: self.display_limit], "includeClips": True},
                 )
             if is_registry_in_list:
                 return self._finish(
-                    "未在视频中发现在库船舶匹配" if not supported else "未找到可信在库匹配",
+                    "未在视频中发现在库船舶匹配",
                     [],
                     answer_hint or "库图与视频关键帧无有效匹配；若仅 matchText(问句) 则证据无效",
                     "sufficient" if state in {"sufficient", "uncertain"} else state,
-                    extra={"matches": matches, "registryItems": registry_items, "planMode": "langgraph", "targetScope": "both"},
+                    extra={
+                        "matches": ranked,
+                        "registryItems": registry_items,
+                        "planMode": "langgraph",
+                        "targetScope": "both",
+                        "matchCount": 0,
+                        "found": False,
+                    },
                     display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
                 )
             no_match_conclusion = "未找到匹配目标"
@@ -218,7 +257,13 @@ class AgentController:
                 [],
                 answer_hint or "匹配结果均为 mismatch 或空",
                 "sufficient" if operation == "existence" else state,
-                extra={"matches": matches, "registryItems": registry_items, "planMode": "langgraph"},
+                extra={
+                    "matches": ranked,
+                    "registryItems": registry_items,
+                    "planMode": "langgraph",
+                    "matchCount": 0,
+                    "found": False,
+                },
                 display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
             )
         if registry_items and not tracks:
@@ -333,7 +378,7 @@ class AgentController:
                 continue
             for track in value.get("tracks") or []:
                 if isinstance(track, dict) and track.get("trackId") is not None:
-                    collected[str(track["trackId"])] = track
+                    collected[str(track["trackId"])] = dict(track)
             for match in value.get("matches") or []:
                 if not isinstance(match, dict):
                     continue
@@ -343,11 +388,25 @@ class AgentController:
                     continue
                 item = dict(track) if track else {"trackId": track_id}
                 item.setdefault("trackId", track_id)
-                for key in ("embeddingScore", "scoreBand", "hullNumber"):
+                for key in ("embeddingScore", "scoreBand", "hullNumber", "matchedRegistryId"):
                     if match.get(key) is not None:
                         item[key] = match.get(key)
-                collected[str(track_id)] = {**collected.get(str(track_id), {}), **item}
-        return list(collected.values())
+                prev = collected.get(str(track_id), {})
+                # 同轨迹多匹配时保留更高分
+                if prev.get("embeddingScore") is not None and item.get("embeddingScore") is not None:
+                    if float(item["embeddingScore"]) < float(prev["embeddingScore"]):
+                        item = {**item, **{k: prev[k] for k in ("embeddingScore", "scoreBand") if k in prev}}
+                collected[str(track_id)] = {**prev, **item}
+        items = list(collected.values())
+        # 有相似度的排前面，避免展示固定成轨迹编号顺序
+        items.sort(
+            key=lambda t: (
+                0 if t.get("embeddingScore") is not None else 1,
+                -float(t.get("embeddingScore") or 0),
+                str(t.get("trackId") or ""),
+            )
+        )
+        return items
 
     def _collect_matches(self) -> list[dict[str, Any]]:
         matches: list[dict[str, Any]] = []
@@ -358,6 +417,53 @@ class AgentController:
                         matches.append(match)
         matches.sort(key=lambda item: float(item.get("embeddingScore") or item.get("score") or 0), reverse=True)
         return matches
+
+    def _tracks_ranked_by_matches(
+        self,
+        matches: list[dict[str, Any]],
+        all_tracks: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """只返回匹配命中的轨迹，按 embeddingScore 降序；用全量轨迹补全元数据。"""
+        by_id = {
+            str(t.get("trackId")): dict(t)
+            for t in (all_tracks or [])
+            if isinstance(t, dict) and t.get("trackId") is not None
+        }
+        # scope 里可能还有更完整的 track 记录
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            for track in value.get("tracks") or []:
+                if isinstance(track, dict) and track.get("trackId") is not None:
+                    tid = str(track["trackId"])
+                    by_id[tid] = {**by_id.get(tid, {}), **track}
+        ranked: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        ordered = sorted(
+            [m for m in matches if isinstance(m, dict)],
+            key=lambda m: float(m.get("embeddingScore") or m.get("score") or 0),
+            reverse=True,
+        )
+        for match in ordered:
+            track_id = match.get("matchedTrackId") or match.get("trackId")
+            if track_id is None:
+                continue
+            key = str(track_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            base = dict(by_id.get(key) or {"trackId": track_id})
+            base["trackId"] = track_id
+            if match.get("embeddingScore") is not None:
+                base["embeddingScore"] = match.get("embeddingScore")
+            if match.get("scoreBand") is not None:
+                base["scoreBand"] = match.get("scoreBand")
+            if match.get("matchedRegistryId") is not None:
+                base["matchedRegistryId"] = match.get("matchedRegistryId")
+            if match.get("hullNumber") is not None:
+                base.setdefault("hullNumber", match.get("hullNumber"))
+            ranked.append(base)
+        return ranked
 
     def _registry_items_from_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """从 matchText/matchImage 的库侧命中还原 registryItems，供前端只展示命中项。"""

@@ -324,3 +324,28 @@ def test_compact_args_prefers_registry_id_over_null():
     })
     assert compact["queryImages"] == ["r1"]
     assert compact["galleryImages"] == ["k1"]
+
+
+def test_tracks_ranked_by_matches_not_track_id_order():
+    """展示顺序必须按匹配分，不能固定成 getTrack 的 1/2/3。"""
+    from agent.controller import AgentController
+
+    ctrl = object.__new__(AgentController)
+    ctrl.working_scope = {
+        "tracks": {
+            "ok": True,
+            "tracks": [
+                {"trackId": "1", "startTime": 1},
+                {"trackId": "2", "startTime": 2},
+                {"trackId": "9", "startTime": 9},
+            ],
+        }
+    }
+    matches = [
+        {"matchedTrackId": "9", "embeddingScore": 0.91, "scoreBand": "match"},
+        {"matchedTrackId": "2", "embeddingScore": 0.80, "scoreBand": "match"},
+        {"matchedTrackId": "1", "embeddingScore": 0.55, "scoreBand": "uncertain"},
+    ]
+    ranked = AgentController._tracks_ranked_by_matches(ctrl, matches)
+    assert [str(t["trackId"]) for t in ranked] == ["9", "2", "1"]
+    assert ranked[0]["embeddingScore"] == 0.91

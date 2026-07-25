@@ -1429,6 +1429,8 @@ def build_sea_agent_graph(
             registry_checked = True
         visual_matched = bool(tool_names & {"matchImage", "matchText"})
         match_count_total = 0
+        confirmed_match_count = 0
+        uncertain_match_count = 0
         registry_searchable = False
         registry_found = False
         registry_has_items = False
@@ -1437,7 +1439,20 @@ def build_sea_agent_graph(
                 continue
             if isinstance(value.get("matches"), list):
                 visual_matched = True
-                match_count_total += len(value.get("matches") or [])
+                for m in value.get("matches") or []:
+                    if not isinstance(m, dict):
+                        continue
+                    match_count_total += 1
+                    band = str(m.get("scoreBand") or "")
+                    if band == "match":
+                        confirmed_match_count += 1
+                    elif band == "uncertain":
+                        uncertain_match_count += 1
+            # 优先使用工具返回的 confirmedMatches
+            if isinstance(value.get("confirmedMatches"), list):
+                confirmed_match_count = max(confirmed_match_count, len(value.get("confirmedMatches") or []))
+            if isinstance(value.get("uncertainMatches"), list):
+                uncertain_match_count = max(uncertain_match_count, len(value.get("uncertainMatches") or []))
             refs = value.get("registryReferences")
             items = value.get("registryItems")
             item_one = value.get("registryItem")
@@ -1582,6 +1597,8 @@ def build_sea_agent_graph(
                 "visualMatched": visual_matched,
                 "visualAttempted": visual_attempted,
                 "matchCount": match_count_total,
+                "confirmedMatchCount": confirmed_match_count,
+                "uncertainMatchCount": uncertain_match_count,
                 "shouldReplanRegistry": should_replan_registry,
                 "shouldReplanVisual": should_replan_visual or should_replan_registry_list_visual,
                 "shouldReplanRegistryList": should_replan_registry_list,
@@ -1602,6 +1619,8 @@ def build_sea_agent_graph(
                     "canTryVisual=false（无可搜库图）且已查库 → 可 sufficient「库有记录但无法视觉匹配/视频未发现」",
                     "全量 getTrack 有轨迹但 matchCount=0 且 hull 过滤为 0 → 结论仍是视频未确认该舷号，不是「确认出现」",
                     "matchText 的 description 若是用户整句/含「哪些在库」→ 无效，须 replan 走 matchImage",
+                    "仅 confirmedMatchCount>0 才可说「确认出现」；uncertainMatchCount 只能说疑似/灰区",
+                    "展示候选必须按 embeddingScore 排序，禁止固定轨迹 1/2/3",
                     "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                 ],

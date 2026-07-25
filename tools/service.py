@@ -395,7 +395,30 @@ class ToolService:
                 "matchedKeyframeIds": [item[1]["keyframeId"] for item in top],
             })
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
-        return {"ok": True, "matchMode": "text_to_image", "matches": matches[:topK] if topK else matches, "missingKeyframeIds": missing}
+        if topK:
+            matches = matches[: max(1, int(topK))]
+        confirmed = [m for m in matches if m.get("scoreBand") == "match"]
+        uncertain = [m for m in matches if m.get("scoreBand") == "uncertain"]
+        hint = None
+        if matches and not confirmed and uncertain:
+            hint = "最高分未达 text_match 确认阈值，仅灰区候选；勿将 uncertain 直接当作确认出现"
+        # 附带分差，便于发现“分数塌缩导致总是同一批轨迹”
+        if len(matches) >= 2:
+            matches[0]["rankGap"] = round(
+                float(matches[0]["embeddingScore"]) - float(matches[1]["embeddingScore"]), 6
+            )
+        elif matches:
+            matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]), 6)
+        return {
+            "ok": True,
+            "matchMode": "text_to_image",
+            "matches": matches,
+            "confirmedMatches": confirmed,
+            "uncertainMatches": uncertain,
+            "missingKeyframeIds": missing,
+            "scoredTrackCount": len(grouped),
+            "hint": hint,
+        }
 
     def matchImage(self, queryImages: list[dict[str, Any]] | dict[str, Any] | None = None, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
         queryImages = self._flatten_image_records(queryImages)
@@ -508,9 +531,22 @@ class ToolService:
                     "matchedRegistryReferenceIds": matched_references,
                 })
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
+        # 同一轨迹只保留最高分库项，避免 topK 被同一船的多 registry 占满
+        deduped: list[dict[str, Any]] = []
+        seen_tracks: set[str] = set()
+        for item in matches:
+            tid = str(item.get("matchedTrackId") or "")
+            if tid and tid in seen_tracks:
+                continue
+            if tid:
+                seen_tracks.add(tid)
+            deduped.append(item)
+        matches = deduped
         if topK:
-            # 全局 topK，不要按 owner 再截成空（旧逻辑在某些分组下会丢全部分数）
             matches = matches[: max(1, int(topK))]
+        confirmed = [m for m in matches if m.get("scoreBand") == "match"]
+        uncertain = [m for m in matches if m.get("scoreBand") == "uncertain"]
+        mismatch = [m for m in matches if m.get("scoreBand") == "mismatch"]
         hint = None
         if not matches:
             if missing_references and not reference_vectors:
@@ -523,12 +559,20 @@ class ToolService:
                     f"refVec={len(reference_vectors)} frameVec={len(frame_vectors)}"
                 )
             else:
-                hint = "完成比对但无超过阈值的配对"
+                hint = "完成比对但无有效配对"
+        elif not confirmed and uncertain:
+            hint = (
+                f"最高分未达 image_match 确认阈值，仅 {len(uncertain)} 条灰区；"
+                "勿将 uncertain 直接当作确认出现"
+            )
         return {
             "ok": True,
             "matchMode": "image_to_image",
             "queryType": "track" if query_is_track else "registry",
             "matches": matches,
+            "confirmedMatches": confirmed,
+            "uncertainMatches": uncertain,
+            "mismatchCount": len(mismatch),
             "missingKeyframeIds": missing_keyframes,
             "missingRegistryReferenceIds": missing_references,
             "recoveredKeyframeCount": recovered_frames,
