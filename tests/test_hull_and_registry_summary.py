@@ -18,6 +18,12 @@ def test_infer_hull_existence():
     assert fields["hullNumber"] == "小蓝320"
     assert fields["operation"] == "existence"
     assert fields["targetKind"] == "hull"
+    focus = str(fields.get("nextAgentFocus") or "")
+    criteria = str(fields.get("successCriteria") or "")
+    assert "getRegistry" in focus or "先验库" in focus
+    assert "matchImage" in focus or "matchImage" in criteria
+    assert "0 轨迹即可否定" not in criteria
+    assert "未检测到" not in criteria
 
 
 def test_registry_summary_prefers_items_over_references():
@@ -96,3 +102,29 @@ def test_visual_match_default_plan_shape():
     assert wants_visual(hint)
     assert "matchimage" in hint.lower()
     assert "不带hull" in hint or "不带hullnumber" in hint.lower()
+
+
+def test_should_replan_visual_when_registry_found_without_searchable_flag():
+    """库有 found/items 但 searchable 未标时，仍应触发视觉 replan（契约）。"""
+    registry_checked = True
+    registry_searchable = False
+    registry_found = True
+    registry_has_items = True
+    visual_matched = False
+    zero_tracks = True
+    hull = "小蓝320"
+    loop_count = 1
+    limit = 3
+    op = "existence"
+    can_try_visual = registry_searchable or registry_found or registry_has_items
+    should_replan_visual = (
+        loop_count < limit
+        and bool(hull)
+        and registry_checked
+        and can_try_visual
+        and not visual_matched
+        and op in {"existence", "list", "explain", "time", ""}
+        and zero_tracks
+    )
+    assert can_try_visual
+    assert should_replan_visual

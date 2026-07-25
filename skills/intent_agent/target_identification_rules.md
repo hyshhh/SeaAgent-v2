@@ -13,13 +13,13 @@
 4. “有几艘/多少/数量” → `operation=count`。
 5. “是否出现/有没有” → `operation=existence`。
 6. “什么时候/出现时间” → `operation=time`。
-7. 仅问「视频/画面中有没有」→ `targetScope=track_memory` 即可。
+7. 仅问「视频/画面中有没有」→ 初始 `targetScope=track_memory` 即可，但**验收仍须覆盖 0 轨迹后的库对照与视觉匹配**（系统会 replan）。
 8. 问「在不在库/库里有没有/对照名录」→ `targetScope=registry` 或 `both`。
 9. 多艘目标分别描述时，填 `targetItems` 数组，不要合并为一个描述。
 
-## nextAgentFocus 建议
-- 视频舷号存在：`getTrack(hullNumber=完整舷号)；0 轨迹即可否定视频出现`
-- 需要库对照：`先 getTrack，再 getRegistry/matchHull 对照先验库`
+## nextAgentFocus 建议（分阶段，勿只写一步）
+- 视频舷号存在：`①getTrack(hullNumber=完整舷号)；②0 轨迹→getRegistry；③库有参考图→getTrack(不带hull)→getFrames→matchImage`
+- 需要库对照：`先 getTrack，再 getRegistry/matchHull；有库图则 matchImage`
 - 描述：`getTrack → getFrames → matchText`
 - 先验库描述：`listRegistry → matchText`
 
@@ -29,5 +29,5 @@
 
 ## 验收字段
 - `expectedOutcome`：用户真正想得到什么
-- `successCriteria`：怎样算完成
+- `successCriteria`：怎样算完成（**禁止**「未检测到舷号=未出现」作为唯一条件）
 - `nextAgentFocus`：PlanAgent 应优先做什么

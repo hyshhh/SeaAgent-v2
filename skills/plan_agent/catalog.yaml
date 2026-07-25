@@ -11,34 +11,8 @@ skills:
     title: 工具链路与参数
     description: 允许工具、典型链路、参数与 $ref 要点
     file: tool_planning_rules.md
-    always: false
-    when: 需要设计工具调用链或参数
-    match_any:
-      - "getTrack"
-      - "getFrames"
-      - "matchText"
-      - "matchImage"
-      - "matchHull"
-      - "dedupTracks"
-      - "getRegistry"
-      - "listRegistry"
-      - "showEvidence"
-      - "verifyTarget"
-      - "getClip"
-      - "轨迹"
-      - "关键帧"
-      - "匹配"
-      - "去重"
-      - "在库"
-      - "描述"
-      - "舷号"
-      - "计数"
-    match_fields:
-      - planBlueprint
-      - allowedTools
-      - planValidationError
-      - previousInvalidPlan
-    tags: [tools]
+    always: true
+    tags: [tools, core]
 
   - id: recovery
     title: 失败修复与补洞

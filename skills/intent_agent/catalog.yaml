@@ -70,47 +70,12 @@ skills:
     title: 目标与操作类型
     description: targetScope/Kind/operation/registryRelation 判定
     file: target_identification_rules.md
-    always: false
-    when: 涉及舷号、外观描述、在库关系、计数/存在/时间类操作
-    match_any:
-      - "舷号"
-      - "在库"
-      - "未在库"
-      - "先验"
-      - "库船"
-      - "有没有"
-      - "是否"
-      - "几艘"
-      - "多少"
-      - "数量"
-      - "什么时候"
-      - "出现"
-      - "黄色"
-      - "白色"
-      - "无人艇"
-      - "快艇"
-      - "货船"
-      - "渔船"
-      - "描述"
-    match_fields:
-      - hullNumber
-      - description
-      - targetKind
-      - operation
-      - registryRelation
-      - targetScope
-    tags: [target, operation]
+    always: true
+    tags: [target, operation, core]
 
   - id: acceptance_fields
     title: 验收字段填写
-    description: expectedOutcome / successCriteria / nextAgentFocus
+    description: expectedOutcome / successCriteria / nextAgentFocus（含分阶段存在判断）
     file: acceptance_fields.md
-    always: false
-    when: 需要给 Plan/Reflect 明确验收与焦点时
-    match_any:
-      - "验收"
-      - "证明"
-      - "证据"
-      - "完整"
-      - "详细"
-    tags: [acceptance]
+    always: true
+    tags: [acceptance, core]

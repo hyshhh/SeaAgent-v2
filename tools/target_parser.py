@@ -251,16 +251,33 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
             }]
 
     if target_kind == "hull" and hull:
-        expected = f"确认舷号 {hull} 是否在视频中出现" if operation == "existence" else f"返回舷号 {hull} 相关结果"
         if operation == "existence":
-            focus = f"先 getTrack(hullNumber={hull}) 查视频；若 0 轨迹且仍有余轮，再 getRegistry/matchHull 对照先验库"
+            # 存在判断≠「0 轨迹即未出现」：OCR 未命中后仍应库对照 + 视觉匹配
+            expected = (
+                f"综合视频轨迹 OCR 与先验库参考图，确认舷号 {hull} 是否在视频中出现"
+            )
+            criteria = (
+                f"完成 getTrack(hullNumber={hull})；"
+                "若 0 轨迹须 getRegistry 查先验库；"
+                "库有可搜参考图时须 getTrack(不带hull)→getFrames→matchImage(库图↔关键帧)；"
+                "再给出出现/未出现结论，禁止仅凭单次 0 轨迹否定"
+            )
+            focus = (
+                f"①getTrack(hullNumber={hull})；"
+                f"②0 轨迹→getRegistry(hullNumber={hull})；"
+                "③库有参考图→getTrack(不带hullNumber)→getFrames→matchImage"
+            )
         else:
-            focus = f"getTrack(hullNumber={hull})，必要时 matchHull/getFrames/showEvidence"
+            expected = f"返回舷号 {hull} 相关轨迹/库证据"
+            criteria = "轨迹或库项+关键证据足以回答"
+            focus = f"getTrack(hullNumber={hull})，必要时 getRegistry/getFrames/matchImage/showEvidence"
     elif target_kind == "description" and description:
         expected = f"确认是否存在「{description}」" if operation == "existence" else f"返回与「{description}」匹配的轨迹"
+        criteria = "完成轨迹检索与描述匹配（matchText），再下结论"
         focus = f"getTrack → getFrames → matchText(description={description})"
     else:
         expected = "返回相关轨迹"
+        criteria = "工具结果足以回答用户问题"
         focus = "先 getTrack 筛选轨迹，再按需匹配"
 
     return {
@@ -272,7 +289,7 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
         "description": description,
         "targetItems": items,
         "expectedOutcome": expected,
-        "successCriteria": "工具结果足以回答用户问题",
+        "successCriteria": criteria,
         "nextAgentFocus": focus,
         "questionType": f"{target_kind}_{operation}",
         "intentConfidence": 0.72 if (hull or description) else 0.35,

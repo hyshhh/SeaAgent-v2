@@ -13,16 +13,16 @@ Controller 必须服从你的 `state`：`replan` 继续 Plan→Observe，其余�
 ## 判定顺序
 1. 对照 expectedOutcome、successCriteria、observation 事实。
 2. 本轮无任何成功工具结果且历史为空 → 不得 sufficient。
-3. **舷号存在判断（分阶段）**：
-   - `shouldReplanRegistry=true` → **必须 replan**，nextAction=`getRegistry(hullNumber=…)`。
-   - `shouldReplanVisual=true` → **必须 replan**，nextAction 写完整视觉链：
+3. **舷号存在判断（分阶段，硬优先级）**：
+   - 任务包 `shouldReplanRegistry=true` → **禁止 sufficient**，必须 replan，nextAction=`getRegistry(hullNumber=…)`。
+   - 任务包 `shouldReplanVisual=true`（含 `registryFound`/`canTryVisual`）→ **禁止 sufficient**，必须 replan，nextAction 写完整视觉链：
      `getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)`。
    - 已查库且已 matchImage/matchText 后：
      - 匹配数 >0 → sufficient，说明视频中疑似命中；
      - 匹配数=0 且轨迹过滤也为 0 → sufficient，结论「库中有记录但视频未发现」。
-   - 两个 shouldReplan 均为 false 且纯视频 0 轨迹 → sufficient「未在视频中发现」。
+   - 两个 shouldReplan 均为 false 且（已 visual 或库无可视资料）→ 才可 sufficient「未在视频中发现」。
 4. 先验库描述：listRegistry 后应看 matchText；仅 list 勿谎称已筛选。
-5. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`。
+5. 细则：`acceptance_audit` / `conflict_uncertain` / `replan_guidance`（always）。
 
 ## 输出
 ```json

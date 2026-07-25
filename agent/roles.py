@@ -30,12 +30,13 @@ def role_system_prompt(
         "- 回答与 reason 使用简体中文。\n"
     )
     if agent_key == "plan_agent":
-        catalog_hint = ""
+        # tool_chains 已 always 注入；仍保留可选 skill 目录，但不鼓励多轮 loadSkill
         work_style = (
             "## 工作方式\n"
-            "- 你只有 handoff 工具，不要尝试执行检索工具。\n"
-            "- 第一动作就调用 handoff_to_observe(goal, calls, planHint)。\n"
+            "- 你只有 handoff（及可选 loadSkill），不要执行检索工具。\n"
+            "- **第一动作**优先 handoff_to_observe(goal, calls, planHint)；勿空转。\n"
             "- calls 用 $ref 串联；简体中文写 goal/planHint。\n"
+            "- 可选 skill 仅在确实缺细则时 loadSkill 一次，然后立即 handoff。\n"
             "- 禁止只输出 JSON 正文而不调用工具。\n"
         )
     prompt = (

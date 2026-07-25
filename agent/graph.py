@@ -191,6 +191,7 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
         "lowThresholdShipCount",
         "shipSegmentId",
         "found",
+        "searchable",
         "decision",
         "hasMore",
         "error",
@@ -480,8 +481,9 @@ def build_sea_agent_graph(
         build_load_skill_tool("intent_agent", _skill_loader("intent_agent")),
         handoff_to_plan,
     ]
-    # Plan 不再暴露 loadSkill：core skill 已注入 system prompt，避免反复 load 触顶/超时
+    # Plan：core+tool_chains 已 always；保留 loadSkill 供可选 recovery/acceptance 自主补载（限 1 次）
     plan_tools = [
+        build_load_skill_tool("plan_agent", _skill_loader("plan_agent")),
         handoff_to_observe,
         handoff_to_reflect,
     ]
@@ -890,12 +892,34 @@ def build_sea_agent_graph(
             intent["targetScope"] = inferred.get("targetScope") or "track_memory"
         if not intent.get("registryRelation"):
             intent["registryRelation"] = inferred.get("registryRelation") or "any"
-        if not intent.get("expectedOutcome"):
-            intent["expectedOutcome"] = inferred.get("expectedOutcome")
-        if not intent.get("successCriteria"):
-            intent["successCriteria"] = inferred.get("successCriteria") or "工具结果足以回答用户问题"
-        if not intent.get("nextAgentFocus"):
-            intent["nextAgentFocus"] = inferred.get("nextAgentFocus")
+        # 验收/焦点：残缺或过窄（仅 getTrack、把 0 轨迹当否定）时用规则覆盖
+        def _acceptance_too_narrow(value: Any) -> bool:
+            text = str(value or "").strip()
+            if not text:
+                return True
+            low = text.lower()
+            bad_tokens = (
+                "0 轨迹即可否定", "0轨迹即可否定", "未检测到=未出现", "未检测到即未出现",
+                "仅 gettrack", "仅gettrack", "只 gettrack", "只gettrack",
+            )
+            if any(t in low for t in bad_tokens):
+                return True
+            # 舷号存在判断却只提 getTrack、不提库/视觉
+            if intent.get("hullNumber") and str(intent.get("operation") or "") == "existence":
+                mentions_track = "gettrack" in low or "轨迹" in text
+                mentions_followup = any(
+                    t in low for t in ("getregistry", "matchimage", "先验库", "视觉", "库图", "关键帧匹配")
+                )
+                if mentions_track and not mentions_followup and len(text) < 80:
+                    return True
+            return False
+
+        if _acceptance_too_narrow(intent.get("expectedOutcome")) and inferred.get("expectedOutcome"):
+            intent["expectedOutcome"] = inferred["expectedOutcome"]
+        if _acceptance_too_narrow(intent.get("successCriteria")) and inferred.get("successCriteria"):
+            intent["successCriteria"] = inferred["successCriteria"]
+        if _acceptance_too_narrow(intent.get("nextAgentFocus")) and inferred.get("nextAgentFocus"):
+            intent["nextAgentFocus"] = inferred["nextAgentFocus"]
         if not intent.get("questionType"):
             intent["questionType"] = inferred.get("questionType")
         if intent.get("intentConfidence") is None:
@@ -945,8 +969,13 @@ def build_sea_agent_graph(
             or reflection.get("reason")
             or ""
         )
-        # 再规划轮：Reflect 已给出 nextAction 时走确定性 calls，避免模型再触顶/超时
-        use_deterministic_replan = bool(loop_count > 0 and replan_hint)
+        # 硬兜底 replan：Reflect 已写清补洞链时走确定性 calls（安全网）
+        # 其它轮次尽量让 Plan 模型自主规划；模型失败/空 calls 再兜底
+        hard_replan = bool(reflection.get("hardReplan")) or any(
+            token in replan_hint.lower()
+            for token in ("matchimage", "视觉匹配", "不带hull", "registryreferences")
+        )
+        use_deterministic_replan = bool(loop_count > 0 and replan_hint and hard_replan)
         used_default_plan = False
         out: dict[str, Any] = {
             "handoff": None,
@@ -970,7 +999,7 @@ def build_sea_agent_graph(
                 "goal": replan_hint,
                 "calls": plan_calls,
                 "planHint": plan_hint,
-                "reason": "按 Reflect nextAction 确定性规划",
+                "reason": "按 Reflect 硬兜底 nextAction 确定性规划",
             }
             target = "observe"
             _emit(
@@ -994,7 +1023,7 @@ def build_sea_agent_graph(
                 "modelSummary": {
                     "summary": plan_hint,
                     "goal": replan_hint,
-                    "reason": "Reflect 已给出 nextAction，跳过模型规划以避免超时",
+                    "reason": "硬兜底补洞链，确定性规划",
                 },
                 "thinking": "",
             }
@@ -1018,7 +1047,7 @@ def build_sea_agent_graph(
                     "round": round_number,
                     "maxRounds": state.get("max_rounds") or max_rounds,
                     "queryTopK": state.get("query_top_k") or default_top_k,
-                    "replanHint": replan_hint,
+                    "replanHint": replan_hint or None,
                     "workingScopeKeys": list((state.get("working_scope") or {}).keys())[:24],
                     "availableTools": [
                         "getTrack", "getFrames", "getClip", "getRegistry", "listRegistry",
@@ -1026,11 +1055,11 @@ def build_sea_agent_graph(
                     ],
                     "rules": [
                         "calls 至少 1 步；arguments 跨步骤用 {\"$ref\":\"{callId}.{field}\"}",
-                        "视频舷号：getTrack(hullNumber) → getFrames($ref trackIds)；不要硬塞 matchText",
+                        "视频舷号：getTrack(hullNumber)；0 轨迹后由 Reflect 引导查库/视觉，勿一次塞满",
                         "描述：getTrack → getFrames → matchText(galleryImages=$ref frames.keyframes)",
                         "先验库舷号：getRegistry(hullNumber)",
-                        "舷号 OCR 未命中后视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
-                        "先验库描述：listRegistry → matchText(galleryImages=$ref registry.registryReferences)",
+                        "视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
+                        "有 replanHint 时优先落实其中点名的工具链",
                         "无法规划时才 handoff_to_reflect",
                     ],
                 },
@@ -1046,7 +1075,7 @@ def build_sea_agent_graph(
                 user,
                 role="planner",
                 round_number=round_number,
-                recursion_limit=6,
+                recursion_limit=8,
             )
             handoff = out.get("handoff") or {}
             target = str(handoff.get("handoff") or "observe")
@@ -1321,17 +1350,52 @@ def build_sea_agent_graph(
         visual_matched = bool(tool_names & {"matchImage", "matchText"})
         match_count_total = 0
         registry_searchable = False
+        registry_found = False
+        registry_has_items = False
         for key, value in scope.items():
             if not isinstance(value, dict) or value.get("ok") is False:
                 continue
             if isinstance(value.get("matches"), list):
                 visual_matched = True
                 match_count_total += len(value.get("matches") or [])
-            if value.get("searchable") is True or (
-                isinstance(value.get("registryReferences"), list) and value.get("registryReferences")
-            ):
+            refs = value.get("registryReferences")
+            items = value.get("registryItems")
+            item_one = value.get("registryItem")
+            if value.get("searchable") is True or (isinstance(refs, list) and refs):
                 registry_searchable = True
                 registry_checked = True
+            if value.get("found") is True or item_one is not None or (isinstance(items, list) and items):
+                registry_found = True
+                registry_has_items = True
+                registry_checked = True
+            # 有库项但 searchable 未标/参考图嵌在 items.references 时仍视为可尝试视觉
+            if isinstance(items, list):
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    nested = it.get("references") or it.get("registryReferences") or []
+                    if nested:
+                        registry_searchable = True
+            if isinstance(item_one, dict):
+                nested = item_one.get("references") or item_one.get("registryReferences") or []
+                if nested:
+                    registry_searchable = True
+        # 历史 tool_records 摘要：found/searchable（working_scope 字段名不一致时的兜底）
+        for r in state.get("tool_records") or []:
+            if not isinstance(r, dict) or r.get("tool") not in {"getRegistry", "listRegistry"}:
+                continue
+            res = r.get("result") if isinstance(r.get("result"), dict) else {}
+            summary = r.get("summary") if isinstance(r.get("summary"), dict) else {}
+            if res.get("found") is True or summary.get("found") is True:
+                registry_found = True
+                registry_checked = True
+            if res.get("searchable") is True or summary.get("searchable") is True:
+                registry_searchable = True
+            if (res.get("registryReferenceCount") or summary.get("registryReferenceCount") or 0) > 0:
+                registry_searchable = True
+            if (res.get("registryItemCount") or summary.get("registryItemCount") or 0) > 0:
+                registry_has_items = True
+                registry_found = True
         zero_tracks = bool(track_counts) and max(track_counts) == 0
         # 带舷号过滤轨迹为 0，但可能仍有未标舷号的视频目标 → 需要放开 hull 再扫 + matchImage
         hull_filtered_zero = zero_tracks and any(
@@ -1348,36 +1412,36 @@ def build_sea_agent_graph(
             str(intent.get(k) or "")
             for k in ("nextAgentFocus", "expectedOutcome", "successCriteria")
         )
-        question_wants_registry = any(
-            token in question for token in ("先验库", "在库", "未在库", "库里", "名录")
-        ) or any(token in focus_blob for token in ("先验库", "在库", "未在库", "getRegistry", "listRegistry", "matchHull"))
-        scope_wants_registry = target_scope in {"registry", "both"} or registry_relation in {"in", "out"}
-        # 1) 未查库 → 先查库
+        op = str(intent.get("operation") or "")
+        # 1) 未查库 → 先查库（舷号存在/列表类，视频 0 轨迹）
         should_replan_registry = (
             loop_count < limit
             and bool(hull)
             and zero_tracks
             and not registry_checked
+            and op in {"existence", "list", "explain", "time", ""}
         )
-        # 2) 已查库且有可搜参考图，但还没做库图↔视频关键帧匹配 → 再 replan 视觉匹配
+        # 2) 已查库且库有命中（有参考图或至少有库项），但还没 matchImage → 视觉补洞
+        #    注意：searchable=false 时仍尝试 matchImage（工具侧可弱匹配/或返回空匹配）
+        can_try_visual = registry_searchable or registry_found or registry_has_items
         should_replan_visual = (
             loop_count < limit
             and bool(hull)
             and registry_checked
-            and registry_searchable
+            and can_try_visual
             and not visual_matched
-            and str(intent.get("operation") or "") in {"existence", "list", "explain", "time"}
-            and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both"})
+            and op in {"existence", "list", "explain", "time", ""}
+            and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both", ""})
         )
+        # 仅当已完成应做的库/视觉步骤后，才允许「纯视频 0 轨迹」结束
         pure_video_sufficient = (
             zero_tracks
             and has_tool_evidence
             and not should_replan_registry
             and not should_replan_visual
-            and str(intent.get("operation") or "") == "existence"
-            and target_scope == "track_memory"
-            and not scope_wants_registry
-            and not question_wants_registry
+            and op == "existence"
+            and registry_checked
+            and (visual_matched or not can_try_visual)
         )
         user = json.dumps(
             {
@@ -1396,6 +1460,9 @@ def build_sea_agent_graph(
                 "zeroTracks": zero_tracks,
                 "registryChecked": registry_checked,
                 "registrySearchable": registry_searchable,
+                "registryFound": registry_found,
+                "registryHasItems": registry_has_items,
+                "canTryVisual": can_try_visual,
                 "visualMatched": visual_matched,
                 "matchCount": match_count_total,
                 "shouldReplanRegistry": should_replan_registry,
@@ -1405,10 +1472,11 @@ def build_sea_agent_graph(
                 "maxRounds": limit,
                 "notes": [
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
-                    "shouldReplanRegistry=true → handoff_to_plan_replan，nextAction 写 getRegistry",
-                    "shouldReplanVisual=true → handoff_to_plan_replan，nextAction 写 getRegistry→getTrack(不带hull)→getFrames→matchImage",
-                    "已查库且已 matchImage/matchText 后：0 匹配可 sufficient（视频未发现）或按分数解释",
-                    "纯视频存在判断且 zeroTracks 且两个 shouldReplan 均为 false → 可 sufficient",
+                    "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
+                    "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
+                    "禁止在 shouldReplan*=true 时 sufficient",
+                    "已查库且已 matchImage/matchText 后：0 匹配可 sufficient（视频未发现）",
+                    "仅当两个 shouldReplan 均为 false 且（已 visual 或库无可视资料）→ 可 sufficient",
                     "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                 ],
@@ -1432,36 +1500,37 @@ def build_sea_agent_graph(
             recursion_limit=6,
         )
         handoff = out.get("handoff") or {}
-        # 模型未 handoff / 误判 sufficient 时的硬兜底
+        # 硬兜底：模型误判 sufficient / 漏写 nextAction 时强制 replan（始终覆盖）
         if should_replan_registry:
-            if not handoff or handoff.get("handoff") == "finish" or str(handoff.get("state") or "") == "sufficient":
-                handoff = {
-                    "handoff": "plan",
-                    "replan": True,
-                    "state": "replan",
-                    "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
-                    "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
-                    "evidenceGap": "未查询先验库",
-                }
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
+                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
+                "evidenceGap": "未查询先验库",
+            }
         elif should_replan_visual:
-            if not handoff or handoff.get("handoff") == "finish" or str(handoff.get("state") or "") in {"sufficient", "uncertain"}:
-                handoff = {
-                    "handoff": "plan",
-                    "replan": True,
-                    "state": "replan",
-                    "reason": "先验库已命中，需用库参考图对视频关键帧做 matchImage 视觉匹配",
-                    "nextAction": (
-                        f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
-                        "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
-                        "galleryImages=$ref frames.keyframes)"
-                    ),
-                    "evidenceGap": "已有库项但未做库图↔视频关键帧匹配",
-                }
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "先验库已命中，需用库参考图对视频关键帧做 matchImage 视觉匹配",
+                "nextAction": (
+                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
+                    "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
+                    "galleryImages=$ref frames.keyframes)"
+                ),
+                "evidenceGap": "已有库项但未做库图↔视频关键帧匹配",
+            }
         elif not handoff:
             if loop_count < limit and not has_tool_evidence:
                 handoff = {
                     "handoff": "plan",
                     "replan": True,
+                    "hardReplan": False,
                     "reason": "本轮未获得可用工具证据",
                     "nextAction": "补充 getTrack/getFrames 或匹配工具",
                     "evidenceGap": "working_scope 为空",
@@ -1487,6 +1556,24 @@ def build_sea_agent_graph(
                     "reason": "无工具证据且无法继续",
                     "answerHint": state.get("observation_summary") or "",
                 }
+        elif (
+            str(handoff.get("state") or "") == "sufficient"
+            and zero_tracks
+            and bool(hull)
+            and not visual_matched
+            and not registry_checked
+            and loop_count < limit
+        ):
+            # 模型在未查库时宣称充分 → 纠偏
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "视频 0 轨迹且未查库，不能直接判定未出现",
+                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库",
+                "evidenceGap": "未查询先验库",
+            }
 
         round_item = {
             "round": loop_count,

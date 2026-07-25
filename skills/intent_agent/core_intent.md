@@ -19,6 +19,11 @@
 ## intent 字段
 `targetScope` / `targetKind` / `operation` / `registryRelation` / `hullNumber` / `description` / `timeRange` / `timeExpression` / `targetItems` / `expectedOutcome` / `successCriteria` / `nextAgentFocus` / `questionType`
 
+## 验收与焦点（强制）
+- 舷号「有没有/是否出现」：`successCriteria` **禁止**写成「未检测到舷号=未出现」或「0 轨迹即可否定」。
+- `nextAgentFocus` 须写分阶段：`getTrack(hull)` → 0 轨迹 `getRegistry` → 有库图则 `getTrack(不带hull)→getFrames→matchImage`。
+- 细则见始终启用的 `acceptance_fields` / `target_identity`。
+
 ## 禁止
 - 禁止只输出 JSON 正文而不调用 `handoff_to_plan`
 - 禁止编造绝对日期
