@@ -369,7 +369,11 @@ def build_sea_agent_graph(
                     "id": "match",
                     "tool": "matchImage",
                     "arguments": {
-                        "queryImages": {"$ref": "registry.registryReferences"},
+                        # 优先可搜参考图；空时执行器会从 registryItems.references 再补
+                        "queryImages": {
+                            "$ref": "registry.registryReferences",
+                            "$default": {"$ref": "registry.registryItems"},
+                        },
                         "galleryImages": {"$ref": "frames.keyframes"},
                         "topK": top,
                     },
@@ -1421,27 +1425,39 @@ def build_sea_agent_graph(
             and not registry_checked
             and op in {"existence", "list", "explain", "time", ""}
         )
-        # 2) 已查库且库有命中（有参考图或至少有库项），但还没 matchImage → 视觉补洞
-        #    注意：searchable=false 时仍尝试 matchImage（工具侧可弱匹配/或返回空匹配）
-        can_try_visual = registry_searchable or registry_found or registry_has_items
+        # 2) 已查库且**有可搜参考图**，但还没 matchImage → 视觉补洞
+        #    无向量参考图时无法 matchImage，不应无限 replan
+        visual_attempted = visual_matched or any(
+            isinstance(r, dict)
+            and r.get("tool") in {"matchImage", "matchText"}
+            for r in (state.get("tool_records") or [])
+        )
+        # 从 tool_records 再确认 match 是否已尝试（含 skip / 空 matches）
+        for r in state.get("tool_records") or []:
+            if not isinstance(r, dict):
+                continue
+            if r.get("tool") in {"matchImage", "matchText"}:
+                visual_attempted = True
+                res = r.get("result") if isinstance(r.get("result"), dict) else {}
+                if isinstance(res.get("matches"), list) or res.get("visualAttempted"):
+                    visual_matched = True
+        can_try_visual = bool(registry_searchable)
         should_replan_visual = (
             loop_count < limit
             and bool(hull)
             and registry_checked
             and can_try_visual
-            and not visual_matched
+            and not visual_attempted
             and op in {"existence", "list", "explain", "time", ""}
             and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both", ""})
         )
-        # 仅当已完成应做的库/视觉步骤后，才允许「纯视频 0 轨迹」结束
         pure_video_sufficient = (
-            zero_tracks
-            and has_tool_evidence
+            has_tool_evidence
             and not should_replan_registry
             and not should_replan_visual
             and op == "existence"
             and registry_checked
-            and (visual_matched or not can_try_visual)
+            and (visual_attempted or not can_try_visual)
         )
         user = json.dumps(
             {
@@ -1464,9 +1480,12 @@ def build_sea_agent_graph(
                 "registryHasItems": registry_has_items,
                 "canTryVisual": can_try_visual,
                 "visualMatched": visual_matched,
+                "visualAttempted": visual_attempted,
                 "matchCount": match_count_total,
                 "shouldReplanRegistry": should_replan_registry,
                 "shouldReplanVisual": should_replan_visual,
+                "zeroTracks": zero_tracks,
+                "hullFilteredZero": hull_filtered_zero,
                 "toolChain": list(tool_names)[:20],
                 "loop": loop_count,
                 "maxRounds": limit,
@@ -1475,8 +1494,9 @@ def build_sea_agent_graph(
                     "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
                     "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
                     "禁止在 shouldReplan*=true 时 sufficient",
-                    "已查库且已 matchImage/matchText 后：0 匹配可 sufficient（视频未发现）",
-                    "仅当两个 shouldReplan 均为 false 且（已 visual 或库无可视资料）→ 可 sufficient",
+                    "visualAttempted=true 或 matchCount 已给出 → 勿再要求 matchImage",
+                    "canTryVisual=false（无可搜库图）且已查库 → 可 sufficient「库有记录但无法视觉匹配/视频未发现」",
+                    "全量 getTrack 有轨迹但 matchCount=0 且 hull 过滤为 0 → 结论仍是视频未确认该舷号，不是「确认出现」",
                     "无任何工具执行痕迹时禁止 sufficient",
                     "接近 maxRounds 仍不足 → uncertain",
                 ],
@@ -1517,13 +1537,13 @@ def build_sea_agent_graph(
                 "replan": True,
                 "hardReplan": True,
                 "state": "replan",
-                "reason": "先验库已命中，需用库参考图对视频关键帧做 matchImage 视觉匹配",
+                "reason": "先验库已命中且有可搜参考图，需 matchImage 对照视频关键帧",
                 "nextAction": (
                     f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
                     "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
                     "galleryImages=$ref frames.keyframes)"
                 ),
-                "evidenceGap": "已有库项但未做库图↔视频关键帧匹配",
+                "evidenceGap": "已有可搜库图但未做库图↔视频关键帧匹配",
             }
         elif not handoff:
             if loop_count < limit and not has_tool_evidence:
@@ -1536,13 +1556,14 @@ def build_sea_agent_graph(
                     "evidenceGap": "working_scope 为空",
                 }
             elif pure_video_sufficient or has_tool_evidence:
-                reason = (
-                    f"getTrack 返回 0 条轨迹，视频中未发现{hull or '目标'}"
-                    if pure_video_sufficient
-                    else "已有工具证据，模型未显式 handoff，按充分结束"
-                )
-                if visual_matched and match_count_total == 0 and zero_tracks:
+                if visual_attempted and match_count_total == 0 and (zero_tracks or hull_filtered_zero):
                     reason = f"先验库有记录，但库图与视频关键帧无匹配，视频中未发现{hull or '目标'}"
+                elif registry_checked and not can_try_visual and (zero_tracks or hull_filtered_zero):
+                    reason = f"先验库有记录但无可搜参考图，无法视觉匹配；视频 OCR 未检出{hull or '目标'}"
+                elif pure_video_sufficient and (zero_tracks or hull_filtered_zero):
+                    reason = f"getTrack 返回 0 条舷号命中，视频中未发现{hull or '目标'}"
+                else:
+                    reason = "已有工具证据，模型未显式 handoff，按充分结束"
                 handoff = {
                     "handoff": "finish",
                     "state": "sufficient",
@@ -1558,13 +1579,31 @@ def build_sea_agent_graph(
                 }
         elif (
             str(handoff.get("state") or "") == "sufficient"
+            and bool(hull)
+            and not visual_attempted
+            and can_try_visual
+            and loop_count < limit
+            and (zero_tracks or hull_filtered_zero)
+        ):
+            # 模型在未视觉匹配时宣称充分 → 纠偏
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "reason": "库有可搜参考图但尚未 matchImage，不能直接结束",
+                "nextAction": (
+                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber) → getFrames → matchImage"
+                ),
+                "evidenceGap": "未做库图↔视频关键帧匹配",
+            }
+        elif (
+            str(handoff.get("state") or "") == "sufficient"
             and zero_tracks
             and bool(hull)
-            and not visual_matched
             and not registry_checked
             and loop_count < limit
         ):
-            # 模型在未查库时宣称充分 → 纠偏
             handoff = {
                 "handoff": "plan",
                 "replan": True,

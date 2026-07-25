@@ -105,26 +105,138 @@ def test_visual_match_default_plan_shape():
 
 
 def test_should_replan_visual_when_registry_found_without_searchable_flag():
-    """库有 found/items 但 searchable 未标时，仍应触发视觉 replan（契约）。"""
+    """无可搜参考图时不应无限视觉 replan；有 searchable 且未尝试 match 才 replan。"""
     registry_checked = True
     registry_searchable = False
-    registry_found = True
-    registry_has_items = True
-    visual_matched = False
+    visual_attempted = False
     zero_tracks = True
     hull = "小蓝320"
     loop_count = 1
     limit = 3
     op = "existence"
-    can_try_visual = registry_searchable or registry_found or registry_has_items
+    can_try_visual = bool(registry_searchable)
     should_replan_visual = (
         loop_count < limit
         and bool(hull)
         and registry_checked
         and can_try_visual
-        and not visual_matched
+        and not visual_attempted
         and op in {"existence", "list", "explain", "time", ""}
         and zero_tracks
     )
-    assert can_try_visual
-    assert should_replan_visual
+    assert not can_try_visual
+    assert not should_replan_visual
+
+    # 有可搜图且未尝试 → 应 replan
+    can_try_visual2 = True
+    should_replan_visual2 = (
+        loop_count < limit
+        and bool(hull)
+        and registry_checked
+        and can_try_visual2
+        and not visual_attempted
+        and zero_tracks
+    )
+    assert should_replan_visual2
+
+    # 已尝试 matchImage → 不再 replan
+    visual_attempted3 = True
+    should_replan_visual3 = can_try_visual2 and not visual_attempted3
+    assert not should_replan_visual3
+
+
+def test_match_image_missing_args_records_attempt():
+    """matchImage 缺图时不应裸 skip，应记入 matches=[] 供 Reflect 停止。"""
+    class _FakeTools:
+        @staticmethod
+        def execute(name, arguments):
+            return {"ok": True, "matches": [{"embeddingScore": 0.9}]}
+
+    executor = PlanExecutor(tools=_FakeTools())
+    # 无 registry 结果，query/gallery 均为空
+    executed = executor.execute(
+        [
+            {
+                "id": "match",
+                "tool": "matchImage",
+                "arguments": {
+                    "queryImages": [],
+                    "galleryImages": [],
+                    "topK": 3,
+                },
+            }
+        ],
+        scope={},
+    )
+    records = executed["tool_records"]
+    assert len(records) == 1
+    assert records[0]["tool"] == "matchImage"
+    assert records[0]["skipped"] is False
+    assert records[0]["result"].get("matches") == []
+    assert records[0]["result"].get("visualAttempted") is True
+
+
+def test_match_image_default_from_registry_items():
+    """registryReferences 空时可用 registryItems.references 补齐。"""
+    class _FakeTools:
+        @staticmethod
+        def execute(name, arguments):
+            assert name == "matchImage"
+            assert arguments.get("queryImages")
+            assert arguments.get("galleryImages")
+            return {"ok": True, "matches": [{"matchedTrackId": "1", "embeddingScore": 0.8, "scoreBand": "match"}]}
+
+    executor = PlanExecutor(tools=_FakeTools())
+    scope = {
+        "registry": {
+            "ok": True,
+            "found": True,
+            "searchable": False,
+            "registryReferences": [],
+            "registryItems": [
+                {
+                    "registryId": "r1",
+                    "hullNumber": "小蓝320",
+                    "references": [
+                        {
+                            "referenceId": "ref1",
+                            "registryId": "r1",
+                            "registryVectorId": 1,
+                            "isEmbedded": True,
+                        }
+                    ],
+                }
+            ],
+        },
+        "frames": {
+            "ok": True,
+            "keyframes": [
+                {
+                    "keyframeId": "k1",
+                    "trackId": "1",
+                    "keyframeVectorId": 2,
+                    "isEmbedded": True,
+                }
+            ],
+        },
+    }
+    executed = executor.execute(
+        [
+            {
+                "id": "match",
+                "tool": "matchImage",
+                "arguments": {
+                    "queryImages": {
+                        "$ref": "registry.registryReferences",
+                        "$default": {"$ref": "registry.registryItems"},
+                    },
+                    "galleryImages": {"$ref": "frames.keyframes"},
+                    "topK": 3,
+                },
+            }
+        ],
+        scope=scope,
+    )
+    assert executed["tool_records"][0]["skipped"] is False
+    assert executed["tool_records"][0]["ok"] is True
+    assert executed["tool_records"][0]["result"].get("matches")

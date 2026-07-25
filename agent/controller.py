@@ -163,13 +163,18 @@ class AgentController:
                 )
             no_match_conclusion = "未找到匹配目标"
             if operation == "existence":
-                no_match_conclusion = f"未发现符合条件的目标" + (f"（{description or hull}）" if (description or hull) else "")
+                label = hull or description or "目标"
+                if registry_items:
+                    no_match_conclusion = f"未在视频中发现「{label}」（先验库有记录，视觉匹配未命中）"
+                else:
+                    no_match_conclusion = f"未发现符合条件的目标（{label}）"
             return self._finish(
                 no_match_conclusion,
                 [],
-                answer_hint or "匹配结果均为 mismatch",
+                answer_hint or "匹配结果均为 mismatch 或空",
                 "sufficient" if operation == "existence" else state,
-                extra={"matches": matches, "planMode": "langgraph"},
+                extra={"matches": matches, "registryItems": registry_items, "planMode": "langgraph"},
+                display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
             )
         if registry_items and not tracks:
             if not self.meta.get("targetScope"):
@@ -198,7 +203,7 @@ class AgentController:
                 return self._finish(
                     f"未在视频中发现「{hull}」" + (f"（先验库有：{labels}）" if labels else "（先验库有记录）"),
                     [],
-                    answer_hint or f"getTrack 无轨迹；先验库命中 {len(registry_items)} 项，视觉匹配未给出视频轨迹",
+                    answer_hint or f"getTrack 无舷号命中；先验库命中 {len(registry_items)} 项，视觉匹配未给出视频轨迹",
                     "sufficient" if state in {"sufficient", "uncertain"} else state,
                     extra={
                         "registryItems": registry_items,
@@ -220,6 +225,36 @@ class AgentController:
                 display={"tracks": [], "includeClips": False, "includeRegistry": True},
             )
         if tracks:
+            # 存在判断 + 舷号：全量扫轨得到的轨迹 ≠ 该舷号已确认出现
+            # 仅当有非 mismatch 的视觉/文本匹配，或轨迹自身带该舷号时，才「确认出现」
+            if operation == "existence" and hull:
+                hull_on_track = any(
+                    str(t.get("hullNumber") or "").upper() == hull.upper()
+                    or str(t.get("finalHullNumber") or "").upper() == hull.upper()
+                    for t in tracks
+                    if isinstance(t, dict)
+                )
+                if not hull_on_track:
+                    labels = "、".join(
+                        str(item.get("hullNumber") or item.get("registryId") or "")
+                        for item in registry_items[:3]
+                        if item.get("hullNumber") or item.get("registryId")
+                    ) if registry_items else ""
+                    return self._finish(
+                        f"未在视频中确认「{hull}」"
+                        + (f"（先验库有：{labels}；全量检索 {len(tracks)} 条轨迹均未标此舷号/未视觉命中）" if labels
+                           else f"（全量检索 {len(tracks)} 条轨迹，均未标此舷号）"),
+                        tracks[: self.display_limit],
+                        answer_hint or "放开舷号过滤后的轨迹不能直接当作目标命中",
+                        "sufficient" if state in {"sufficient", "uncertain"} else state,
+                        extra={
+                            "registryItems": registry_items,
+                            "planMode": "langgraph",
+                            "found": False,
+                            "targetScope": "both" if registry_items else target_scope,
+                        },
+                        display={"tracks": tracks[: self.display_limit], "includeClips": True, "includeRegistry": bool(registry_items)},
+                    )
             if operation == "existence":
                 conclusion = "确认出现" if state == "sufficient" else "疑似出现（证据不完整）"
             else:

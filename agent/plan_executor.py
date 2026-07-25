@@ -48,12 +48,14 @@ class PlanExecutor:
                 observation = {
                     "id": call_id,
                     "tool": tool,
+                    "arguments": {},
                     "skipped": True,
                     "skipReason": "condition_not_met",
                     "result": result,
                 }
                 working[call_id] = result
                 observations.append(observation)
+                tool_records.append(self._skipped_record(observation))
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
@@ -63,28 +65,70 @@ class PlanExecutor:
                 observation = {
                     "id": call_id,
                     "tool": tool,
+                    "arguments": {},
                     "skipped": True,
                     "skipReason": dependency_issue,
                     "result": result,
                 }
                 working[call_id] = result
                 observations.append(observation)
+                tool_records.append(self._skipped_record(observation))
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
             arguments = self._resolve(call.get("arguments", {}), working)
+            # matchImage：库参考图为空时尝试从 registryItems.references 展开
+            if tool == "matchImage":
+                arguments = self._enrich_match_image_args(arguments, working)
             argument_issue = self._required_argument_issue(tool, arguments)
             if argument_issue:
+                # 视觉匹配缺图：写入空 matches 结果（不算 skip），避免 Reflect 无限 replan
+                if tool == "matchImage" and argument_issue.startswith("argument_missing:"):
+                    result = {
+                        "ok": True,
+                        "matchMode": "image_to_image",
+                        "matches": [],
+                        "error": argument_issue,
+                        "hint": "无可搜库参考图或关键帧，视觉匹配未执行",
+                        "visualAttempted": True,
+                    }
+                    observation = {
+                        "id": call_id,
+                        "tool": tool,
+                        "arguments": self._compact_args(arguments),
+                        "result": result,
+                        "skipped": False,
+                    }
+                    working[call_id] = result
+                    observations.append(observation)
+                    summary = self.summarize_observation(observation)
+                    tool_records.append({
+                        "id": call_id,
+                        "tool": tool,
+                        "arguments": observation.get("arguments") or {},
+                        "result": result,
+                        "summary": summary,
+                        "ok": True,
+                        "skipped": False,
+                        "phase": "completed",
+                        "error": argument_issue,
+                        **summary,
+                    })
+                    tool_chain.append(tool)
+                    self._emit(on_tool_event, "completed", observation)
+                    continue
                 result = {"ok": False, "error": argument_issue, "tool": tool}
                 observation = {
                     "id": call_id,
                     "tool": tool,
+                    "arguments": self._compact_args(arguments) if isinstance(arguments, dict) else {},
                     "skipped": True,
                     "skipReason": argument_issue,
                     "result": result,
                 }
                 working[call_id] = result
                 observations.append(observation)
+                tool_records.append(self._skipped_record(observation))
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
@@ -208,6 +252,80 @@ class PlanExecutor:
         ):
             return "argument_missing:evidence"
         return None
+
+    @staticmethod
+    def _skipped_record(observation: dict[str, Any]) -> dict[str, Any]:
+        """跳过步骤也写入 tool_records，供 Reflect 识别「已尝试 matchImage」。"""
+        summary = PlanExecutor.summarize_observation(observation)
+        return {
+            "id": observation.get("id"),
+            "tool": observation.get("tool"),
+            "arguments": observation.get("arguments") or {},
+            "result": observation.get("result") or {},
+            "summary": summary,
+            "ok": False,
+            "skipped": True,
+            "phase": "skipped",
+            "skipReason": observation.get("skipReason"),
+            "error": observation.get("skipReason") or (observation.get("result") or {}).get("error"),
+            **summary,
+        }
+
+    @classmethod
+    def _enrich_match_image_args(cls, arguments: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+        """queryImages/galleryImages 为空时，从 working_scope 最近的库/帧结果补齐。"""
+        args = dict(arguments or {})
+        if cls._empty_dependency(args.get("queryImages")):
+            recovered = cls._collect_registry_images(scope)
+            if recovered:
+                args["queryImages"] = recovered
+        if cls._empty_dependency(args.get("galleryImages")):
+            recovered = cls._collect_keyframes(scope)
+            if recovered:
+                args["galleryImages"] = recovered
+        return args
+
+    @classmethod
+    def _collect_registry_images(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
+        images: list[dict[str, Any]] = []
+        for value in (scope or {}).values():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            refs = value.get("registryReferences")
+            if isinstance(refs, list) and refs:
+                images.extend([r for r in refs if isinstance(r, dict)])
+            for item in value.get("registryItems") or []:
+                if not isinstance(item, dict):
+                    continue
+                nested = item.get("references") or item.get("registryReferences") or []
+                if isinstance(nested, list):
+                    images.extend([r for r in nested if isinstance(r, dict)])
+            one = value.get("registryItem")
+            if isinstance(one, dict):
+                nested = one.get("references") or one.get("registryReferences") or []
+                if isinstance(nested, list):
+                    images.extend([r for r in nested if isinstance(r, dict)])
+        # 去重
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for img in images:
+            key = str(img.get("referenceId") or img.get("registryVectorId") or id(img))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(img)
+        return unique
+
+    @classmethod
+    def _collect_keyframes(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
+        frames: list[dict[str, Any]] = []
+        for value in (scope or {}).values():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            kfs = value.get("keyframes")
+            if isinstance(kfs, list) and kfs:
+                frames.extend([f for f in kfs if isinstance(f, dict)])
+        return frames
 
     @staticmethod
     def _emit(callback: Callable[[dict[str, Any]], None] | None, phase: str, observation: dict[str, Any]) -> None:
