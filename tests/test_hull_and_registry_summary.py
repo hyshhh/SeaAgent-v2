@@ -342,10 +342,35 @@ def test_tracks_ranked_by_matches_not_track_id_order():
         }
     }
     matches = [
-        {"matchedTrackId": "9", "embeddingScore": 0.91, "scoreBand": "match"},
-        {"matchedTrackId": "2", "embeddingScore": 0.80, "scoreBand": "match"},
-        {"matchedTrackId": "1", "embeddingScore": 0.55, "scoreBand": "uncertain"},
+        {"matchedTrackId": "9", "embeddingScore": 0.91, "scoreBand": "match", "matchedKeyframeIds": ["k9"]},
+        {"matchedTrackId": "2", "embeddingScore": 0.80, "scoreBand": "match", "matchedKeyframeIds": ["k2"]},
+        {"matchedTrackId": "1", "embeddingScore": 0.55, "scoreBand": "uncertain", "matchedKeyframeIds": ["k1"]},
     ]
     ranked = AgentController._tracks_ranked_by_matches(ctrl, matches)
     assert [str(t["trackId"]) for t in ranked] == ["9", "2", "1"]
     assert ranked[0]["embeddingScore"] == 0.91
+    assert ranked[0]["matchedKeyframeIds"] == ["k9"]
+
+
+def test_mismatch_matches_still_rank_for_display():
+    """全 mismatch 时仍应能按分数产出候选轨迹，避免证据区空白。"""
+    from agent.controller import AgentController
+
+    ctrl = object.__new__(AgentController)
+    ctrl.working_scope = {
+        "match": {
+            "ok": True,
+            "matches": [
+                {"matchedTrackId": "7", "embeddingScore": 0.41, "scoreBand": "mismatch", "matchedKeyframeIds": ["ka"]},
+                {"matchedTrackId": "3", "embeddingScore": 0.38, "scoreBand": "mismatch", "matchedKeyframeIds": ["kb"]},
+            ],
+        },
+        "tracks": {
+            "ok": True,
+            "tracks": [{"trackId": "1"}, {"trackId": "3"}, {"trackId": "7"}],
+        },
+    }
+    matches = AgentController._collect_matches(ctrl)
+    ranked = AgentController._tracks_ranked_by_matches(ctrl, matches)
+    assert [str(t["trackId"]) for t in ranked] == ["7", "3"]
+    assert ranked[0]["matchedKeyframeIds"] == ["ka"]

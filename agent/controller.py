@@ -229,11 +229,17 @@ class AgentController:
                     },
                     display={"tracks": hit_tracks[: self.display_limit], "includeClips": True},
                 )
+            # 有打分结果但无一达到 match/uncertain：仍按分数展示 top 候选作证据，禁止证据区空白
+            candidate_tracks = self._tracks_ranked_by_matches(ranked, tracks)[: self.display_limit]
+            top_score = float(ranked[0].get("embeddingScore") or ranked[0].get("score") or 0) if ranked else 0.0
             if is_registry_in_list:
                 return self._finish(
-                    "未在视频中发现在库船舶匹配",
-                    [],
-                    answer_hint or "库图与视频关键帧无有效匹配；若仅 matchText(问句) 则证据无效",
+                    "未在视频中确认在库船舶匹配",
+                    candidate_tracks,
+                    answer_hint or (
+                        f"共 {len(ranked)} 条打分结果均为 mismatch（最高分 {top_score:.3f}）；"
+                        "已附 top 候选供对照，勿视为确认命中"
+                    ),
                     "sufficient" if state in {"sufficient", "uncertain"} else state,
                     extra={
                         "matches": ranked,
@@ -241,30 +247,43 @@ class AgentController:
                         "planMode": "langgraph",
                         "targetScope": "both",
                         "matchCount": 0,
+                        "candidateCount": len(ranked),
                         "found": False,
                     },
-                    display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
+                    display={
+                        "tracks": candidate_tracks,
+                        "includeClips": bool(candidate_tracks),
+                        "includeRegistry": bool(registry_items),
+                    },
                 )
-            no_match_conclusion = "未找到匹配目标"
+            no_match_conclusion = "未找到确认匹配目标"
             if operation == "existence":
                 label = hull or description or "目标"
                 if registry_items:
-                    no_match_conclusion = f"未在视频中发现「{label}」（先验库有记录，视觉匹配未命中）"
+                    no_match_conclusion = f"未在视频中确认「{label}」（先验库有记录，视觉匹配未达阈值）"
                 else:
-                    no_match_conclusion = f"未发现符合条件的目标（{label}）"
+                    no_match_conclusion = f"未确认符合条件的目标（{label}）"
             return self._finish(
                 no_match_conclusion,
-                [],
-                answer_hint or "匹配结果均为 mismatch 或空",
+                candidate_tracks,
+                answer_hint or (
+                    f"匹配结果均为 mismatch 或空（共 {len(ranked)} 条打分，最高分 {top_score:.3f}）；"
+                    "已展示 top 候选证据，非确认命中"
+                ),
                 "sufficient" if operation == "existence" else state,
                 extra={
                     "matches": ranked,
                     "registryItems": registry_items,
                     "planMode": "langgraph",
                     "matchCount": 0,
+                    "candidateCount": len(ranked),
                     "found": False,
                 },
-                display={"tracks": [], "includeClips": False, "includeRegistry": bool(registry_items)},
+                display={
+                    "tracks": candidate_tracks,
+                    "includeClips": bool(candidate_tracks),
+                    "includeRegistry": bool(registry_items),
+                },
             )
         if registry_items and not tracks:
             if not self.meta.get("targetScope"):
@@ -462,6 +481,14 @@ class AgentController:
                 base["matchedRegistryId"] = match.get("matchedRegistryId")
             if match.get("hullNumber") is not None:
                 base.setdefault("hullNumber", match.get("hullNumber"))
+            # 把匹配关键帧挂到轨迹上，供 _display_tracks 直接用
+            kids = match.get("matchedKeyframeIds") or match.get("queryKeyframeIds") or []
+            if kids:
+                base["matchedKeyframeIds"] = [str(x) for x in kids if x is not None]
+                base["keyframeIds"] = list(base["matchedKeyframeIds"])
+            refs = match.get("matchedRegistryReferenceIds") or match.get("queryRegistryReferenceIds") or []
+            if refs:
+                base["matchedRegistryReferenceIds"] = [str(x) for x in refs if x is not None]
             ranked.append(base)
         return ranked
 
@@ -696,6 +723,25 @@ class AgentController:
         for track in unique_tracks:
             track_id = str(track["trackId"])
             keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")
+            # 匹配结果常只有 trackId+分数，从 working_scope.matches 补关键帧
+            if not keyframe_ids:
+                for value in self.working_scope.values():
+                    if not isinstance(value, dict):
+                        continue
+                    for match in value.get("matches") or []:
+                        if not isinstance(match, dict):
+                            continue
+                        mid = str(match.get("matchedTrackId") or match.get("trackId") or "")
+                        if mid != track_id:
+                            continue
+                        for kid in match.get("matchedKeyframeIds") or match.get("queryKeyframeIds") or []:
+                            if kid is not None:
+                                keyframe_ids.append(str(kid))
+                        if match.get("embeddingScore") is not None and track.get("embeddingScore") is None:
+                            track["embeddingScore"] = match.get("embeddingScore")
+                        if match.get("scoreBand") is not None and track.get("scoreBand") is None:
+                            track["scoreBand"] = match.get("scoreBand")
+                keyframe_ids = list(dict.fromkeys(keyframe_ids))
             if not keyframe_ids:
                 frames = frame_groups.get(track_id, {}).get("keyframes", [])
                 best = max(frames, key=lambda item: item.get("retentionScore", 0), default=None)
@@ -711,12 +757,25 @@ class AgentController:
             reference_ids: list[str] = []
             if include_registry:
                 raw_refs = self._ids(track, "matchedRegistryReferenceIds", "registryReferenceIds")
+                if not raw_refs:
+                    for value in self.working_scope.values():
+                        if not isinstance(value, dict):
+                            continue
+                        for match in value.get("matches") or []:
+                            if not isinstance(match, dict):
+                                continue
+                            mid = str(match.get("matchedTrackId") or match.get("trackId") or "")
+                            if mid != track_id:
+                                continue
+                            for rid in match.get("matchedRegistryReferenceIds") or match.get("queryRegistryReferenceIds") or []:
+                                if rid is not None:
+                                    raw_refs.append(str(rid))
                 if hasattr(self.tools, "_representative_registry_reference_ids"):
                     try:
                         raw_refs = self.tools._representative_registry_reference_ids(raw_refs)
                     except Exception:
                         pass
-                reference_ids = list(raw_refs)[:1]
+                reference_ids = list(dict.fromkeys(str(x) for x in raw_refs if x is not None))[:3]
             group: dict[str, Any] = {
                 "trackId": track_id,
                 "clipTrackId": track_id,
