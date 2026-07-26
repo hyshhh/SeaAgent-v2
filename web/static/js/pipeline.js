@@ -311,7 +311,7 @@ async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMo
   const btn = document.getElementById('btnStartPipeline');
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<span class="loading-spinner"></span> 启动中...';
+    btn.innerHTML = '<span class="loading-spinner"></span> Starting...';
   }
 
   try {
@@ -330,7 +330,7 @@ async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMo
     currentTaskId = data.task_id;
     if (continuousMonitorState && sequenceMode) continuousMonitorState.currentTaskId = currentTaskId;
     if (!sequenceMode) showToast(`流水线已启动 (${currentTaskId})`);
-    updatePipelineStatus('running', sequenceMode ? `连续监控处理中：${filename}` : '处理中...');
+    updatePipelineStatus('running', sequenceMode ? `Processing sequence: ${filename}` : 'Processing...');
     const startButton = document.getElementById('btnStartPipeline');
     const stopButton = document.getElementById('btnStopPipeline');
     if (startButton) startButton.style.display = 'none';
@@ -357,7 +357,7 @@ async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMo
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '▶ 开始处理';
+      btn.innerHTML = '▶ Start Processing';
     }
     updateContinuousMonitorControls();
   }
@@ -677,7 +677,7 @@ async function stopVideoPipeline() {
   disconnectStreamWs();
 
   // 更新 UI 状态
-  updatePipelineStatus('failed', '正在停止...');
+  updatePipelineStatus('failed', 'Stopping...');
   resetPipelineButtons();
 
   try {
@@ -816,6 +816,47 @@ async function pollPoolStatus(targetTaskId = null) {
   } catch (e) {}
 }
 
+function pipelineRecordStatus(value) {
+  const text = String(value || '-').trim();
+  const rules = [
+    [/已进入正式池|进入正式池/, 'Promoted'],
+    [/正式帧|正式池/, 'Confirmed'],
+    [/临时帧|临时池|候选帧|候选池/, 'Candidate'],
+    [/正在追踪|追踪中|正在跟踪|跟踪中/, 'Tracking'],
+    [/已完成|处理完成|结束/, 'Completed'],
+    [/丢失/, 'Lost'],
+  ];
+  const match = rules.find(([pattern]) => pattern.test(text));
+  return match ? match[1] : text;
+}
+
+function pipelineMemoryText(value) {
+  return String(value || '-')
+    .replaceAll('临时帧', 'Candidate')
+    .replaceAll('正式帧', 'Confirmed')
+    .replaceAll('临时池', 'Candidate Pool')
+    .replaceAll('正式池', 'Keyframe Pool');
+}
+
+function pipelineProgressText(status, value) {
+  const text = String(value || '').trim();
+  const exact = {
+    '请选择监控视频': 'Select a monitoring video',
+    '等待开始': 'Ready to start',
+    '处理中...': 'Processing...',
+    '处理中…': 'Processing...',
+    '处理完成': 'Processing completed',
+    '正在停止...': 'Stopping...',
+    '已停止': 'Stopped',
+  };
+  if (exact[text]) return exact[text];
+  if (status === 'completed' && (!text || /完成/.test(text))) return 'Processing completed';
+  if (status === 'failed' && !text) return 'Processing failed';
+  if (status === 'running' && !text) return 'Processing...';
+  if (status === 'idle' && !text) return 'Ready to start';
+  return text || status;
+}
+
 function renderPoolRows(elementId, rows, emptyText) {
   const box = document.getElementById(elementId);
   if (!box) return;
@@ -824,9 +865,10 @@ function renderPoolRows(elementId, rows, emptyText) {
     return;
   }
   box.innerHTML = rows.slice(0, 40).map(row => {
-    const hull = row.hullNumber || '无可读舷号';
+    const hull = row.hullNumber || 'Unreadable';
+    const status = pipelineRecordStatus(row.status);
     return `<div class="pool-table-row">
-      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>${escHtml(row.status || '-')} · ${escHtml(row.time || '-')}</span></div>
+      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>${escHtml(status)} · ${escHtml(row.time || '-')}</span></div>
       <div class="pool-hull">${escHtml(hull)}</div>
       <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
     </div>`;
@@ -906,23 +948,25 @@ function renderTrackRows(rows) {
   const box = document.getElementById('trackStatusRows');
   if (!box) return;
   if (!rows.length) {
-    box.innerHTML = '<div class="pool-empty">等待活跃轨迹</div>';
+    box.innerHTML = '<div class="pool-empty">Waiting for active tracks</div>';
     return;
   }
   box.innerHTML = rows.slice(0, 40).map(row => {
-    const hull = row.hullNumber || '无可读舷号';
+    const hull = row.hullNumber || 'Unreadable';
     const description = row.description || '-';
+    const status = pipelineRecordStatus(row.status);
+    const memoryInfo = pipelineMemoryText(row.memoryInfo);
     return `<div class="pool-table-row track-status-row">
-      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>最近观测 · ${escHtml(row.time || '-')}</span></div>
-      <div class="pool-track-state">${escHtml(row.status || '-')}</div>
-      <div class="pool-track-memory"><strong>${escHtml(row.memoryInfo || '-')}</strong><span title="${safeAttr(`${hull} · ${description}`)}">${escHtml(hull)} · ${escHtml(description)}</span></div>
+      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>Last observed · ${escHtml(row.time || '-')}</span></div>
+      <div class="pool-track-state">${escHtml(status)}</div>
+      <div class="pool-track-memory"><strong>${escHtml(memoryInfo)}</strong><span title="${safeAttr(`${hull} · ${description}`)}">${escHtml(hull)} · ${escHtml(description)}</span></div>
     </div>`;
   }).join('');
 }
 
 function clearPoolTables() {
-  renderPoolRows('candidatePoolRows', [], '等待候选帧');
-  renderPoolRows('keyframePoolRows', [], '等待正式关键帧');
+  renderPoolRows('candidatePoolRows', [], 'Waiting for candidate frames');
+  renderPoolRows('keyframePoolRows', [], 'Waiting for confirmed keyframes');
   renderTrackRows([]);
 }
 
@@ -931,18 +975,18 @@ function updatePipelineStatus(status, text) {
   const statusText = document.getElementById('pipelineStatusText');
   if (!dot || !statusText) return;
   dot.className = 'status-dot ' + (status === 'running' ? 'running' : status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'idle');
-  statusText.textContent = text || status;
+  statusText.textContent = pipelineProgressText(status, text);
 }
 
 function resetPipelineStatus() {
-  updatePipelineStatus('idle', '等待开始');
+  updatePipelineStatus('idle', 'Ready to start');
   resetPipelineButtons();
 }
 
 function resetPipelineButtons() {
   const startBtn = document.getElementById('btnStartPipeline');
   const stopBtn = document.getElementById('btnStopPipeline');
-  if (startBtn) startBtn.style.display = '';
+  if (startBtn) { startBtn.style.display = ''; startBtn.disabled = false; startBtn.innerHTML = '▶ Start Processing'; }
   if (stopBtn) stopBtn.style.display = 'none';
 }
 

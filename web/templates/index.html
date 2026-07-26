@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=4">
+<link rel="stylesheet" href="/static/css/academic.css?v=5">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -26,33 +26,33 @@
   <div class="monitor-workspace">
     <div class="monitor-column">
       <section class="panel monitor-panel" id="pipelineControl">
-        <div class="panel-head">
-          <div><span class="eyebrow">海域监控窗口</span><h2>船舶检测与轨迹记忆构建</h2></div>
-          <div class="panel-actions">
-            <button class="btn primary" id="btnStartPipeline" onclick="startVideoPipeline()">开始处理</button>
-            <button class="btn danger" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">停止</button>
+        <div class="monitor-control-bar">
+          <div class="monitor-control-title"><span class="eyebrow">Maritime Monitoring</span><h2>Vessel Detection &amp; Trajectory Memory Construction</h2></div>
+          <div class="status-line monitor-processing-status" id="pipelineStatus"><span class="status-dot idle"></span><div><small>Processing Status</small><strong id="pipelineStatusText">Select a monitoring video</strong></div></div>
+          <div class="panel-actions monitor-control-actions">
+            <button class="btn primary" id="btnStartPipeline" onclick="startVideoPipeline()">▶ Start Processing</button>
+            <button class="btn danger" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">■ Stop Processing</button>
           </div>
         </div>
-        <div class="status-line" id="pipelineStatus"><span class="status-dot idle"></span><span id="pipelineStatusText">请选择监控视频</span></div>
         <div class="result-area">
           <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
         </div>
         <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
           <div class="pool-status-grid">
-            <section class="pool-status-panel">
-              <div class="log-head"><span>临时池状态</span><em>最多 40 行</em></div>
-              <div class="pool-table-head"><span>轨迹编号</span><span>舷号</span><span>描述</span></div>
-              <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">等待候选帧</div></div>
+            <section class="pool-status-panel candidate-pool-panel">
+              <div class="log-head"><div><strong>Candidate Pool</strong><span>Temporary observations</span></div><em>Up to 40 rows</em></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for candidate frames</div></div>
             </section>
-            <section class="pool-status-panel">
-              <div class="log-head"><span>正式池状态</span><em>最多 40 行</em></div>
-              <div class="pool-table-head"><span>轨迹编号</span><span>舷号</span><span>描述</span></div>
-              <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">等待正式关键帧</div></div>
+            <section class="pool-status-panel keyframe-pool-panel">
+              <div class="log-head"><div><strong>Keyframe Pool</strong><span>Confirmed memory frames</span></div><em>Up to 40 rows</em></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for confirmed keyframes</div></div>
             </section>
             <section class="pool-status-panel track-status-panel">
-              <div class="log-head"><span>轨迹状态</span><em>最多 40 条活跃轨迹</em></div>
-              <div class="pool-table-head track-table-head"><span>轨迹编号</span><span>当前状态</span><span>轨迹记忆</span></div>
-              <div id="trackStatusRows" class="pool-table-body"><div class="pool-empty">等待活跃轨迹</div></div>
+              <div class="log-head"><div><strong>Active Tracks</strong><span>Trajectory lifecycle and memory</span></div><em>Up to 40 tracks</em></div>
+              <div class="pool-table-head track-table-head"><span>Track ID</span><span>Current Status</span><span>Trajectory Memory</span></div>
+              <div id="trackStatusRows" class="pool-table-body"><div class="pool-empty">Waiting for active tracks</div></div>
             </section>
           </div>
         </div>
@@ -355,7 +355,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=12"></script>
+<script src="/static/js/pipeline.js?v=13"></script>
   <script src="/static/js/memory.js?v=5"></script>
 <script src="/static/js/agent.js?v=45"></script>
 <script src="/static/js/settings.js?v=8"></script>

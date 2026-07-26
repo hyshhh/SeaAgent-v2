@@ -1479,3 +1479,324 @@ tbody tr:hover td { background: #f2f6f9; }
     font-weight: 700;
   }
 }
+
+/* 海域监控终版：单行控制栏、宽屏监控画布与论文式轨迹池 */
+#tab-monitoring .monitor-workspace {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  gap: 10px;
+}
+#tab-monitoring .monitor-column { gap: 10px; }
+.monitor-control-bar {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: minmax(430px, auto) minmax(240px, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfd;
+}
+.monitor-control-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.monitor-control-title .eyebrow {
+  flex: 0 0 auto;
+  margin: 0;
+  padding-left: 9px;
+  border-left: 3px solid var(--academic-blue);
+  color: var(--academic-blue);
+  font-size: 9px;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+.monitor-control-title h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #1b2e42;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(15px, 1.15vw, 19px);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitor-processing-status.status-line {
+  width: min(100%, 360px);
+  height: auto;
+  min-height: 40px;
+  justify-self: center;
+  padding: 5px 12px;
+  gap: 9px;
+  color: #435367;
+  border: 1px solid #d5dde5;
+  border-radius: 3px;
+  background: #fff;
+}
+.monitor-processing-status > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  line-height: 1.2;
+}
+.monitor-processing-status small {
+  color: #84909d;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.monitor-processing-status strong {
+  overflow: hidden;
+  color: #34485c;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitor-control-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.monitor-control-actions .btn {
+  min-height: 34px;
+  padding: 6px 11px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+#tab-monitoring .result-area,
+#tab-monitoring .stream-preview,
+#tab-monitoring .video-preview { min-height: clamp(420px, 40vw, 620px); }
+
+#tab-monitoring .pipeline-log-box {
+  padding: 10px;
+  border-top: 1px solid #cfd7df;
+  background: #eef2f5;
+}
+#tab-monitoring .pool-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  background: transparent;
+}
+#tab-monitoring .pool-status-panel {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #cbd4dd;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .045);
+}
+#tab-monitoring .pool-status-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  z-index: 3;
+  background: #6f879c;
+}
+#tab-monitoring .candidate-pool-panel::before { background: #8a6a2f; }
+#tab-monitoring .keyframe-pool-panel::before { background: #2f6b55; }
+#tab-monitoring .track-status-panel::before { background: var(--academic-blue); }
+#tab-monitoring .log-head {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px 7px 14px;
+  color: #425367;
+  border-bottom: 1px solid #dbe1e7;
+  background: #f8fafb;
+}
+#tab-monitoring .log-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+#tab-monitoring .log-head strong {
+  color: #253a50;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  line-height: 1.2;
+}
+#tab-monitoring .log-head span {
+  overflow: hidden;
+  color: #7a8795;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tab-monitoring .log-head em {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: #6d7b8b;
+  border: 1px solid #d7dee5;
+  border-radius: 2px;
+  background: #fff;
+  font-size: 8px;
+  font-style: normal;
+  white-space: nowrap;
+}
+#tab-monitoring .pool-table-head,
+#tab-monitoring .pool-table-row {
+  display: grid;
+  grid-template-columns: minmax(112px, .62fr) minmax(112px, .62fr) minmax(260px, 1.76fr);
+  gap: 12px;
+  align-items: center;
+}
+#tab-monitoring .pool-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 34px;
+  padding: 7px 13px 7px 15px;
+  color: #5c6b7a;
+  border-top: 0;
+  border-bottom: 1px solid #d8dfe6;
+  background: #eef2f5;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .025em;
+}
+#tab-monitoring .pool-table-body {
+  height: 260px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  background: #fff;
+}
+#tab-monitoring .pool-table-row {
+  min-height: 64px;
+  padding: 7px 13px 7px 15px;
+  color: #344457;
+  border-bottom: 1px solid #e5e9ed;
+  background: #fff;
+  font-size: 10px;
+}
+#tab-monitoring .pool-table-row:nth-child(even) { background: #fafbfc; }
+#tab-monitoring .pool-table-row:hover { background: #f3f7fa; }
+#tab-monitoring .pool-track strong {
+  color: #1f4e79;
+  font-size: 11px;
+  font-weight: 700;
+}
+#tab-monitoring .pool-track span {
+  margin-top: 3px;
+  color: #8290a0;
+  font-size: 8px;
+}
+#tab-monitoring .pool-hull {
+  color: #294d6b;
+  font-size: 10px;
+  font-weight: 700;
+}
+#tab-monitoring .pool-description {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #5d6e80;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+#tab-monitoring .pool-empty {
+  height: 100%;
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  color: #8a96a3;
+  background: linear-gradient(#edf1f4 1px, transparent 1px), linear-gradient(90deg, #edf1f4 1px, transparent 1px), #fafbfc;
+  background-size: 28px 28px;
+  font-size: 10px;
+}
+#tab-monitoring .track-status-panel { grid-column: 1 / -1; }
+#tab-monitoring .track-table-head,
+#tab-monitoring .track-status-row {
+  grid-template-columns: minmax(130px, .62fr) minmax(150px, .72fr) minmax(420px, 2.66fr);
+}
+#tab-monitoring .track-status-panel .pool-table-body { height: 190px; }
+#tab-monitoring .pool-track-state {
+  justify-self: start;
+  padding: 3px 7px;
+  overflow: hidden;
+  color: #255b45;
+  border: 1px solid #bed5c9;
+  border-radius: 2px;
+  background: #eef6f2;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tab-monitoring .pool-track-memory {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+#tab-monitoring .pool-track-memory strong {
+  color: #31536f;
+  font-size: 9px;
+  font-weight: 700;
+}
+#tab-monitoring .pool-track-memory span {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #69798a;
+  font-size: 9px;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 1180px) {
+  .monitor-control-bar {
+    grid-template-columns: minmax(360px, 1fr) minmax(220px, .7fr) auto;
+    gap: 10px;
+  }
+  .monitor-control-title { display: grid; gap: 1px; }
+  .monitor-control-title .eyebrow { border-left: 0; padding-left: 0; }
+  #tab-monitoring .pool-table-head,
+  #tab-monitoring .pool-table-row { grid-template-columns: minmax(90px, .55fr) minmax(100px, .6fr) minmax(220px, 1.85fr); }
+}
+@media (max-width: 900px) {
+  .monitor-control-bar { grid-template-columns: 1fr auto; }
+  .monitor-processing-status.status-line {
+    width: 100%;
+    max-width: none;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+  }
+  #tab-monitoring .pool-status-grid { grid-template-columns: 1fr; }
+  #tab-monitoring .track-status-panel { grid-column: auto; }
+}
+@media (max-width: 620px) {
+  .monitor-control-bar { grid-template-columns: 1fr; align-items: stretch; }
+  .monitor-control-title { min-width: 0; }
+  .monitor-control-title h2 { white-space: normal; }
+  .monitor-control-actions { grid-row: 3; justify-content: stretch; }
+  .monitor-control-actions .btn { flex: 1; }
+  .monitor-processing-status.status-line { grid-row: 2; }
+  #tab-monitoring .pipeline-log-box { padding: 6px; }
+  #tab-monitoring .pool-table-head,
+  #tab-monitoring .pool-table-row,
+  #tab-monitoring .track-table-head,
+  #tab-monitoring .track-status-row {
+    grid-template-columns: minmax(74px, .6fr) minmax(82px, .7fr) minmax(160px, 1.7fr);
+    gap: 7px;
+    padding-inline: 9px;
+  }
+}
