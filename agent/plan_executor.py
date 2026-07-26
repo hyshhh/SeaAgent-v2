@@ -159,6 +159,8 @@ class PlanExecutor:
                 continue
 
             arguments = self._resolve(call.get("arguments", {}), working)
+            if tool == "dedupTracks":
+                arguments = self._enrich_dedup_tracks_args(arguments, working)
             argument_issue = self._required_argument_issue(tool, arguments)
             if argument_issue:
                 result = {"ok": False, "error": argument_issue, "tool": tool}
@@ -341,6 +343,80 @@ class PlanExecutor:
         return args
 
     @classmethod
+    def _enrich_dedup_tracks_args(cls, arguments: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+        """把模型可能传入的 frames / getFrames 结果兜底整理为 dedupTracks 需要的 keyframesByTrack。"""
+        args = dict(arguments or {})
+        if cls._empty_dependency(args.get("tracks")):
+            tracks = cls._collect_tracks(scope)
+            if tracks:
+                args["tracks"] = tracks
+        grouped = cls._keyframes_by_track_from(args.get("keyframesByTrack"))
+        if not grouped:
+            grouped = cls._keyframes_by_track_from(args.get("frames"))
+        if not grouped:
+            grouped = cls._collect_keyframes_by_track(scope)
+        if grouped:
+            args["keyframesByTrack"] = grouped
+        # dedupTracks 的函数签名不接受 frames，整理后移除别名参数，避免额外关键字导致执行失败。
+        args.pop("frames", None)
+        return args
+
+    @classmethod
+    def _keyframes_by_track_from(cls, value: Any) -> dict[str, dict[str, Any]]:
+        if cls._empty_dependency(value):
+            return {}
+        if isinstance(value, dict):
+            nested = value.get("keyframesByTrack")
+            if isinstance(nested, dict) and nested:
+                return cls._normalize_keyframe_groups(nested)
+            keyframes = value.get("keyframes")
+            if isinstance(keyframes, list) and keyframes:
+                return cls._group_keyframes(keyframes)
+            # 已经是按轨迹分组的对象。
+            if any(
+                isinstance(v, (dict, list)) and (
+                    isinstance(v, list) or isinstance(v.get("keyframes") if isinstance(v, dict) else None, list)
+                )
+                for v in value.values()
+            ):
+                return cls._normalize_keyframe_groups(value)
+            return {}
+        if isinstance(value, list):
+            return cls._group_keyframes(value)
+        return {}
+
+    @staticmethod
+    def _group_keyframes(frames: list[Any]) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for frame in frames:
+            if not isinstance(frame, dict) or frame.get("trackId") is None:
+                continue
+            track_id = str(frame["trackId"])
+            bucket = grouped.setdefault(track_id, {"keyframes": [], "keyframeIds": []})
+            bucket["keyframes"].append(frame)
+            if frame.get("keyframeId") is not None:
+                bucket["keyframeIds"].append(frame["keyframeId"])
+        return grouped
+
+    @classmethod
+    def _normalize_keyframe_groups(cls, groups: dict[Any, Any]) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for track_id, group in (groups or {}).items():
+            key = str(track_id)
+            if isinstance(group, dict):
+                frames = group.get("keyframes") if isinstance(group.get("keyframes"), list) else []
+                ids = group.get("keyframeIds") if isinstance(group.get("keyframeIds"), list) else []
+            elif isinstance(group, list):
+                frames = [item for item in group if isinstance(item, dict)]
+                ids = [item.get("keyframeId") for item in frames if item.get("keyframeId") is not None]
+            else:
+                continue
+            if not frames and not ids:
+                continue
+            normalized[key] = {"keyframes": frames, "keyframeIds": ids}
+        return normalized
+
+    @classmethod
     def _expand_to_registry_images(cls, value: Any) -> list[dict[str, Any]]:
         """把 registryReferences / registryItems / 嵌套 references 统一展成参考图记录。"""
         images: list[dict[str, Any]] = []
@@ -431,6 +507,49 @@ class PlanExecutor:
                 seen.add(key)
                 items.append(item)
         return items
+
+    @classmethod
+    def _collect_keyframes_by_track(cls, scope: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for value in (scope or {}).values():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            grouped = cls._keyframes_by_track_from(value)
+            for track_id, group in grouped.items():
+                bucket = merged.setdefault(track_id, {"keyframes": [], "keyframeIds": []})
+                bucket["keyframes"].extend(group.get("keyframes") or [])
+                bucket["keyframeIds"].extend(group.get("keyframeIds") or [])
+        for bucket in merged.values():
+            seen_ids: set[str] = set()
+            unique_frames: list[dict[str, Any]] = []
+            for frame in bucket.get("keyframes") or []:
+                if not isinstance(frame, dict):
+                    continue
+                key = str(frame.get("keyframeId") or id(frame))
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                unique_frames.append(frame)
+            bucket["keyframes"] = unique_frames
+            bucket["keyframeIds"] = list(dict.fromkeys(x for x in bucket.get("keyframeIds") or [] if x is not None))
+        return merged
+
+    @classmethod
+    def _collect_tracks(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
+        tracks: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for value in (scope or {}).values():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            for track in value.get("tracks") or []:
+                if not isinstance(track, dict) or track.get("trackId") is None:
+                    continue
+                key = str(track["trackId"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                tracks.append(track)
+        return tracks
 
     @classmethod
     def _collect_keyframes(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:

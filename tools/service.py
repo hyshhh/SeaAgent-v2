@@ -686,12 +686,21 @@ class ToolService:
         candidates = {}
         for track in tracks:
             track_id = str(track["trackId"])
-            group = keyframesByTrack.get(track_id, {})
-            frames = group.get("keyframes", group if isinstance(group, list) else [])
-            candidates[track_id] = [frame for frame in frames if frame.get("isEmbedded") and frame.get("keyframeVectorId") is not None]
+            group = (keyframesByTrack or {}).get(track_id, {})
+            if isinstance(group, dict):
+                frames = group.get("keyframes") if isinstance(group.get("keyframes"), list) else []
+            elif isinstance(group, list):
+                frames = group
+            else:
+                frames = []
+            # isEmbedded 标志可能滞后；只要有向量编号就允许参与去重。
+            candidates[track_id] = [
+                frame for frame in frames
+                if isinstance(frame, dict) and frame.get("keyframeVectorId") is not None and frame.get("isEmbedded") is not False
+            ]
         track_map = {str(item["trackId"]): item for item in tracks}
         vector_ids = [frame["keyframeVectorId"] for frames in candidates.values() for frame in frames]
-        vectors = self.vectors.keyframes.get_many(vector_ids)
+        vectors = self.vectors.keyframes.get_many(vector_ids) if vector_ids else {}
         selected, missing = {}, []
         for track_id, frames in candidates.items():
             available = [frame for frame in frames if int(frame["keyframeVectorId"]) in vectors]
@@ -932,7 +941,8 @@ class ToolService:
 
     @staticmethod
     def _open_video_writer(path: Path, fps: float, size: tuple[int, int]) -> tuple[Any | None, str | None]:
-        for codec in ("avc1", "H264", "mp4v"):
+        # Windows 常见 OpenCV 包通常没有 H264 编码器；优先 mp4v，避免片段生成失败和控制台刷错。
+        for codec in ("mp4v", "avc1", "H264"):
             writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*codec), fps, size)
             if writer.isOpened():
                 return writer, codec

@@ -552,6 +552,7 @@ def _build_acceptance_progress(
     has_tool_evidence: bool,
     match_image_blocked: bool = False,
     registry_coverage_complete: bool | None = None,
+    dedup_usable: bool = False,
 ) -> dict[str, Any]:
     """把验收标准转换为可执行清单，供 Reflect 决定结束或进入下一轮。"""
     mode = _registry_membership_list_mode(intent)
@@ -579,7 +580,7 @@ def _build_acceptance_progress(
     elif operation == "count":
         require("tracks", "已获取视频轨迹", "getTrack" in tool_names)
         require("frames", "已获取轨迹关键帧", "getFrames" in tool_names)
-        require("dedup", "已完成跨轨迹去重计数", "dedupTracks" in tool_names)
+        require("dedup", "已完成跨轨迹去重计数", dedup_usable)
     elif description:
         require("tracks", "已获取视频轨迹", "getTrack" in tool_names)
         require("frames", "已获取轨迹关键帧", "getFrames" in tool_names)
@@ -626,6 +627,7 @@ def _build_acceptance_progress(
         "matchImageBlocked": match_image_blocked,
         "registryCoverageComplete": registry_coverage_complete,
         "registryCoverageLimited": registry_coverage_complete is False,
+        "dedupUsable": dedup_usable,
         "terminalState": "uncertain" if (match_image_blocked or registry_coverage_complete is False) else None,
         "videoEmptyShortCircuit": bool(mode and track_count == 0 and not pending),
     }
@@ -1376,6 +1378,7 @@ def build_sea_agent_graph(
                         "先验库舷号：getRegistry(hullNumber)",
                         "视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
                         "广泛多库多轨迹：第一轮 getTrack(limit=0)，轨迹非空才 getFrames；第二轮复用已有 frames 执行 listRegistry → matchImage，使用 broadMatchTopK；0 表示不截断，不要复用 queryTopK",
+                        "数量统计：getTrack(limit=0) → getFrames → dedupTracks(tracks=$ref tracks.tracks, keyframesByTrack=$ref frames.keyframesByTrack)，不要把 frames 整体当 keyframesByTrack",
                         "有 replanHint 时优先落实其中点名的工具链",
                         "无法规划时才 handoff_to_reflect",
                     ],
@@ -1692,6 +1695,8 @@ def build_sea_agent_graph(
         match_image_usable = False
         match_image_blocked = False
         registry_coverage_complete: bool | None = None
+        dedup_usable = False
+        dedup_attempted = False
         visual_matched = False
         match_count_total = 0
         confirmed_match_count = 0
@@ -1818,6 +1823,14 @@ def build_sea_agent_graph(
             if not isinstance(r, dict):
                 continue
             tool_name = str(r.get("tool") or "")
+            if tool_name == "dedupTracks":
+                dedup_attempted = not bool(r.get("skipped"))
+                res = r.get("result") if isinstance(r.get("result"), dict) else {}
+                dedup_usable = dedup_usable or (
+                    dedup_attempted
+                    and r.get("ok") is not False
+                    and any(res.get(key) is not None for key in ("highThresholdShipCount", "lowThresholdShipCount", "uniqueCount", "dedupCount", "count", "finalCount"))
+                )
             if tool_name in {"matchImage", "matchText"}:
                 visual_attempted = True
                 res = r.get("result") if isinstance(r.get("result"), dict) else {}
@@ -1886,6 +1899,7 @@ def build_sea_agent_graph(
             has_tool_evidence=has_tool_evidence,
             match_image_blocked=match_image_blocked,
             registry_coverage_complete=registry_coverage_complete,
+            dedup_usable=dedup_usable,
         )
         user = json.dumps(
             {
@@ -1922,6 +1936,8 @@ def build_sea_agent_graph(
                 "registryListed": registry_listed,
                 "matchImageAttempted": match_image_attempted,
                 "matchImageUsable": match_image_usable,
+                "dedupAttempted": dedup_attempted,
+                "dedupUsable": dedup_usable,
                 "zeroTracks": zero_tracks,
                 "hullFilteredZero": hull_filtered_zero,
                 "toolChain": list(tool_names)[:20],
@@ -1934,6 +1950,7 @@ def build_sea_agent_graph(
                     "isRegistryInList/isRegistryOutList=true：先检查全量视频轨迹；trackCount=0 时直接验收为没有候选船舶，禁止继续查整库或调用 matchImage",
                     "trackCount>0 时才必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
                     "shouldReplanRegistryList=true → replan：复用上一轮 tracks/frames，仅补 listRegistry→matchImage",
+                    "数量统计必须看到 dedupTracks 成功返回去重计数字段；工具被跳过不算完成",
                     "acceptanceProgress.pendingRequirements 非空且未到 maxRounds → 必须 replan，并将 nextAction 指向首个关键缺口",
                     "acceptanceProgress.acceptanceSatisfied=true → 才允许 sufficient；未在库任务需把 mismatch 与 uncertain 分开",
                     "禁止在 shouldReplan*=true 时 sufficient",
