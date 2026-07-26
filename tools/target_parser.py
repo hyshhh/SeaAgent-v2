@@ -162,6 +162,10 @@ def extract_description(question: str) -> str | None:
         r"监控(?:画面|视频|记录)?中?",
         r"轨迹记忆中?",
         r"画面中?",
+        r"(?:先验)?数据库(?:中|里|内)?(?:的)?",
+        r"数据仓库(?:中|里|内)?(?:的)?",
+        r"库中(?:的)?",
+        r"库里(?:的)?",
         r"有没有",
         r"是否有?",
         r"有无",
@@ -234,6 +238,14 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
     existence_tokens = ("有没有", "是否", "有无", "出现", "存在", "看到", "找到")
     count_tokens = ("多少", "几艘", "数量", "几个", "计数")
     registry_list_q = _is_registry_list_question(text)
+    explicit_registry_scope = any(
+        token in text
+        for token in ("数据库", "数据仓库", "先验库", "库中", "库里", "库内", "名录")
+    )
+    explicit_video_scope = any(
+        token in text
+        for token in ("视频", "监控", "轨迹", "画面", "视野", "镜头", "录像")
+    )
 
     if any(token in text for token in count_tokens):
         operation = "count"
@@ -247,7 +259,7 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
 
     if "未在库" in text or "不在库" in text or "库外" in text:
         registry_relation = "out"
-    elif "在库" in text or "库内" in text or "先验库" in text or "库船" in text:
+    elif explicit_registry_scope or "在库" in text or "库船" in text:
         registry_relation = "in"
     else:
         registry_relation = "any"
@@ -261,9 +273,10 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
         if registry_list_q:
             description = None
 
-    if "先验库" in text and "轨迹" not in text and "视频" not in text and "监控" not in text and "出现" not in text:
+    if explicit_registry_scope and not explicit_video_scope and not registry_list_q:
+        # “数据库中有没有……”只查询先验数据库，不能被“出现/找到”等谓词扩展为视频检索。
         target_scope = "registry"
-    elif "先验库" in text or "在库" in text or "未在库" in text or "库船" in text or registry_list_q:
+    elif explicit_registry_scope or "在库" in text or "未在库" in text or "库船" in text or registry_list_q:
         target_scope = "both"
     else:
         target_scope = "track_memory"
@@ -287,7 +300,29 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
                 "description": description,
             }]
 
-    if registry_list_q and registry_relation == "out" and not hull:
+    if target_scope == "registry" and target_kind == "hull" and hull:
+        expected = f"确认先验数据库中是否存在舷号 {hull} 的船舶记录"
+        criteria = f"完成 getRegistry(hullNumber={hull}) 精确查询，并仅依据数据库返回结果作答；禁止扩展为视频轨迹检索"
+        focus = f"getRegistry(hullNumber={hull})"
+        question_type = f"registry_hull_{operation}"
+        confidence = 0.94
+    elif target_scope == "registry" and target_kind == "description" and description:
+        expected = f"确认先验数据库中是否存在与「{description}」相符的船舶记录"
+        criteria = (
+            "完成 listRegistry 获取数据库库项及参考图，再执行 "
+            f"matchText(description={description}, galleryImages=registry.registryReferences)；"
+            "只以数据库匹配结果作答，禁止调用 getTrack/getFrames 或扩展为视频是否出现"
+        )
+        focus = f"listRegistry → matchText(description={description}, galleryImages=$ref registry.registryReferences)"
+        question_type = f"registry_description_{operation}"
+        confidence = 0.94
+    elif target_scope == "registry" and target_kind == "all":
+        expected = "返回先验数据库中的船舶记录" if operation != "count" else "统计先验数据库中的船舶记录数量"
+        criteria = "完成 listRegistry，并仅依据完整数据库结果作答；禁止调用视频轨迹工具"
+        focus = "listRegistry"
+        question_type = f"registry_all_{operation}"
+        confidence = 0.9
+    elif registry_list_q and registry_relation == "out" and not hull:
         expected = "列出视频中出现但未命中任何先验库项的船舶轨迹"
         criteria = (
             "先完成 getTrack(全量) 枚举视频目标；若全量轨迹为 0，直接验收为没有未在库船出现，无需查整库；"

@@ -79,3 +79,18 @@ skills:
     file: acceptance_fields.md
     always: true
     tags: [acceptance, core]
+  - id: registry_scope
+    title: 数据库范围识别
+    description: 识别数据库限定词，阻止纯数据库问题越界到视频检索
+    file: registry_scope.md
+    always: false
+    when: 问题明确提到数据库、先验库、库中或名录
+    match_any:
+      - "数据库"
+      - "数据仓库"
+      - "先验库"
+      - "库中"
+      - "库里"
+      - "名录"
+      - "targetScope:registry"
+    tags: [registry, scope]

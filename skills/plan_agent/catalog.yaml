@@ -57,3 +57,18 @@ skills:
       - intent.nextAgentFocus
       - intent.expectedOutcome
     tags: [acceptance]
+  - id: registry_query
+    title: 纯数据库查询规划
+    description: 数据库描述、舷号、列表与数量查询的最小工具链及证据边界
+    file: registry_query.md
+    always: false
+    when: targetScope=registry 或问题明确限定数据库
+    match_any:
+      - "数据库"
+      - "数据仓库"
+      - "先验库"
+      - "库中"
+      - "库里"
+      - "targetScope:registry"
+      - "registry_description"
+    tags: [registry, planning]

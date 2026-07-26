@@ -37,3 +37,19 @@ skills:
       - "必填"
       - "missing"
     tags: [arguments]
+  - id: registry_observation
+    title: 数据库结果观察
+    description: 核对数据库匹配来源、分数带与空库否定证据
+    file: registry_observation.md
+    always: false
+    when: 本轮计划包含 listRegistry/getRegistry 或数据库侧 matchText
+    match_any:
+      - "数据库"
+      - "listRegistry"
+      - "getRegistry"
+      - "targetScope:registry"
+      - "registry.registryReferences"
+    match_fields:
+      - calls
+      - plan
+    tags: [registry, observation]

@@ -209,16 +209,23 @@ class AgentController:
             registry_relation == "in"
             and operation == "list"
             and not hull
-            and (target_scope in {"both", "registry"} or question_type == "registry_in_list")
+            and (target_scope == "both" or question_type == "registry_in_list")
         )
         is_registry_out_list = (
             registry_relation == "out"
             and operation == "list"
             and not hull
-            and (target_scope in {"both", "registry"} or question_type == "registry_out_list")
+            and (target_scope == "both" or question_type == "registry_out_list")
         )
         registry_listed = any(
             isinstance(record, dict) and record.get("tool") == "listRegistry" and record.get("ok") is not False
+            for record in self.tool_records
+        )
+        match_text_completed = any(
+            isinstance(record, dict)
+            and record.get("tool") == "matchText"
+            and record.get("ok") is not False
+            and not record.get("skipped")
             for record in self.tool_records
         )
         successful_track_records = [
@@ -383,23 +390,39 @@ class AgentController:
             # 展示轨迹必须按匹配分排序，禁止用 getTrack 全量列表的 1,2,3 顺序盖住
             hit_tracks = self._tracks_ranked_by_matches(supported, tracks)
             if supported and not (is_registry_in_list and bogus_description):
-                # 先验库描述匹配：展示命中库项，不把整库当结果
+                # 纯数据库描述匹配：区分确认与灰区，只展示命中/疑似库项，不把整库当结果。
                 if target_scope == "registry" and not hit_tracks:
                     matched_items = self._registry_items_from_matches(supported)
+                    matched_count = len(matched_items) or len(supported)
+                    label = description or "目标"
+                    if confirmed:
+                        conclusion = (
+                            f"数据库中确认存在「{label}」"
+                            if operation == "existence"
+                            else f"数据库中找到 {matched_count} 个匹配库项"
+                        )
+                        finish_state = "conflict" if state == "conflict" else "sufficient"
+                        hint = answer_hint or f"数据库描述匹配得到 {len(confirmed)} 条确认命中"
+                    else:
+                        conclusion = f"数据库中发现 {matched_count} 个疑似「{label}」库项，尚未达到确认阈值"
+                        finish_state = "uncertain"
+                        hint = answer_hint or f"数据库描述匹配仅得到 {len(uncertain)} 条灰区候选"
                     return self._finish(
-                        f"找到 {len(matched_items) or len(supported)} 个匹配库项" if matched_items or supported else "找到匹配目标",
+                        conclusion,
                         [],
-                        answer_hint or f"描述「{description}」命中 {len(supported)} 条候选",
-                        state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
+                        hint,
+                        finish_state,
                         extra={
                             "matches": ranked,
-                            "registryItems": matched_items or registry_items,
+                            "registryItems": matched_items,
                             "planMode": "langgraph",
                             "targetScope": "registry",
                             "matchCount": len(supported),
                             "confirmedMatchCount": len(confirmed),
+                            "uncertainMatchCount": len(uncertain),
+                            "found": bool(confirmed),
                         },
-                        display={"tracks": [], "includeClips": False, "includeRegistry": True},
+                        display={"tracks": [], "includeClips": False, "includeRegistry": bool(matched_items)},
                     )
                 # 在库列表 + matchImage 命中：按匹配轨迹/库项列名单
                 if is_registry_in_list:
@@ -492,6 +515,28 @@ class AgentController:
                         "includeRegistry": bool(registry_items),
                     },
                 )
+            if target_scope == "registry":
+                label = description or hull or "目标"
+                candidate_items = self._registry_items_from_matches(ranked)[: self.display_limit]
+                return self._finish(
+                    f"数据库中未确认存在「{label}」",
+                    [],
+                    answer_hint or (
+                        f"数据库匹配结果均未达到灰区或确认阈值（共 {len(ranked)} 条打分，最高分 {top_score:.3f}）；"
+                        "已保留最高分库项作为对照证据，不能视为命中"
+                    ),
+                    "sufficient" if state != "conflict" else "conflict",
+                    extra={
+                        "matches": ranked,
+                        "registryItems": candidate_items,
+                        "planMode": "langgraph",
+                        "targetScope": "registry",
+                        "matchCount": 0,
+                        "candidateCount": len(candidate_items),
+                        "found": False,
+                    },
+                    display={"tracks": [], "includeClips": False, "includeRegistry": bool(candidate_items)},
+                )
             no_match_conclusion = "未找到确认匹配目标"
             if operation == "existence":
                 label = hull or description or "目标"
@@ -560,8 +605,24 @@ class AgentController:
         if registry_items and not tracks:
             if not self.meta.get("targetScope"):
                 self.meta["targetScope"] = "registry"
-            # 有描述却没有 match 结果时：说明只 list 了库，未完成筛选
+            # 纯数据库描述查询已执行 matchText 但返回空匹配，是明确的数据库否定证据。
             if description and target_kind == "description":
+                if target_scope == "registry" and match_text_completed:
+                    return self._finish(
+                        f"数据库中未发现「{description}」",
+                        [],
+                        answer_hint or f"已读取 {len(registry_items)} 个数据库库项，描述匹配未返回候选",
+                        "sufficient" if state != "conflict" else "conflict",
+                        extra={
+                            "registryItems": [],
+                            "planMode": "langgraph",
+                            "targetScope": "registry",
+                            "matchCount": 0,
+                            "found": False,
+                            "registryItemCount": len(registry_items),
+                        },
+                        display={"tracks": [], "includeClips": False, "includeRegistry": False},
+                    )
                 return self._finish(
                     "先验库已列出但未完成描述筛选",
                     [],
@@ -653,12 +714,18 @@ class AgentController:
             return self._finish("证据存在冲突", [], answer_hint, state, extra={"planMode": "langgraph"})
         if operation == "existence":
             label = hull or description or "目标"
+            scope_prefix = "数据库中" if target_scope == "registry" else ""
+            reason_text = (
+                "数据库已完成查询，未返回对应库项或匹配"
+                if target_scope == "registry"
+                else "检索范围内无对应轨迹或匹配"
+            )
             return self._finish(
-                f"未发现「{label}」",
+                f"{scope_prefix}未发现「{label}」",
                 [],
-                answer_hint or "检索范围内无对应轨迹或匹配",
+                answer_hint or reason_text,
                 "sufficient",
-                extra={"planMode": "langgraph", "found": False},
+                extra={"planMode": "langgraph", "found": False, "targetScope": target_scope},
             )
         return self._finish("未找到可靠证据", [], answer_hint, state, extra={"planMode": "langgraph"})
 

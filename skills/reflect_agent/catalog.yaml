@@ -52,3 +52,18 @@ skills:
     file: replan_guidance.md
     always: true
     tags: [replan, core]
+  - id: registry_acceptance
+    title: 纯数据库查询验收
+    description: 数据库查询的完成条件、阈值结论与禁止越界规则
+    file: registry_acceptance.md
+    always: false
+    when: acceptanceProgress.mode=registry_only 或问题限定数据库
+    match_any:
+      - "数据库"
+      - "registry_only"
+      - "targetScope:registry"
+      - "registry_description"
+    match_fields:
+      - acceptanceProgress
+      - acceptance
+    tags: [registry, acceptance]

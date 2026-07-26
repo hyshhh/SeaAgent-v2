@@ -141,13 +141,13 @@
         </div>
         <div class="question-examples agent-example-grid">
           <button onclick="useQuestion('舷号 0857 有没有在视频中出现？')">舷号查询</button>
-          <button onclick="useQuestion('视频中有没有出现一个黄色的无人艇？')">描述查询</button>
+          <button onclick="useQuestion('数据库中有没有黄色的无人艇？')">数据库查询</button>
           <button onclick="useQuestion('找一下15:30到15:40有哪些未在库船出现在视野中？')">未在库船</button>
           <button onclick="useQuestion('查找一下15:30到15:40有哪些在库船出现？')">在库船</button>
           <button onclick="useQuestion('从15:30到15:40一共出现多少艘船？')">数量统计</button>
         </div>
         <div class="question-box agent-question-box">
-          <textarea id="agentQuestion" rows="3" placeholder="例如：视频中有没有出现一个黄色的无人艇？"></textarea>
+          <textarea id="agentQuestion" rows="3" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
           <div class="question-actions"><span>按控制键与回车键快速提交</span><button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button></div>
         </div>
 

@@ -30,23 +30,32 @@ def role_system_prompt(
         "- 回答与 reason 使用简体中文。\n"
     )
     if agent_key == "plan_agent":
-        # tool_chains 已 always 注入；仍保留可选 skill 目录，但不鼓励多轮 loadSkill
         work_style = (
             "## 工作方式\n"
-            "- 你只有 handoff，不要执行检索工具。\n"
-            "- **第一动作**优先 handoff_to_observe(goal, calls, planHint)；勿空转。\n"
-            "- calls 用 $ref 串联；简体中文写 goal/planHint。\n"
-            "- 当前所需规划规则已全部注入，不要尝试加载额外技能。\n"
-            "- 禁止只输出 JSON 正文而不调用工具。\n"
+            "- 你只负责规划，不执行业务检索工具。\n"
+            "- 先核对本轮已启用技能、acceptanceProgress、completedCalls 与 workingScopeKeys。\n"
+            "- 若当前规则仍不足，可调用一次 loadSkill 读取最相关的可选技能；禁止重复读取同一技能或无目的空转。\n"
+            "- 随后必须调用 handoff_to_observe(goal, calls, planHint)；确实无法形成计划时才调用 handoff_to_reflect。\n"
+            "- calls 用 $ref 串联并复用已有结果；简体中文写 goal/planHint。\n"
+            "- 禁止只输出 JSON 正文而不调用移交工具。\n"
+        )
+    elif agent_key == "observe_agent":
+        work_style = (
+            "## 工作方式\n"
+            "- 业务工具已由确定性执行器运行，你只审阅计划、压缩工具结果和证据域，不得重新执行业务工具。\n"
+            "- 先核对本轮已启用技能；规则不足时可调用一次 loadSkill，禁止重复读取或空转。\n"
+            "- 只陈述工具结果中已有事实，明确失败、跳过、空结果和真实证据缺口。\n"
+            "- 审阅后必须调用 handoff_to_reflect(summary, evidenceGap, proposedState)。\n"
         )
     elif agent_key == "reflect_agent":
         work_style = (
             "## 工作方式\n"
-            "- 你是是否进入下一轮的唯一决策者，只能调用一个移交工具。\n"
-            "- 先读取 acceptanceProgress：pendingRequirements 非空且未达轮次上限时，必须 handoff_to_plan_replan。\n"
+            "- 你是是否进入下一轮的唯一决策者。\n"
+            "- 先审计 acceptanceProgress 与本轮证据；规则不足时可调用一次 loadSkill，禁止重复读取同一技能。\n"
+            "- pendingRequirements 非空且未达轮次上限时，调用 handoff_to_plan_replan。\n"
             "- 只有 acceptanceSatisfied=true，或继续检索已无收益时，才允许 handoff_finish。\n"
-            "- nextAction 必须是 PlanAgent 可直接执行的工具链，禁止空泛地写‘继续查询’。\n"
-            "- 第一动作就完成移交，禁止只输出正文、重复调用或加载额外技能。\n"
+            "- nextAction 必须是 PlanAgent 可直接执行的最小工具链，并明确复用哪些已有结果。\n"
+            "- 完成审计后只能调用一个移交工具，禁止只输出正文或无目的空转。\n"
         )
     prompt = (
         f"你是海域船舶监控系统的{title}。\n"
@@ -70,13 +79,12 @@ PLAN_RESPONSIBILITY = (
 )
 
 OBSERVE_RESPONSIBILITY = (
-    "严格执行检索与匹配工具，把结果写入工作记忆；"
-    "完成后调用 handoff_to_reflect，summary 中简述观察事实。"
+    "审阅确定性执行器产生的工具摘要与证据域，按需读取观察技能；"
+    "完成后调用 handoff_to_reflect，summary 中只写可核验事实与真实缺口。"
 )
 
 REFLECT_RESPONSIBILITY = (
-    "审计证据是否充分。"
-    "视频 0 轨迹且未查库 → replan getRegistry；"
-    "已查库有参考图但未 matchImage → replan 视觉匹配（getTrack不带hull→getFrames→matchImage）；"
-    "state=replan 时 handoff_to_plan；sufficient/conflict/uncertain 时 handoff_finish。"
+    "以 acceptanceProgress 为权威审计证据是否充分，按需读取验收技能；"
+    "数据库问题不得扩展到视频域，视频与全库对照问题则按各自验收清单决定是否再规划；"
+    "需要下一轮时调用 handoff_to_plan_replan，否则调用 handoff_finish。"
 )

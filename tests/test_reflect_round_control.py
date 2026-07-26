@@ -411,8 +411,8 @@ def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_mode
         handoff_tools = [tool for tool in tools if str(getattr(tool, "name", "")).startswith("handoff")]
         assert handoff_tools
         assert all(getattr(tool, "return_direct", False) for tool in handoff_tools)
-        if name in {"plan", "reflect"}:
-            assert "loadSkill" not in {str(getattr(tool, "name", "")) for tool in tools}
+        if name in {"plan", "observe", "reflect"}:
+            assert "loadSkill" in {str(getattr(tool, "name", "")) for tool in tools}
         return _FakeAgent(name)
 
     with patch("agent.graph.build_chat_model", return_value=object()), patch(

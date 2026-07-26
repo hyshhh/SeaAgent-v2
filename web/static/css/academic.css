@@ -2726,3 +2726,18 @@ tbody tr:hover td { background: #f2f6f9; }
   .dedup-count-strip em { margin-left: 0; }
   .dedup-result-row { grid-template-columns: 1fr; }
 }
+.agent-thought-tags .skill-read {
+  color: #315f78;
+  border-color: #bfd0db;
+  background: #edf5f8;
+}
+.agent-thought-tags .skill-read.dynamic {
+  color: #66531b;
+  border-color: #d8c98d;
+  background: #fbf7e8;
+}
+.agent-thought-tags .skill-read.failed {
+  color: #8b3b3b;
+  border-color: #dfb9b9;
+  background: #fbefef;
+}

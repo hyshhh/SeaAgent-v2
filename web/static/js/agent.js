@@ -741,6 +741,32 @@ function compactAgentValue(value, maxLength = 160) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
+function normalizedSkillReads(event) {
+  const reads = Array.isArray(event?.skillReads) ? event.skillReads : [];
+  if (reads.length) return reads.filter((item) => item && item.skillId);
+  return (Array.isArray(event?.enabledSkills) ? event.enabledSkills : [])
+    .filter(Boolean)
+    .map((skillId) => ({skillId, title: skillId, source: 'auto', ok: true}));
+}
+
+function compactSkillReads(event) {
+  const reads = normalizedSkillReads(event);
+  if (!reads.length) return '';
+  return `技能阅读：${reads.map((item) => {
+    const source = item.source === 'dynamic' ? '按需' : '自动';
+    return `${item.title || item.skillId}（${source}${item.ok === false ? '失败' : ''}）`;
+  }).join('、')}`;
+}
+
+function skillReadTags(event) {
+  return normalizedSkillReads(event).map((item) => {
+    const source = item.source === 'dynamic' ? '按需读取' : '自动注入';
+    const failed = item.ok === false;
+    const title = `${source}${item.description ? `：${item.description}` : ''}`;
+    return `<span class="skill-read ${item.source === 'dynamic' ? 'dynamic' : 'auto'}${failed ? ' failed' : ''}" title="${escapeHtml(title)}">技能 · ${escapeHtml(item.title || item.skillId)}</span>`;
+  }).join('');
+}
+
 function compactToolCall(call) {
   const tool = call.tool || call.id || '工具';
   const status = call.skipped ? '跳过' : call.ok === false ? '失败' : '完成';
@@ -758,6 +784,7 @@ function compactToolCall(call) {
 function compactAgentText(event) {
   const summary = modelSummaryText(event.modelSummary).trim();
   const calls = Array.isArray(event.calls) ? event.calls : [];
+  const skillText = compactSkillReads(event);
   if (event.role === 'planner') {
     const model = event.modelSummary || {};
     const lines = [];
@@ -766,11 +793,13 @@ function compactAgentText(event) {
     if (model.reason) lines.push(`依据：${compactAgentValue(model.reason, 140)}`);
     if (event.planRepair) lines.push('校验：上一版计划无效，已重新规划');
     if (event.fallback) lines.push(`说明：${compactAgentValue(event.fallback, 120)}`);
+    if (skillText) lines.unshift(skillText);
     return lines.join('\n') || '本轮未生成可执行计划';
   }
   if (event.role === 'intent') {
     const model = event.modelSummary || {};
     return [
+      skillText,
       model.goal ? `移交：${compactAgentValue(model.goal, 120)}` : '',
       model.reason ? `依据：${compactAgentValue(model.reason, 140)}` : '',
       summary ? compactAgentValue(summary, 200) : '',
@@ -778,7 +807,7 @@ function compactAgentText(event) {
   }
   if (event.role === 'observer') {
     const toolLines = calls.map(compactToolCall);
-    return [toolLines.length ? toolLines.join('\n') : '', summary ? `观察：${compactAgentValue(summary, 160)}` : '']
+    return [skillText, toolLines.length ? toolLines.join('\n') : '', summary ? `观察：${compactAgentValue(summary, 160)}` : '']
       .filter(Boolean).join('\n') || '本轮没有工具结果';
   }
   if (event.role === 'reflector') {
@@ -794,6 +823,7 @@ function compactAgentText(event) {
           ? '验收规则接管'
           : '';
     return [
+      skillText,
       event.acceptanceGoal ? `验收标准：${compactAgentValue(event.acceptanceGoal, 140)}` : '',
       event.currentFocus ? `当前焦点：${compactAgentValue(event.currentFocus, 120)}` : '',
       progressText ? `验收进度：${progressText}${progress.acceptanceSatisfied ? '（已满足）' : '（未满足）'}` : '',
@@ -1062,6 +1092,7 @@ function resetAgentCards() {
     card.dataset.streamText = '';
     card.classList.remove('active', 'failed');
     card._toolLogs = [];
+    card._skillReads = [];
     const round = card.querySelector('.agent-card-round');
     const state = card.querySelector('.agent-thought-head em');
     const tags = card.querySelector('.agent-thought-tags');
@@ -1121,6 +1152,7 @@ function ensureAgentCard(roundNumber, role) {
 }
 
 function agentTags(event) {
+  const skills = skillReadTags(event);
   if (event.role === 'intent') {
     const tags = [];
     if (event.targetKind) tags.push(`<span>${escapeHtml(targetKindLabel(event.targetKind))}</span>`);
@@ -1128,15 +1160,15 @@ function agentTags(event) {
     if (event.intentSource) tags.push(`<span>${escapeHtml(intentSourceLabel(event.intentSource))}</span>`);
     if (event.hullNumber) tags.push(`<span>舷号 ${escapeHtml(event.hullNumber)}</span>`);
     if (event.description) tags.push(`<span>${escapeHtml(compactAgentValue(event.description, 24))}</span>`);
-    return tags.join('');
+    return tags.join('') + skills;
   }
   if (event.role === 'planner') {
     const tools = (event.calls || []).map((call) => `<span>${escapeHtml(call.tool || '工具')}</span>`).join('');
     const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">计划已纠正</span>` : '';
-    return tools + repair;
+    return skills + tools + repair;
   }
   if (event.role === 'observer') {
-    return (event.calls || []).map((call) => {
+    return skills + (event.calls || []).map((call) => {
       const failed = call.ok === false;
       const error = failed && call.error ? `：${valueText(call.error)}` : '';
       const title = failed && call.error ? ` title="${escapeHtml(valueText(call.error))}"` : '';
@@ -1144,7 +1176,7 @@ function agentTags(event) {
     }).join('');
   }
   if (event.role === 'reflector') {
-    return `<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
+    return `${skills}<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
   }
   return '';
 }
@@ -1295,7 +1327,8 @@ function updateObserverToolEvent(event) {
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
   if (state) state.textContent = event.phase === 'running' ? '执行中' : roleRunningLabel('observer');
-  setAgentStreamText(card, card._toolLogs.map((entry) => entry.text).join('\n'), {
+  const skillLine = compactSkillReads({skillReads: card._skillReads || []});
+  setAgentStreamText(card, [skillLine, card._toolLogs.map((entry) => entry.text).join('\n')].filter(Boolean).join('\n'), {
     cursor: event.phase === 'running' || event.status === 'running',
   });
   scrollThoughtStreamToCard(card);
@@ -1359,6 +1392,9 @@ function appendThoughtEvent(event) {
     card.dataset.streamThinking = '';
     card.dataset.streamToken = '';
     if (event.role === 'observer') card._toolLogs = [];
+    card._skillReads = normalizedSkillReads(event);
+    const tags = card.querySelector('.agent-thought-tags');
+    if (tags) tags.innerHTML = skillReadTags({skillReads: card._skillReads});
     const state = card.querySelector('.agent-thought-head em');
     if (state) state.textContent = roleRunningLabel(event.role);
     setAgentStreamText(card, rolePendingText(event.role), {cursor: true});
@@ -1379,6 +1415,29 @@ function appendThoughtEvent(event) {
     } else if (event.role === 'reflector') {
       setThinkingState(`第 ${event.round || 1} 轮验收中`, 'active');
     }
+  } else if (event.type === 'agent_skill') {
+    const card = ensureAgentCard(event.round, event.role);
+    if (!card) return;
+    const reads = card._skillReads || [];
+    const key = `${event.skillId || ''}:${event.source || 'auto'}`;
+    const index = reads.findIndex((item) => `${item.skillId || ''}:${item.source || 'auto'}` === key);
+    const record = {
+      skillId: event.skillId,
+      title: event.title || event.skillId,
+      description: event.description || '',
+      source: event.source || 'auto',
+      ok: event.ok !== false,
+    };
+    if (index >= 0) reads[index] = record; else reads.push(record);
+    card._skillReads = reads;
+    const tags = card.querySelector('.agent-thought-tags');
+    if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
+    if (event.role === 'observer') {
+      const skillLine = compactSkillReads({skillReads: reads});
+      const toolLines = (card._toolLogs || []).map((entry) => entry.text).join('\n');
+      setAgentStreamText(card, [skillLine, toolLines].filter(Boolean).join('\n') || '正在审阅本轮结果…', {cursor: true});
+    }
+    scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_delta') {
     const card = ensureAgentCard(event.round, event.role);
     if (!card || !event.delta) return;
@@ -1407,8 +1466,9 @@ function appendThoughtEvent(event) {
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
     const isPlanCard = event.role === 'planner' || event.planOnly;
+    card._skillReads = normalizedSkillReads(event);
     const summaryText = event.role === 'observer' && card._toolLogs?.length
-      ? card._toolLogs.map((entry) => entry.text).join('\n')
+      ? [compactSkillReads(event), card._toolLogs.map((entry) => entry.text).join('\n')].filter(Boolean).join('\n')
       : compactAgentText(event) || '';
     const thinkingTrail = String(
       event.thinking
@@ -1437,7 +1497,7 @@ function appendThoughtEvent(event) {
     card.classList.toggle('failed', markFailed);
     let statusLabel = '完成';
     if (isPlanCard && event.planRepair) statusLabel = '已修正';
-    else if (isPlanCard && event.fallback && String(event.fallback).includes('补洞')) statusLabel = '补洞计划';
+    else if (isPlanCard && event.fallback && String(event.fallback).includes('安全回退')) statusLabel = '安全回退';
     else if (isPlanCard && event.fallback) statusLabel = '已用默认计划';
     else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
     else if (hasHardFail) statusLabel = '部分失败';
