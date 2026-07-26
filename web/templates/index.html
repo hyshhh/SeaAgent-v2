@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=7">
+<link rel="stylesheet" href="/static/css/academic.css?v=8">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -36,10 +36,16 @@
         </div>
         <div class="result-area">
           <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
-          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时活跃轨迹监控">
-            <header class="active-track-monitor-head"><div><span>Live Intelligence</span><h3>Active Tracks</h3></div><em><i></i>Live</em></header>
-            <div class="active-track-monitor-stats"><article><span>Active</span><strong id="activeTrackMonitorCount">0</strong></article><article><span>Confirmed</span><strong id="activeTrackConfirmedFrames">0</strong></article></div>
-            <div id="activeTrackMonitorRows" class="active-track-monitor-rows"><div class="active-track-monitor-empty"><span>◇</span><strong>Awaiting tracks</strong><small>Live trajectory states will appear here.</small></div></div>
+          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹匹配信息流">
+            <header class="active-track-monitor-head">
+              <div><span>Track–Match Stream</span><h3>Live Trajectory Intelligence</h3></div>
+              <em><i></i>Live</em>
+            </header>
+            <div class="active-track-monitor-stats">
+              <span>Active <strong id="activeTrackMonitorCount">0</strong></span>
+              <span>Confirmed Frames <strong id="activeTrackConfirmedFrames">0</strong></span>
+            </div>
+            <div id="activeTrackMonitorRows" class="active-track-monitor-rows"><div class="active-track-monitor-empty"><span>⌁</span><strong>Awaiting trajectory matches</strong><small>Track identity, match result and visual description will stream here.</small></div></div>
             <footer><span>Last Sync</span><strong id="activeTrackMonitorSync">Awaiting data</strong></footer>
           </aside>
         </div>

@@ -961,7 +961,7 @@ function renderActiveTrackMonitor(rows) {
   if (confirmed) confirmed.textContent = String(activeRows.reduce((total, row) => total + confirmedFrameCount(row.memoryInfo), 0));
   if (sync) sync.textContent = activeRows[0]?.time || new Date().toLocaleTimeString('en-GB', {hour12: false});
   if (!activeRows.length) {
-    container.innerHTML = '<div class="active-track-monitor-empty"><span>◇</span><strong>Awaiting tracks</strong><small>Live trajectory states will appear here.</small></div>';
+    container.innerHTML = '<div class="active-track-monitor-empty"><span>⌁</span><strong>Awaiting trajectory matches</strong><small>Track identity, match result and visual description will stream here.</small></div>';
     if (sync) sync.textContent = 'Awaiting data';
     return;
   }
@@ -971,8 +971,9 @@ function renderActiveTrackMonitor(rows) {
     const hull = row.hullNumber || 'Unreadable';
     const description = row.description || 'No visual description';
     return `<article class="active-track-live-row">
-      <div class="active-track-live-id"><span>Track</span><strong>#${escHtml(trackId)}</strong></div>
-      <div class="active-track-live-copy"><div><strong><i></i>${escHtml(status)}</strong><time>${escHtml(row.time || '--:--:--')}</time></div><p>${escHtml(hull)}</p><small title="${safeAttr(description)}">${escHtml(description)}</small></div>
+      <time>${escHtml(row.time || '--:--:--')}</time>
+      <div class="active-track-live-line"><strong><i></i>Track #${escHtml(trackId)}</strong><span>${escHtml(status)}</span></div>
+      <p><b>${escHtml(hull)}</b><span aria-hidden="true">—</span><small title="${safeAttr(description)}">${escHtml(description)}</small></p>
     </article>`;
   }).join('');
 }
