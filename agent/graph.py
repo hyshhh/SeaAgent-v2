@@ -359,6 +359,7 @@ def _default_plan_calls(
             "arguments": {
                 "queryImages": {"$ref": f"{registry_scope_id}.registryReferences"},
                 "galleryImages": {"$ref": f"{frame_scope_id}.keyframes"},
+                "registryItems": {"$ref": f"{registry_scope_id}.registryItems"},
                 "topK": broad_top,
             },
             "condition": {"ref": f"{frame_scope_id}.keyframes"},
@@ -382,6 +383,7 @@ def _default_plan_calls(
                     # 只引用参考图列表；执行器会再从 registryItems.references 展开补齐
                     "queryImages": {"$ref": "registry.registryReferences"},
                     "galleryImages": {"$ref": "frames.keyframes"},
+                    "registryItems": {"$ref": "registry.registryItems"},
                     "topK": top,
                 },
             },
@@ -549,6 +551,7 @@ def _build_acceptance_progress(
     match_image_usable: bool,
     has_tool_evidence: bool,
     match_image_blocked: bool = False,
+    registry_coverage_complete: bool | None = None,
 ) -> dict[str, Any]:
     """把验收标准转换为可执行清单，供 Reflect 决定结束或进入下一轮。"""
     mode = _registry_membership_list_mode(intent)
@@ -621,7 +624,9 @@ def _build_acceptance_progress(
         "nextAction": next_action,
         "matchImageAttempted": match_image_attempted,
         "matchImageBlocked": match_image_blocked,
-        "terminalState": "uncertain" if match_image_blocked else None,
+        "registryCoverageComplete": registry_coverage_complete,
+        "registryCoverageLimited": registry_coverage_complete is False,
+        "terminalState": "uncertain" if (match_image_blocked or registry_coverage_complete is False) else None,
         "videoEmptyShortCircuit": bool(mode and track_count == 0 and not pending),
     }
 
@@ -1686,6 +1691,7 @@ def build_sea_agent_graph(
         match_image_attempted = False
         match_image_usable = False
         match_image_blocked = False
+        registry_coverage_complete: bool | None = None
         visual_matched = False
         match_count_total = 0
         confirmed_match_count = 0
@@ -1819,6 +1825,8 @@ def build_sea_agent_graph(
                     visual_matched = True
                 if tool_name == "matchImage":
                     match_image_attempted = not bool(r.get("skipped"))
+                    if "registryCoverageComplete" in res:
+                        registry_coverage_complete = bool(res.get("registryCoverageComplete"))
                     scored_pairs = int(res.get("scoredPairCount") or 0)
                     matches_value = res.get("matches") if isinstance(res.get("matches"), list) else []
                     if r.get("ok") is not False and not res.get("error") and (scored_pairs > 0 or bool(matches_value)):
@@ -1877,6 +1885,7 @@ def build_sea_agent_graph(
             match_image_usable=match_image_usable,
             has_tool_evidence=has_tool_evidence,
             match_image_blocked=match_image_blocked,
+            registry_coverage_complete=registry_coverage_complete,
         )
         user = json.dumps(
             {
@@ -2103,6 +2112,20 @@ def build_sea_agent_graph(
                     "answerHint": state.get("observation_summary") or "",
                     "evidenceGap": "；".join(pending_requirements),
                 }
+        elif (
+            is_registry_out_list
+            and match_image_attempted
+            and registry_coverage_complete is False
+        ):
+            # 库覆盖不足是终止性不确定：不能声称“确定未在库”，也不应重复执行同一轮匹配。
+            handoff = {
+                "handoff": "finish",
+                "state": "uncertain",
+                "decisionSource": "registry_coverage_guard",
+                "reason": "已完成当前可用库图匹配，但先验库视觉覆盖不完整，只能给出待确认候选",
+                "answerHint": state.get("observation_summary") or "",
+                "evidenceGap": "部分先验库项缺少可评分参考图",
+            }
         elif (
             str(handoff.get("state") or "") == "sufficient"
             and bool(hull)

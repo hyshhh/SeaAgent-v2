@@ -143,6 +143,60 @@ class BroadMatchTopKTest(unittest.TestCase):
         self.assertEqual(len(limited["matches"]), 2)
         self.assertEqual([item["matchedTrackId"] for item in limited["matches"]], ["track-1", "track-2"])
 
+
+    def test_match_image_keeps_each_tracks_best_registry_and_ascending_lowest_best_score(self):
+        service = ToolService.__new__(ToolService)
+        service.settings = {"image_match": 0.72, "image_exclude": 0.52}
+        service.vectors = SimpleNamespace(
+            keyframes=_FakeVectorIndex({
+                1: np.array([1.0, 0.0], dtype=np.float32),
+                2: np.array([0.0, 1.0], dtype=np.float32),
+            }),
+            registry=_FakeVectorIndex({
+                101: np.array([0.1, 0.9], dtype=np.float32),
+                102: np.array([1.0, 0.0], dtype=np.float32),
+                103: np.array([0.4, 0.6], dtype=np.float32),
+                104: np.array([0.0, 1.0], dtype=np.float32),
+            }),
+        )
+        refs = [
+            {"referenceId": "ra", "registryId": "ra", "registryVectorId": 101},
+            {"referenceId": "rb", "registryId": "rb", "registryVectorId": 102},
+            {"referenceId": "rc", "registryId": "rc", "registryVectorId": 103},
+            {"referenceId": "rd", "registryId": "rd", "registryVectorId": 104},
+        ]
+        frames = [
+            {"trackId": "t1", "keyframeId": "f1", "keyframeVectorId": 1},
+            {"trackId": "t2", "keyframeId": "f2", "keyframeVectorId": 2},
+        ]
+
+        result = service.matchImage(refs, frames, topK=0, registryItems=[{"registryId": r} for r in ["ra", "rb", "rc", "rd"]])
+
+        self.assertEqual(len(result["matches"]), 2)
+        by_track = {item["matchedTrackId"]: item for item in result["matches"]}
+        self.assertEqual(by_track["t1"]["matchedRegistryId"], "rb")
+        self.assertEqual(by_track["t2"]["matchedRegistryId"], "rd")
+        self.assertEqual([item["matchedTrackId"] for item in result["bestMatchesAscending"]], ["t1", "t2"])
+        self.assertTrue(result["registryCoverageComplete"])
+
+    def test_match_image_downgrades_mismatch_when_registry_coverage_is_incomplete(self):
+        service = ToolService.__new__(ToolService)
+        service.settings = {"image_match": 0.72, "image_exclude": 0.52}
+        service.vectors = SimpleNamespace(
+            keyframes=_FakeVectorIndex({1: np.array([1.0, 0.0], dtype=np.float32)}),
+            registry=_FakeVectorIndex({101: np.array([0.0, 1.0], dtype=np.float32)}),
+        )
+        refs = [{"referenceId": "ra", "registryId": "ra", "registryVectorId": 101}]
+        frames = [{"trackId": "t1", "keyframeId": "f1", "keyframeVectorId": 1}]
+
+        result = service.matchImage(refs, frames, topK=0, registryItems=[{"registryId": "ra"}, {"registryId": "missing"}])
+
+        self.assertEqual(result["matches"][0]["rawScoreBand"], "mismatch")
+        self.assertEqual(result["matches"][0]["scoreBand"], "uncertain")
+        self.assertTrue(result["matches"][0]["coverageLimited"])
+        self.assertFalse(result["registryCoverageComplete"])
+        self.assertIn("missing", result["unscoredRegistryIds"])
+
     def test_run_sea_agent_passes_broad_top_k_separately(self):
         class _FakeApp:
             def invoke(self, initial, config):

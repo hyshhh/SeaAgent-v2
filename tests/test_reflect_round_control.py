@@ -217,6 +217,54 @@ def test_registry_out_synthesis_returns_only_mismatch_tracks():
     assert result["uncertainty"] == "uncertain"
 
 
+
+
+def test_registry_out_synthesis_orders_uncertain_by_lowest_best_score_and_hides_full_registry():
+    controller = AgentController.__new__(AgentController)
+    controller.meta = {
+        "operation": "list",
+        "targetScope": "both",
+        "targetKind": "all",
+        "registryRelation": "out",
+        "questionType": "registry_out_list",
+    }
+    controller.working_scope = {
+        "tracks": {"ok": True, "tracks": [{"trackId": "1"}, {"trackId": "2"}, {"trackId": "3"}]},
+        "registry": {"ok": True, "registryItems": [{"registryId": "r1"}]},
+        "match": {
+            "ok": True,
+            "matchMode": "image_to_image",
+            "registryCoverageComplete": False,
+            "registryCoverageRatio": 0.5,
+            "scoredRegistryCount": 1,
+            "totalRegistryCount": 2,
+            "unscoredRegistryIds": ["r2"],
+            "matches": [
+                {"matchedTrackId": "1", "embeddingScore": 0.709, "scoreBand": "uncertain"},
+                {"matchedTrackId": "2", "embeddingScore": 0.596, "scoreBand": "uncertain"},
+                {"matchedTrackId": "3", "embeddingScore": 0.655, "scoreBand": "uncertain"},
+            ],
+        },
+    }
+    controller.tool_records = [{"tool": "matchImage", "ok": True, "skipped": False}]
+    controller.tool_chain = ["getTrack", "getFrames", "listRegistry", "matchImage"]
+    controller.rounds = []
+    controller.display_limit = 3
+    controller.display_record = {"displayId": "display-test", "mode": "lazy"}
+    controller.display_groups = []
+    controller.session_id = "session-test"
+    controller.question = "有哪些未在库船出现在视频中？"
+    controller.event_handler = None
+    controller._pending_registry_items = []
+
+    result = controller._synthesize("sufficient", "全库对照完成")
+
+    assert [item["trackId"] for item in result["uncertainTracks"]] == ["2", "3", "1"]
+    assert [item["embeddingScore"] for item in result["matches"]] == [0.596, 0.655, 0.709]
+    assert result["registryCoverageComplete"] is False
+    assert result["uncertainty"] == "uncertain"
+    assert "registryItems" not in result
+
 def test_registry_out_synthesis_does_not_show_full_registry_when_video_has_no_tracks():
     controller = AgentController.__new__(AgentController)
     controller.meta = {

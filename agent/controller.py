@@ -259,53 +259,75 @@ class AgentController:
             supported = confirmed or uncertain  # 展示优先确认，否则灰区
 
             if is_registry_out_list:
-                # matchImage 已对每条轨迹选择最佳库项；最佳结果仍为 mismatch 才能列为“未在库”。
-                out_tracks = self._tracks_ranked_by_matches(mismatch, tracks)
-                out_tracks.sort(key=lambda item: float(item.get("embeddingScore") or 0))
-                uncertain_tracks = self._tracks_ranked_by_matches(uncertain, tracks)
+                # 每条轨迹的“最高库匹配分”越低，越可能未在库；所有类别统一按低分优先。
+                ascending = sorted(ranked, key=lambda m: float(m.get("embeddingScore") or m.get("score") or 0))
+                mismatch_ascending = [m for m in ascending if str(m.get("scoreBand") or "") == "mismatch"]
+                uncertain_ascending = [m for m in ascending if str(m.get("scoreBand") or "") == "uncertain"]
+                out_tracks = self._tracks_ranked_by_matches(mismatch_ascending, tracks)
+                uncertain_tracks = self._tracks_ranked_by_matches(uncertain_ascending, tracks)
+                score_order = {
+                    str(m.get("matchedTrackId") or m.get("trackId")): idx
+                    for idx, m in enumerate(ascending)
+                    if m.get("matchedTrackId") is not None or m.get("trackId") is not None
+                }
+                out_tracks.sort(key=lambda item: score_order.get(str(item.get("trackId")), 10**9))
+                uncertain_tracks.sort(key=lambda item: score_order.get(str(item.get("trackId")), 10**9))
                 scored_ids = {
                     str(item.get("matchedTrackId") or item.get("trackId"))
-                    for item in ranked
+                    for item in ascending
                     if item.get("matchedTrackId") is not None or item.get("trackId") is not None
                 }
-                unscored_tracks = [
-                    item for item in tracks
-                    if str(item.get("trackId")) not in scored_ids
-                ]
-                display_tracks = out_tracks or uncertain_tracks or unscored_tracks
+                unscored_tracks = [item for item in tracks if str(item.get("trackId")) not in scored_ids]
+                display_tracks = []
+                seen_display: set[str] = set()
+                for item in out_tracks + uncertain_tracks + unscored_tracks:
+                    key = str(item.get("trackId"))
+                    if key in seen_display:
+                        continue
+                    seen_display.add(key)
+                    display_tracks.append(item)
+                coverage = self._collect_image_match_summary()
+                coverage_complete = bool(coverage.get("registryCoverageComplete"))
+                if not coverage_complete:
+                    # 旧工具结果没有覆盖字段时保持兼容；新结果明确 False 才强制降级。
+                    has_coverage_field = "registryCoverageComplete" in coverage
+                    if has_coverage_field and out_tracks:
+                        uncertain_tracks = out_tracks + uncertain_tracks
+                        out_tracks = []
                 if out_tracks:
                     conclusion = f"发现 {len(out_tracks)} 条未在库候选轨迹"
                     if uncertain_tracks or unscored_tracks:
                         conclusion += f"，另有 {len(uncertain_tracks) + len(unscored_tracks)} 条待确认"
                     finish_state = "uncertain" if (uncertain_tracks or unscored_tracks) else "sufficient"
                 elif uncertain_tracks or unscored_tracks:
-                    conclusion = "尚未确认未在库轨迹，存在灰区或不可评分目标"
+                    conclusion = "尚未确认未在库轨迹，存在灰区、库覆盖不足或不可评分目标"
                     finish_state = "uncertain"
                 else:
                     conclusion = "未发现未在库轨迹"
-                    finish_state = "sufficient"
+                    finish_state = "sufficient" if coverage_complete or not coverage else "uncertain"
                 return self._finish(
                     conclusion,
-                    display_tracks,
-                    answer_hint or "已完成全量轨迹与完整先验库图像对照",
+                    out_tracks,
+                    answer_hint or "已按每条轨迹的最高库匹配分从低到高完成对照",
                     finish_state,
                     extra={
-                        "matches": ranked,
-                        "registryItems": registry_items,
+                        "matches": ascending,
                         "outOfRegistryTracks": out_tracks,
                         "uncertainTracks": uncertain_tracks,
                         "unscoredTracks": unscored_tracks,
                         "outOfRegistryCount": len(out_tracks),
                         "inRegistryMatchCount": len(confirmed),
                         "uncertainMatchCount": len(uncertain_tracks),
+                        "rankingBasis": "每条轨迹对全部先验库项的最高匹配分，按分数从低到高排序",
+                        "registryCoverageComplete": coverage.get("registryCoverageComplete"),
+                        "registryCoverageRatio": coverage.get("registryCoverageRatio"),
+                        "scoredRegistryCount": coverage.get("scoredRegistryCount"),
+                        "totalRegistryCount": coverage.get("totalRegistryCount"),
+                        "unscoredRegistryIds": coverage.get("unscoredRegistryIds") or [],
                         "planMode": "langgraph",
                         "targetScope": "both",
                     },
-                    display={
-                        "tracks": display_tracks,
-                        "includeClips": bool(display_tracks),
-                        "includeRegistry": bool(registry_items),
-                    },
+                    display={"tracks": display_tracks, "includeClips": bool(display_tracks), "includeRegistry": False},
                 )
             # 展示轨迹必须按匹配分排序，禁止用 getTrack 全量列表的 1,2,3 顺序盖住
             hit_tracks = self._tracks_ranked_by_matches(supported, tracks)
@@ -711,6 +733,14 @@ class AgentController:
                 base["scoreBand"] = match.get("scoreBand")
             by_id[rid] = base
         return list(by_id.values())
+
+    def _collect_image_match_summary(self) -> dict[str, Any]:
+        """取得最近一次图像匹配的全库覆盖指标。"""
+        result: dict[str, Any] = {}
+        for value in self.working_scope.values():
+            if isinstance(value, dict) and value.get("matchMode") == "image_to_image":
+                result = value
+        return result
 
     def _collect_registry(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

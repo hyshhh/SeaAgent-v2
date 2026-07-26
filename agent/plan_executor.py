@@ -325,6 +325,10 @@ class PlanExecutor:
             query = cls._collect_registry_images(scope)
         if query:
             args["queryImages"] = query
+        if cls._empty_dependency(args.get("registryItems")):
+            registry_items = cls._collect_registry_items(scope)
+            if registry_items:
+                args["registryItems"] = registry_items
         gallery = args.get("galleryImages")
         if cls._empty_dependency(gallery) or (
             isinstance(gallery, list) and gallery and not any(
@@ -407,6 +411,26 @@ class PlanExecutor:
             seen.add(key)
             unique.append(img)
         return unique
+
+    @staticmethod
+    def _collect_registry_items(scope: dict[str, Any]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for value in (scope or {}).values():
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            candidates = value.get("registryItems")
+            if not isinstance(candidates, list):
+                continue
+            for item in candidates:
+                if not isinstance(item, dict) or item.get("registryId") is None:
+                    continue
+                key = str(item["registryId"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(item)
+        return items
 
     @classmethod
     def _collect_keyframes(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
