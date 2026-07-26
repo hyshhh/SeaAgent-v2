@@ -519,6 +519,49 @@ def _apply_retrieval_limits(
     return normalized
 
 
+def _prepare_plan_calls(
+    calls: Any,
+    intent: dict[str, Any],
+    top_k: int,
+    *,
+    broad_match_top_k: int,
+    broad_match_context: bool = False,
+    replan_hint: str = "",
+    working_scope: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """校验模型计划的工具参数契约；无效计划直接替换为确定性正确链。"""
+    sanitized = PlanExecutor.sanitize_calls(calls)
+    issues = PlanExecutor.call_contract_issues(sanitized)
+    repair = ""
+    if issues:
+        sanitized = _default_plan_calls(
+            intent,
+            top_k,
+            broad_match_top_k=broad_match_top_k,
+            replan_hint=replan_hint,
+            working_scope=working_scope or {},
+        )
+        repair = "；".join(issues)
+    normalized = _apply_retrieval_limits(
+        sanitized,
+        broad_match_top_k=broad_match_top_k,
+        broad_match_context=broad_match_context,
+    )
+    return normalized, repair
+
+
+def _find_tool_contract_failures(records: list[dict[str, Any]], round_number: int) -> list[str]:
+    failures: list[str] = []
+    for record in records or []:
+        if not isinstance(record, dict) or int(record.get("round") or 0) != int(round_number):
+            continue
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        error = str(record.get("error") or result.get("error") or "")
+        if any(token in error for token in ("argument_not_allowed:", "tool_not_allowed:", "unexpected keyword argument")):
+            failures.append(f"{record.get('tool')}: {error}")
+    return failures
+
+
 def _registry_membership_list_mode(intent: dict[str, Any]) -> str:
     """识别“在库/未在库船舶列表”任务，返回 in/out；其他任务返回空字符串。"""
     relation = str(intent.get("registryRelation") or "")
@@ -1290,6 +1333,7 @@ def build_sea_agent_graph(
         )
         use_deterministic_replan = bool(loop_count > 0 and replan_hint and hard_replan)
         used_default_plan = False
+        plan_repair = ""
         out: dict[str, Any] = {
             "handoff": None,
             "text": "",
@@ -1400,13 +1444,24 @@ def build_sea_agent_graph(
             handoff = out.get("handoff") or {}
             target = str(handoff.get("handoff") or "observe")
             plan_hint = str(handoff.get("planHint") or handoff.get("goal") or "")
-            plan_calls = _apply_retrieval_limits(
-                PlanExecutor.sanitize_calls(handoff.get("calls")),
-                broad_match_top_k=_normalize_broad_match_top_k(
-                    state.get("broad_match_top_k", default_broad_match_top_k)
-                ),
-                broad_match_context=bool(_registry_membership_list_mode(intent)),
+            broad_top = _normalize_broad_match_top_k(
+                state.get("broad_match_top_k", default_broad_match_top_k)
             )
+            if target != "reflect":
+                plan_calls, plan_repair = _prepare_plan_calls(
+                    handoff.get("calls"),
+                    intent,
+                    state.get("query_top_k") or default_top_k,
+                    broad_match_top_k=broad_top,
+                    broad_match_context=bool(_registry_membership_list_mode(intent)),
+                    replan_hint=replan_hint,
+                    working_scope=state.get("working_scope") or {},
+                )
+                if plan_repair:
+                    used_default_plan = True
+                    plan_hint = f"[计划纠正] {' → '.join(c['tool'] for c in plan_calls) or '无步骤'}"
+            else:
+                plan_calls = PlanExecutor.sanitize_calls(handoff.get("calls"))
 
             # 模型未给出 calls 时，按意图 + replanHint 生成最小可执行链
             if target != "reflect" and not plan_calls:
@@ -1453,6 +1508,7 @@ def build_sea_agent_graph(
                     {"id": c["id"], "tool": c["tool"], "arguments": c.get("arguments") or {}}
                     for c in plan_calls
                 ],
+                "planRepair": plan_repair,
                 "planBlueprint": [
                     {
                         "stepId": str(c.get("id") or f"step-{i+1}"),
@@ -1494,11 +1550,15 @@ def build_sea_agent_graph(
         """确定性执行 Plan 的 calls（对齐 old Observer），不把完整工具结果塞进 ReAct 对话。"""
         loop_count = int(state.get("loop_count") or 0)
         round_number = loop_count + 1
-        plan_calls = _apply_retrieval_limits(
-            PlanExecutor.sanitize_calls(state.get("plan_calls") or []),
+        plan_calls, _ = _prepare_plan_calls(
+            state.get("plan_calls") or [],
+            state.get("intent") or {},
+            state.get("query_top_k") or default_top_k,
             broad_match_top_k=_normalize_broad_match_top_k(
                 state.get("broad_match_top_k", default_broad_match_top_k)
             ),
+            replan_hint=str((state.get("reflection") or {}).get("nextAction") or state.get("plan_hint") or ""),
+            working_scope=state.get("working_scope") or {},
         )
         if not plan_calls:
             # 无 calls 时再兜底一次
@@ -1682,15 +1742,18 @@ def build_sea_agent_graph(
                 isinstance(r, dict) and r.get("ok") is not False and not r.get("skipped")
                 for r in (state.get("tool_records") or [])
             )
-        tool_names = {
-            str(r.get("tool") or "")
-            for r in (state.get("tool_records") or [])
-            if isinstance(r, dict)
-        }
+        tool_records = [r for r in (state.get("tool_records") or []) if isinstance(r, dict)]
+        tool_names = {str(r.get("tool") or "") for r in tool_records}
         tool_names.update(str(t) for t in (state.get("tool_chain") or []))
-        if tool_names & {"getRegistry", "listRegistry", "matchHull"}:
+        successful_tool_names = {
+            str(r.get("tool") or "")
+            for r in tool_records
+            if r.get("ok") is not False and not r.get("skipped")
+        }
+        tool_contract_failures = _find_tool_contract_failures(tool_records, loop_count)
+        if successful_tool_names & {"getRegistry", "listRegistry", "matchHull"}:
             registry_checked = True
-        registry_listed = "listRegistry" in tool_names
+        registry_listed = "listRegistry" in successful_tool_names
         match_image_attempted = False
         match_image_usable = False
         match_image_blocked = False
@@ -1887,7 +1950,7 @@ def build_sea_agent_graph(
         )
         acceptance_progress = _build_acceptance_progress(
             intent,
-            tool_names,
+            successful_tool_names,
             track_count=track_count,
             registry_checked=registry_checked,
             registry_listed=registry_listed,
@@ -1982,8 +2045,20 @@ def build_sea_agent_graph(
             recursion_limit=8,
         )
         handoff = out.get("handoff") or {}
+        # 工具参数契约错误必须切换为确定性计划，禁止让模型重复同一错误调用。
+        if tool_contract_failures and loop_count < limit:
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "decisionSource": "tool_contract_guard",
+                "reason": "本轮工具参数与后端契约不一致，已阻止重复调用并切换为确定性正确工具链",
+                "nextAction": acceptance_progress.get("nextAction") or intent.get("nextAgentFocus") or "按意图重新生成正确工具链",
+                "evidenceGap": "；".join(tool_contract_failures),
+            }
         # 硬兜底：模型误判 sufficient / 漏写 nextAction 时强制 replan（始终覆盖）
-        if should_replan_registry:
+        elif should_replan_registry:
             handoff = {
                 "handoff": "plan",
                 "replan": True,

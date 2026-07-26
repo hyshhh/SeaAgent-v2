@@ -20,6 +20,19 @@ class PlanExecutor:
         "matchImage": ("queryImages", "galleryImages"),
         "dedupTracks": ("tracks", "keyframesByTrack"),
     }
+    _ALLOWED_ARGUMENTS = {
+        "getTrack": frozenset({"timeRange", "hullNumber", "finalMatchType", "offset", "limit"}),
+        "getFrames": frozenset({"trackIds"}),
+        "getClip": frozenset({"trackId", "timeRange", "scale"}),
+        "getRegistry": frozenset({"hullNumber"}),
+        "listRegistry": frozenset(),
+        "matchHull": frozenset({"hullNumberArray"}),
+        "matchText": frozenset({"description", "galleryImages", "topK"}),
+        "matchImage": frozenset({"queryImages", "galleryImages", "topK", "registryItems"}),
+        "verifyTarget": frozenset({"description", "registryReferenceIds", "keyframeIds", "shipSegmentIds"}),
+        "showEvidence": frozenset({"keyframeIds", "shipSegmentIds", "registryReferenceIds"}),
+        "dedupTracks": frozenset({"tracks", "keyframesByTrack"}),
+    }
 
     def __init__(self, tools: Any):
         self.tools = tools
@@ -63,7 +76,7 @@ class PlanExecutor:
             if tool == "matchImage":
                 arguments = self._resolve(call.get("arguments", {}), working)
                 arguments = self._enrich_match_image_args(arguments, working)
-                argument_issue = self._required_argument_issue(tool, arguments)
+                argument_issue = self._argument_contract_issue(tool, arguments) or self._required_argument_issue(tool, arguments)
                 if argument_issue:
                     result = {
                         "ok": True,
@@ -161,7 +174,7 @@ class PlanExecutor:
             arguments = self._resolve(call.get("arguments", {}), working)
             if tool == "dedupTracks":
                 arguments = self._enrich_dedup_tracks_args(arguments, working)
-            argument_issue = self._required_argument_issue(tool, arguments)
+            argument_issue = self._argument_contract_issue(tool, arguments) or self._required_argument_issue(tool, arguments)
             if argument_issue:
                 result = {"ok": False, "error": argument_issue, "tool": tool}
                 observation = {
@@ -287,6 +300,29 @@ class PlanExecutor:
     @staticmethod
     def _empty_dependency(value: Any) -> bool:
         return value is None or value == "" or (isinstance(value, (list, tuple, set, dict)) and not value)
+
+    @classmethod
+    def _argument_contract_issue(cls, tool: str, arguments: dict[str, Any]) -> str | None:
+        allowed = cls._ALLOWED_ARGUMENTS.get(tool)
+        if allowed is None:
+            return f"tool_not_allowed:{tool}"
+        extra = sorted(str(key) for key in (arguments or {}) if key not in allowed)
+        if extra:
+            return f"argument_not_allowed:{tool}:{','.join(extra)}"
+        return None
+
+    @classmethod
+    def call_contract_issues(cls, calls: list[dict[str, Any]]) -> list[str]:
+        issues: list[str] = []
+        for call in calls or []:
+            if not isinstance(call, dict):
+                continue
+            tool = str(call.get("tool") or "").strip()
+            arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            issue = cls._argument_contract_issue(tool, arguments)
+            if issue:
+                issues.append(issue)
+        return issues
 
     @classmethod
     def _required_argument_issue(cls, tool: str, arguments: dict[str, Any]) -> str | None:
