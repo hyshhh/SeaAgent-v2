@@ -165,8 +165,80 @@ class EvidenceDisplayTest(unittest.TestCase):
         result = controller._synthesize("sufficient", "去重完成")
 
         self.assertEqual(result["count"], 2)
-        self.assertIn("统计结果为 2", result["conclusion"])
+        self.assertIn("统计结果：2 艘船", result["conclusion"])
+        self.assertEqual(result["minimumCount"], 2)
+        self.assertEqual(result["confirmedCount"], 2)
         self.assertEqual(result["planMode"], "langgraph")
+
+    def test_sensitive_count_uses_minimum_and_builds_merge_evidence_groups(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {"questionType": "count", "operation": "count"}
+        controller.session_id = "session-sensitive-count"
+        controller.question = "视频中一共出现多少艘船？"
+        controller.rounds = []
+        controller.tool_chain = []
+        controller.tool_records = []
+        controller.display_record = None
+        controller.display_groups = []
+        controller.display_limit = 3
+        controller.event_handler = None
+        controller.working_scope = {
+            "tracks": {
+                "tracks": [
+                    {"trackId": "1", "startTime": 1, "endTime": 2},
+                    {"trackId": "10", "startTime": 3, "endTime": 4},
+                    {"trackId": "11", "startTime": 5, "endTime": 6},
+                    {"trackId": "20", "startTime": 7, "endTime": 8},
+                ]
+            },
+            "frames": {
+                "keyframesByTrack": {
+                    track_id: {"keyframes": [{"keyframeId": f"frame-{track_id}", "retentionScore": 0.9}]}
+                    for track_id in ("1", "10", "11", "20")
+                }
+            },
+            "dedup": {
+                "trackCount": 30,
+                "minimumShipCount": 15,
+                "confirmedShipCount": 21,
+                "highThresholdShipCount": 21,
+                "lowThresholdShipCount": 15,
+                "countStability": "sensitive",
+                "confirmedMergeGroups": [
+                    {"groupId": "confirmed-1", "trackIds": ["1", "10"], "minimumScore": 0.94}
+                ],
+                "pendingMergeGroups": [
+                    {
+                        "groupId": "pending-1",
+                        "trackIds": ["1", "10", "11"],
+                        "currentGroups": [["1", "10"], ["11"]],
+                        "minimumScore": 0.82,
+                        "possibleReduction": 1,
+                    },
+                    {
+                        "groupId": "pending-2",
+                        "trackIds": ["20", "21"],
+                        "currentGroups": [["20"], ["21"]],
+                        "minimumScore": 0.79,
+                        "possibleReduction": 1,
+                    },
+                ],
+            },
+        }
+
+        result = controller._synthesize("sufficient", "去重完成")
+
+        self.assertEqual(result["count"], 15)
+        self.assertEqual(result["countRange"], {"minimum": 15, "confirmed": 21})
+        self.assertEqual(result["conclusion"], "统计结果：至少 15 艘船")
+        self.assertIn("按高阈值确认合并后为 21 艘", result["answerText"])
+        self.assertIn("最少为 15 艘", result["answerText"])
+        self.assertEqual([group["groupType"] for group in result["displayGroups"]], ["confirmed", "pending", "pending"])
+        self.assertEqual(result["displayGroups"][0]["mergedTrackIds"], ["1", "10"])
+        self.assertEqual(result["displayGroups"][0]["keyframeIds"], ["frame-1", "frame-10"])
+        self.assertNotIn("clipTrackId", result["displayGroups"][0])
+
 
 
 if __name__ == "__main__":

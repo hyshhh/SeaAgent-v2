@@ -726,10 +726,70 @@ class ToolService:
         low = float(self.settings["dedup_low"])
         high_groups = self._complete_link(track_ids, track_map, pair_scores, high)
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
+
+        def _group_minimum_score(group: list[str]) -> float | None:
+            values = [
+                pair_scores.get(tuple(sorted((left_id, right_id))))
+                for index, left_id in enumerate(group)
+                for right_id in group[index + 1:]
+            ]
+            available = [float(value) for value in values if value is not None]
+            return round(min(available), 6) if available else None
+
+        confirmed_merge_groups = [
+            {
+                "groupId": f"confirmed-{index + 1}",
+                "status": "confirmed",
+                "trackIds": list(group),
+                "minimumScore": _group_minimum_score(group),
+                "threshold": high,
+            }
+            for index, group in enumerate(high_groups)
+            if len(group) > 1
+        ]
+        pending_merge_groups = []
+        for group in low_groups:
+            group_set = set(group)
+            current_groups = [list(item) for item in high_groups if set(item).issubset(group_set)]
+            if len(current_groups) <= 1:
+                continue
+            pending_merge_groups.append({
+                "groupId": f"pending-{len(pending_merge_groups) + 1}",
+                "status": "pending",
+                "trackIds": list(group),
+                "currentGroups": current_groups,
+                "minimumScore": _group_minimum_score(group),
+                "thresholdRange": [low, high],
+                "possibleReduction": len(current_groups) - 1,
+            })
+
         gray = [{"trackIds": list(pair), "embeddingScore": round(score, 6)} for pair, score in pair_scores.items() if low < score < high]
         status = "incomplete" if missing else "stable" if len(high_groups) == len(low_groups) else "sensitive"
         scores = [{"trackIds": list(pair), "embeddingScore": round(score, 6)} for pair, score in sorted(pair_scores.items())]
-        return {"ok": True, "trackCount": len(tracks), "highThresholdShipCount": len(high_groups), "lowThresholdShipCount": len(low_groups), "countStability": status, "highGroups": high_groups, "lowGroups": low_groups, "pairScores": scores, "grayPairs": gray, "unsearchableTrackIds": missing}
+        return {
+            "ok": True,
+            "trackCount": len(tracks),
+            # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
+            "minimumShipCount": len(low_groups),
+            "confirmedShipCount": len(high_groups),
+            "maximumShipCount": len(high_groups),
+            "highThresholdShipCount": len(high_groups),
+            "lowThresholdShipCount": len(low_groups),
+            "confirmedMergeCount": len(confirmed_merge_groups),
+            "pendingMergeCount": len(pending_merge_groups),
+            "confirmedReduction": len(tracks) - len(high_groups),
+            "pendingReduction": len(high_groups) - len(low_groups),
+            "countStability": status,
+            "highThreshold": high,
+            "lowThreshold": low,
+            "highGroups": high_groups,
+            "lowGroups": low_groups,
+            "confirmedMergeGroups": confirmed_merge_groups,
+            "pendingMergeGroups": pending_merge_groups,
+            "pairScores": scores,
+            "grayPairs": gray,
+            "unsearchableTrackIds": missing,
+        }
 
     @classmethod
     def _flatten_image_records(cls, value: Any) -> list[dict[str, Any]]:

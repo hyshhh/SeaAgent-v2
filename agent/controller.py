@@ -135,6 +135,7 @@ class AgentController:
         tracks = self._collect_tracks()
         matches = self._collect_matches()
         registry_items = self._collect_registry()
+        dedup_summary = self._collect_dedup_summary()
         count_value = self._collect_count()
         answer_hint = reason
         operation = str(self.meta.get("operation") or "")
@@ -144,6 +145,56 @@ class AgentController:
         hull = str(self.meta.get("hullNumber") or "").strip()
 
         if count_value is not None:
+            if dedup_summary:
+                minimum_count = int(dedup_summary.get("minimumShipCount", count_value))
+                confirmed_count = int(dedup_summary.get("confirmedShipCount", minimum_count))
+                track_count = int(dedup_summary.get("trackCount", len(tracks)))
+                pending_groups = dedup_summary.get("pendingMergeGroups") or []
+                confirmed_groups = dedup_summary.get("confirmedMergeGroups") or []
+                pending_reduction = max(0, confirmed_count - minimum_count)
+                if confirmed_count == minimum_count:
+                    conclusion = f"统计结果：{minimum_count} 艘船"
+                    answer_text = (
+                        f"共获取 {track_count} 条轨迹；高、低阈值去重结果一致，"
+                        f"确认对应 {minimum_count} 艘船。"
+                    )
+                else:
+                    conclusion = f"统计结果：至少 {minimum_count} 艘船"
+                    answer_text = (
+                        f"共获取 {track_count} 条轨迹。按高阈值确认合并后为 {confirmed_count} 艘；"
+                        f"另有 {len(pending_groups)} 组轨迹待确认合并，最多可再减少 {pending_reduction} 艘，"
+                        f"若这些合并关系全部成立，最少为 {minimum_count} 艘。"
+                    )
+                missing = dedup_summary.get("unsearchableTrackIds") or []
+                if missing:
+                    answer_text += f"另有 {len(missing)} 条轨迹缺少可检索关键帧，需结合原视频复核。"
+                public_dedup = {
+                    key: dedup_summary.get(key)
+                    for key in (
+                        "trackCount", "minimumShipCount", "confirmedShipCount", "maximumShipCount",
+                        "confirmedMergeCount", "pendingMergeCount", "confirmedReduction",
+                        "pendingReduction", "countStability", "highThreshold", "lowThreshold",
+                        "confirmedMergeGroups", "pendingMergeGroups", "unsearchableTrackIds",
+                    )
+                    if dedup_summary.get(key) is not None
+                }
+                return self._finish(
+                    conclusion,
+                    tracks[: self.display_limit],
+                    answer_text,
+                    state,
+                    extra={
+                        "count": minimum_count,
+                        "minimumCount": minimum_count,
+                        "confirmedCount": confirmed_count,
+                        "countRange": {"minimum": minimum_count, "confirmed": confirmed_count},
+                        "confirmedMergeGroups": confirmed_groups,
+                        "pendingMergeGroups": pending_groups,
+                        "dedupSummary": public_dedup,
+                        "planMode": "langgraph",
+                    },
+                    display={"dedupSummary": public_dedup, "tracks": tracks},
+                )
             return self._finish(
                 f"统计结果为 {count_value}",
                 tracks[: self.display_limit],
@@ -771,17 +822,82 @@ class AgentController:
                         _add(bucket)
         return items
 
-    def _collect_count(self) -> int | None:
+    def _collect_dedup_summary(self) -> dict[str, Any] | None:
+        """提取最近一次跨轨迹去重结果，并兼容旧版字段。"""
         for value in reversed(list(self.working_scope.values())):
             if not isinstance(value, dict):
                 continue
-            for key in ("highThresholdShipCount", "uniqueCount", "count", "dedupCount", "finalCount"):
+            if not any(
+                value.get(key) is not None
+                for key in (
+                    "minimumShipCount", "confirmedShipCount", "highThresholdShipCount",
+                    "lowThresholdShipCount", "highGroups", "lowGroups",
+                )
+            ):
+                continue
+            summary = dict(value)
+            high_groups = [list(group) for group in (summary.get("highGroups") or []) if isinstance(group, list)]
+            low_groups = [list(group) for group in (summary.get("lowGroups") or high_groups) if isinstance(group, list)]
+            confirmed_count = summary.get("confirmedShipCount", summary.get("highThresholdShipCount"))
+            minimum_count = summary.get("minimumShipCount", summary.get("lowThresholdShipCount"))
+            if confirmed_count is None and high_groups:
+                confirmed_count = len(high_groups)
+            if minimum_count is None and low_groups:
+                minimum_count = len(low_groups)
+            if confirmed_count is None and minimum_count is None:
+                continue
+            if minimum_count is None:
+                minimum_count = confirmed_count
+            if confirmed_count is None:
+                confirmed_count = minimum_count
+            summary["minimumShipCount"] = int(minimum_count)
+            summary["confirmedShipCount"] = int(confirmed_count)
+            summary.setdefault("maximumShipCount", int(confirmed_count))
+            summary.setdefault("highGroups", high_groups)
+            summary.setdefault("lowGroups", low_groups)
+            if not isinstance(summary.get("confirmedMergeGroups"), list):
+                summary["confirmedMergeGroups"] = [
+                    {"groupId": f"confirmed-{index + 1}", "status": "confirmed", "trackIds": group}
+                    for index, group in enumerate(high_groups)
+                    if len(group) > 1
+                ]
+            if not isinstance(summary.get("pendingMergeGroups"), list):
+                pending_groups = []
+                for group in low_groups:
+                    group_set = set(str(item) for item in group)
+                    current_groups = [
+                        list(item) for item in high_groups
+                        if set(str(track_id) for track_id in item).issubset(group_set)
+                    ]
+                    if len(current_groups) > 1:
+                        pending_groups.append({
+                            "groupId": f"pending-{len(pending_groups) + 1}",
+                            "status": "pending",
+                            "trackIds": group,
+                            "currentGroups": current_groups,
+                            "possibleReduction": len(current_groups) - 1,
+                        })
+                summary["pendingMergeGroups"] = pending_groups
+            summary.setdefault("confirmedMergeCount", len(summary.get("confirmedMergeGroups") or []))
+            summary.setdefault("pendingMergeCount", len(summary.get("pendingMergeGroups") or []))
+            summary.setdefault("pendingReduction", max(0, int(confirmed_count) - int(minimum_count)))
+            return summary
+        return None
+
+    def _collect_count(self) -> int | None:
+        dedup = self._collect_dedup_summary()
+        if dedup and dedup.get("minimumShipCount") is not None:
+            return int(dedup["minimumShipCount"])
+        for value in reversed(list(self.working_scope.values())):
+            if not isinstance(value, dict):
+                continue
+            for key in ("minimumShipCount", "lowThresholdShipCount", "uniqueCount", "count", "dedupCount", "finalCount", "highThresholdShipCount"):
                 if value.get(key) is not None:
                     try:
                         return int(value[key])
                     except (TypeError, ValueError):
                         pass
-            groups = value.get("highGroups") or value.get("groups")
+            groups = value.get("lowGroups") or value.get("highGroups") or value.get("groups")
             if isinstance(groups, list) and groups:
                 return len(groups)
         return None
@@ -816,11 +932,14 @@ class AgentController:
             self._pending_registry_items = list(extra["registryItems"])
         else:
             self._pending_registry_items = []
-        self._display_tracks(
-            display.get("tracks") or [],
-            display.get("includeClips", True) is not False,
-            bool(display.get("includeRegistry")),
-        )
+        if isinstance(display.get("dedupSummary"), dict):
+            self._display_dedup_groups(display.get("dedupSummary") or {}, display.get("tracks") or [])
+        else:
+            self._display_tracks(
+                display.get("tracks") or [],
+                display.get("includeClips", True) is not False,
+                bool(display.get("includeRegistry")),
+            )
         primary = [item["trackId"] for item in tracks[: self.display_limit] if item.get("trackId") is not None]
         result = {
             "sessionId": self.session_id,
@@ -852,6 +971,101 @@ class AgentController:
             result.update(extra)
         self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(tracks))
         return result
+
+    def _display_dedup_groups(self, summary: dict[str, Any], tracks: list[dict[str, Any]]) -> None:
+        """按确认合并/待确认合并分组生成关键帧证据，避免继续罗列原始轨迹。"""
+        if self.display_record is not None:
+            return
+        confirmed_groups = [item for item in (summary.get("confirmedMergeGroups") or []) if isinstance(item, dict)]
+        pending_groups = [item for item in (summary.get("pendingMergeGroups") or []) if isinstance(item, dict)]
+        merge_groups = [("confirmed", item) for item in confirmed_groups] + [("pending", item) for item in pending_groups]
+        by_id = {
+            str(item.get("trackId")): dict(item)
+            for item in tracks
+            if isinstance(item, dict) and item.get("trackId") is not None
+        }
+        frame_groups: dict[str, Any] = {}
+        for value in self.working_scope.values():
+            if not isinstance(value, dict):
+                continue
+            grouped = value.get("keyframesByTrack")
+            if isinstance(grouped, dict):
+                frame_groups.update({str(key): bucket for key, bucket in grouped.items()})
+            for track in value.get("tracks") or []:
+                if isinstance(track, dict) and track.get("trackId") is not None:
+                    track_id = str(track["trackId"])
+                    by_id[track_id] = {**by_id.get(track_id, {}), **track}
+
+        all_track_ids = list(dict.fromkeys(
+            str(track_id)
+            for _, group in merge_groups
+            for track_id in (group.get("trackIds") or [])
+            if track_id is not None
+        ))
+        missing_frame_ids = [track_id for track_id in all_track_ids if track_id not in frame_groups]
+        if missing_frame_ids:
+            try:
+                fetched = self.tools.getFrames(missing_frame_ids)
+                if isinstance(fetched, dict) and isinstance(fetched.get("keyframesByTrack"), dict):
+                    frame_groups.update({str(key): bucket for key, bucket in fetched["keyframesByTrack"].items()})
+            except Exception:
+                pass
+
+        def _best_keyframe(track_id: str) -> str | None:
+            bucket = frame_groups.get(track_id, {})
+            if isinstance(bucket, dict):
+                frames = bucket.get("keyframes") if isinstance(bucket.get("keyframes"), list) else []
+            elif isinstance(bucket, list):
+                frames = bucket
+            else:
+                frames = []
+            best = max(
+                (item for item in frames if isinstance(item, dict)),
+                key=lambda item: float(item.get("retentionScore") or 0),
+                default=None,
+            )
+            return str(best["keyframeId"]) if best and best.get("keyframeId") is not None else None
+
+        for group_type, source in merge_groups:
+            track_ids = [str(item) for item in (source.get("trackIds") or []) if item is not None]
+            members = []
+            keyframe_ids = []
+            for track_id in track_ids:
+                track = by_id.get(track_id, {})
+                keyframe_id = _best_keyframe(track_id)
+                if keyframe_id:
+                    keyframe_ids.append(keyframe_id)
+                members.append({
+                    "trackId": track_id,
+                    "keyframeId": keyframe_id,
+                    "hullNumber": track.get("finalHullNumber") or track.get("hullNumber"),
+                    "startTime": track.get("startTime") if track.get("startTime") is not None else track.get("start_time"),
+                    "endTime": track.get("endTime") if track.get("endTime") is not None else track.get("end_time"),
+                })
+            display_group = {
+                "trackId": source.get("groupId") or f"{group_type}-{len(self.display_groups) + 1}",
+                "groupId": source.get("groupId") or f"{group_type}-{len(self.display_groups) + 1}",
+                "groupType": group_type,
+                "mergedTrackIds": track_ids,
+                "currentGroups": source.get("currentGroups") or [],
+                "minimumScore": source.get("minimumScore"),
+                "possibleReduction": source.get("possibleReduction"),
+                "memberEvidence": members,
+                "keyframeIds": list(dict.fromkeys(keyframe_ids)),
+                "shipSegmentIds": [],
+                "registryReferenceIds": [],
+            }
+            self.display_groups.append(display_group)
+
+        self.display_record = {
+            "displayId": f"display-{uuid.uuid4().hex[:12]}",
+            "mode": "dedup-groups",
+            "trackCount": len(all_track_ids),
+            "groupCount": len(self.display_groups),
+            "confirmedGroupCount": len(confirmed_groups),
+            "pendingGroupCount": len(pending_groups),
+            "groups": self.display_groups,
+        }
 
     def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
         if self.display_record is not None:

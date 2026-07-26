@@ -125,3 +125,38 @@ def test_dedup_tracks_accepts_vector_id_when_is_embedded_flag_missing():
     assert result["ok"] is True
     assert result["highThresholdShipCount"] == 1
     assert result["unsearchableTrackIds"] == []
+
+def test_dedup_tracks_returns_confirmed_and_pending_merge_groups():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.9, "dedup_low": 0.7}
+    service.vectors = SimpleNamespace(
+        keyframes=_FakeVectorIndex({
+            1: np.array([1.0, 0.0], dtype=np.float32),
+            2: np.array([1.0, 0.0], dtype=np.float32),
+            3: np.array([0.8, 0.6], dtype=np.float32),
+            4: np.array([0.0, 1.0], dtype=np.float32),
+        })
+    )
+    tracks = [
+        {"trackId": str(index), "startTime": index * 10, "endTime": index * 10 + 1}
+        for index in range(1, 5)
+    ]
+    groups = {
+        str(index): [{
+            "trackId": str(index),
+            "keyframeId": f"frame-{index}",
+            "keyframeVectorId": index,
+            "retentionScore": 0.9,
+        }]
+        for index in range(1, 5)
+    }
+
+    result = service.dedupTracks(tracks, groups)
+
+    assert result["confirmedShipCount"] == 3
+    assert result["minimumShipCount"] == 2
+    assert result["confirmedMergeGroups"][0]["trackIds"] == ["1", "2"]
+    assert result["pendingMergeGroups"][0]["trackIds"] == ["1", "2", "3"]
+    assert result["pendingMergeGroups"][0]["currentGroups"] == [["1", "2"], ["3"]]
+    assert result["pendingReduction"] == 1
+    assert result["countStability"] == "sensitive"

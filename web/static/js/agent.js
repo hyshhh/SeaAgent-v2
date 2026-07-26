@@ -368,6 +368,46 @@ function renderClassifiedResults(result) {
   </section>`;
 }
 
+function dedupTrackIds(group) {
+  return (group?.trackIds || group?.mergedTrackIds || []).map((item) => String(item));
+}
+
+function dedupResultRow(group, kind) {
+  const trackIds = dedupTrackIds(group);
+  const score = Number(group?.minimumScore);
+  const title = trackIds.length ? `轨迹 ${trackIds.join(' + ')}` : '轨迹组';
+  let detail = kind === 'confirmed'
+    ? '高阈值确认属于同一艘船'
+    : '低阈值候选合并，计入最低统计口径';
+  if (kind === 'pending' && Array.isArray(group?.currentGroups) && group.currentGroups.length) {
+    const current = group.currentGroups.map((item) => `[${(item || []).join(' + ')}]`).join(' ↔ ');
+    detail += ` · 当前分组 ${current}`;
+  }
+  if (Number.isFinite(score)) detail += ` · 最低组内相似度 ${score.toFixed(3)}`;
+  return `<div class="classified-result-row dedup-result-row"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
+}
+
+function renderDedupResults(result) {
+  const summary = result?.dedupSummary;
+  if (!summary || result?.operation !== 'count') return '';
+  const confirmed = Array.isArray(summary.confirmedMergeGroups) ? summary.confirmedMergeGroups : [];
+  const pending = Array.isArray(summary.pendingMergeGroups) ? summary.pendingMergeGroups : [];
+  const minimum = Number(summary.minimumShipCount ?? result.minimumCount ?? result.count);
+  const confirmedCount = Number(summary.confirmedShipCount ?? result.confirmedCount ?? minimum);
+  const confirmedRows = confirmed.map((item) => dedupResultRow(item, 'confirmed')).join('');
+  const pendingRows = pending.map((item) => dedupResultRow(item, 'pending')).join('');
+  const range = Number.isFinite(minimum) && Number.isFinite(confirmedCount) && minimum !== confirmedCount
+    ? `<span>统计区间 <b>${minimum}—${confirmedCount}</b> 艘</span>`
+    : `<span>稳定统计 <b>${Number.isFinite(minimum) ? minimum : 0}</b> 艘</span>`;
+  return `<section class="answer-classification dedup-classification">
+    <div class="dedup-count-strip"><strong>最低统计 ${Number.isFinite(minimum) ? minimum : 0} 艘</strong>${range}<em>确认口径 ${Number.isFinite(confirmedCount) ? confirmedCount : 0} 艘</em></div>
+    <div class="answer-result-groups">
+      <section class="answer-result-group confirmed"><header><div><strong>确认合并的轨迹</strong><span>高阈值通过，同组轨迹确定归为一艘船</span></div><em>${confirmed.length} 组</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">暂无需要确认合并的重复轨迹</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>待确认合并的轨迹</strong><span>影响最低船数，需要结合关键帧复核</span></div><em>${pending.length} 组</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">暂无待确认合并关系</div>'}</div></section>
+    </div>
+  </section>`;
+}
+
 function showAgentProcessView() {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
@@ -389,18 +429,21 @@ function renderAgentAnswer(result) {
     ? result.toolRecords
     : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
   const chain = records.map((item) => `<span class="tool-tag">${escapeHtml(formatToolCall(item.round, item))}</span>`).join('');
+  const dedupResults = renderDedupResults(result);
   const classified = renderClassifiedResults(result);
   const fallbackResults = `${renderRegistryHits(result)}${renderTracks(result.tracks, result.questionType)}`;
+  const rawCount = Number(result.count);
   const rawMatchCount = Number(result.matchCount);
-  const hitCount = Number.isFinite(rawMatchCount) ? rawMatchCount : Number((result.tracks || []).length);
+  const hitCount = Number.isFinite(rawCount) ? rawCount : Number.isFinite(rawMatchCount) ? rawMatchCount : Number((result.tracks || []).length);
+  const hitLabel = result?.dedupSummary ? '最低船数' : '命中数量';
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
     <div class="answer-overview">
       <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
       <p>${escapeHtml(result.answerText || '未生成回答')}</p>
-      <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>命中数量：${hitCount}</span></div>
+      <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>${hitLabel}：${hitCount}</span></div>
     </div>
-    <div class="answer-results-scroll">${classified || fallbackResults}</div>
+    <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>
     ${chain ? `<section class="answer-tool-chain"><header><strong>工具调用链</strong><span>${records.length} 条记录</span></header><div class="tool-tags">${chain}</div></section>` : ''}`;
 }
 
@@ -595,6 +638,49 @@ function synchronizeEvidenceColumns(container) {
   }, {passive: true}));
 }
 
+function dedupEvidenceGroup(group, index) {
+  const pending = group?.groupType === 'pending';
+  const trackIds = (group?.mergedTrackIds || []).map((item) => String(item));
+  const members = Array.isArray(group?.memberEvidence) && group.memberEvidence.length
+    ? group.memberEvidence
+    : trackIds.map((trackId, memberIndex) => ({trackId, keyframeId: group?.keyframeIds?.[memberIndex]}));
+  const score = Number(group?.minimumScore);
+  const cards = members.map((member) => {
+    const trackId = String(member?.trackId ?? '-');
+    const item = member?.keyframeId
+      ? evidenceItem('keyframe', member.keyframeId, trackId, {label: `轨迹 ${trackId} · 合并判定关键帧`})
+      : missingEvidence(trackId, 'keyframe');
+    return evidenceCard(item);
+  }).join('');
+  const current = pending && Array.isArray(group?.currentGroups) && group.currentGroups.length
+    ? `<span>当前分组：${escapeHtml(group.currentGroups.map((item) => `[${(item || []).join(' + ')}]`).join(' ↔ '))}</span>`
+    : '';
+  const scoreText = Number.isFinite(score) ? `<em>最低组内相似度 ${score.toFixed(3)}</em>` : '';
+  return `<article class="dedup-evidence-group ${pending ? 'pending' : 'confirmed'}">
+    <header><div><span>${pending ? '待确认合并组' : '确认合并组'} ${index + 1}</span><strong>轨迹 ${escapeHtml(trackIds.join(' + ') || '-')}</strong>${current}</div>${scoreText}</header>
+    <div class="dedup-evidence-members">${cards || '<div class="evidence-track-empty">该组暂无可展示关键帧</div>'}</div>
+  </article>`;
+}
+
+function renderDedupEvidence(container, resultCount, groups, emptyText) {
+  const confirmedAll = groups.filter((group) => group?.groupType === 'confirmed');
+  const pendingAll = groups.filter((group) => group?.groupType === 'pending');
+  const confirmed = limitEvidenceItems(confirmedAll);
+  const pending = limitEvidenceItems(pendingAll);
+  if (resultCount) {
+    resultCount.textContent = `${confirmedAll.length} 组确认合并 · ${pendingAll.length} 组待确认`;
+  }
+  const section = (kind, title, subtitle, rows, total) => `<section class="dedup-evidence-section ${kind}">
+    <header><div><strong>${title}</strong><span>${subtitle}</span></div><em>${rows.length === total ? total : `${rows.length}/${total}`} 组</em></header>
+    <div class="dedup-evidence-section-body">${rows.length ? rows.map(dedupEvidenceGroup).join('') : `<div class="dedup-evidence-empty">${escapeHtml(emptyText)}</div>`}</div>
+  </section>`;
+  container.className = 'evidence-dedup-list';
+  container.innerHTML = `<div class="dedup-evidence-sections">
+    ${section('confirmed', '确认合并证据', '关键帧达到高阈值，确定归并为同一艘船', confirmed, confirmedAll.length)}
+    ${section('pending', '待确认合并证据', '灰区关键帧决定最低船数，需要人工复核', pending, pendingAll.length)}
+  </div>`;
+}
+
 function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
   latestEvidencePayload = {evidence, displayGroups, emptyText, registryItems, result};
   const container = document.getElementById('evidenceGallery');
@@ -603,6 +689,10 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
   visibleEvidenceVideos.forEach((video) => video.pause());
   visibleEvidenceVideos.clear();
   const groups = sortEvidenceGroups(displayGroups || []);
+  if (result?.operation === 'count' && result?.dedupSummary) {
+    renderDedupEvidence(container, resultCount, groups, '暂无该类轨迹合并关系');
+    return;
+  }
   const registryOnly = result?.targetScope === 'registry';
   if (registryOnly) {
     let database = representativeRegistryEvidence(registryItems);
@@ -1154,7 +1244,7 @@ function toolResultText(call) {
   if (Array.isArray(summary.trackIds)) return `${summary.trackIds.length} 个轨迹编号`;
   if (Array.isArray(summary.keyframeIds)) return `${summary.keyframeIds.length} 个关键帧编号`;
   if (Array.isArray(summary.matchedHullNumbers)) return `${summary.matchedHullNumbers.length} 个命中舷号`;
-  if (summary.highThresholdShipCount != null) return `${summary.lowThresholdShipCount}—${summary.highThresholdShipCount} 艘船`;
+  if (summary.highThresholdShipCount != null) return `最低 ${summary.lowThresholdShipCount} 艘 · 确认口径 ${summary.highThresholdShipCount} 艘`;
   if (summary.shipSegmentId) return `片段 ${summary.shipSegmentId}`;
   if (Array.isArray(summary.registryReferenceIds)) return `${summary.registryReferenceIds.length} 张库参考图`;
   if (summary.found === true) return '已找到结果';

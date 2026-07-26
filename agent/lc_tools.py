@@ -261,7 +261,8 @@ def compact_tool_result_for_model(name: str, result: dict[str, Any], *, sample: 
 
     for key in (
         "trackCount", "returnedTrackCount", "totalTrackCount", "keyframeCount", "matchCount",
-        "registryCount", "exactMatchHullCount", "highThresholdShipCount", "lowThresholdShipCount",
+        "registryCount", "exactMatchHullCount", "minimumShipCount", "confirmedShipCount",
+        "highThresholdShipCount", "lowThresholdShipCount", "confirmedMergeCount", "pendingMergeCount",
         "shipSegmentId", "segmentId", "offset", "limit",
     ):
         if result.get(key) is not None and key not in compact:

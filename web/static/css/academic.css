@@ -2520,3 +2520,209 @@ tbody tr:hover td { background: #f2f6f9; }
   #tab-monitoring .pool-status-grid { grid-template-columns: 1fr; }
   #tab-monitoring .pool-table-body { height: 180px; }
 }
+
+/* 数量统计：最低船数、确认合并与待确认合并 */
+.dedup-classification {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 7px;
+}
+.dedup-count-strip {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 9px;
+  color: #536477;
+  border: 1px solid #d6dee5;
+  border-left: 3px solid #1f4e79;
+  border-radius: 3px;
+  background: #f7f9fb;
+  font-size: 9px;
+}
+.dedup-count-strip strong {
+  color: #1f4e79;
+  font-size: 12px;
+}
+.dedup-count-strip span b { color: #314d66; }
+.dedup-count-strip em {
+  margin-left: auto;
+  color: #657586;
+  font-style: normal;
+}
+.dedup-result-row {
+  grid-template-columns: minmax(125px, .9fr) minmax(0, 2.1fr);
+  min-height: 42px;
+}
+.dedup-result-row strong {
+  color: #254d6d;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.dedup-result-row span {
+  min-width: 0;
+  color: #647486;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 数量统计证据：按合并关系组织关键帧，不再按原始轨迹平铺 */
+.evidence-dedup-list {
+  min-height: 0;
+  max-height: 68vh;
+  overflow: auto;
+  padding: 8px;
+  background: #f3f6f8;
+}
+.dedup-evidence-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+.dedup-evidence-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d2dbe3;
+  border-top: 3px solid #36715a;
+  border-radius: 3px;
+  background: #fff;
+}
+.dedup-evidence-section.pending { border-top-color: #9a7429; }
+.dedup-evidence-section > header {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #dce3e9;
+  background: #f1f7f4;
+}
+.dedup-evidence-section.pending > header { background: #fbf7ee; }
+.dedup-evidence-section > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.dedup-evidence-section > header strong {
+  color: #294158;
+  font-size: 12px;
+}
+.dedup-evidence-section > header span {
+  overflow: hidden;
+  color: #798694;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dedup-evidence-section > header em {
+  flex: 0 0 auto;
+  color: #607082;
+  font-size: 8px;
+  font-style: normal;
+}
+.dedup-evidence-section-body {
+  display: grid;
+  gap: 7px;
+  padding: 7px;
+}
+.dedup-evidence-group {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d8e0e6;
+  border-left: 3px solid #4f846d;
+  border-radius: 3px;
+  background: #fff;
+}
+.dedup-evidence-group.pending { border-left-color: #ad8434; }
+.dedup-evidence-group > header {
+  min-height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e0e6eb;
+  background: #f8fafb;
+}
+.dedup-evidence-group > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.dedup-evidence-group > header span {
+  color: #758494;
+  font-size: 7px;
+}
+.dedup-evidence-group > header strong {
+  overflow: hidden;
+  color: #244763;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dedup-evidence-group > header em {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: #526b60;
+  border: 1px solid #c8d8d0;
+  border-radius: 2px;
+  background: #f1f7f4;
+  font-size: 7px;
+  font-style: normal;
+}
+.dedup-evidence-group.pending > header em {
+  color: #796129;
+  border-color: #ded0ad;
+  background: #fbf7ee;
+}
+.dedup-evidence-members {
+  min-width: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(130px, 1fr);
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px;
+  scrollbar-gutter: stable;
+}
+.dedup-evidence-members .evidence-card {
+  min-width: 130px;
+  margin: 0;
+}
+.dedup-evidence-members .evidence-card img,
+.dedup-evidence-members .evidence-placeholder {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  background: #10161d;
+}
+.dedup-evidence-members .evidence-card > span {
+  height: 28px;
+  padding: 7px 8px;
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dedup-evidence-empty {
+  min-height: 110px;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  color: #84909d;
+  background: linear-gradient(#edf1f4 1px, transparent 1px), linear-gradient(90deg, #edf1f4 1px, transparent 1px), #fafbfc;
+  background-size: 26px 26px;
+  font-size: 9px;
+  text-align: center;
+}
+@media (max-width: 1080px) {
+  .dedup-evidence-sections { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .dedup-count-strip { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .dedup-count-strip em { margin-left: 0; }
+  .dedup-result-row { grid-template-columns: 1fr; }
+}
