@@ -35,6 +35,47 @@ def test_registry_out_first_round_enumerates_tracks_before_full_registry_audit()
     assert [call["tool"] for call in calls] == ["getTrack", "getFrames"]
 
 
+def test_registry_out_replan_reuses_existing_tracks_and_frames_with_custom_call_ids():
+    calls = _default_plan_calls(
+        _out_fields(),
+        top_k=1,
+        broad_match_top_k=0,
+        replan_hint="补全 listRegistry 与 matchImage",
+        working_scope={
+            "all_video_tracks": {
+                "ok": True,
+                "trackIds": ["1", "2"],
+                "tracks": [{"trackId": "1"}, {"trackId": "2"}],
+            },
+            "all_video_frames": {
+                "ok": True,
+                "keyframes": [
+                    {"trackId": "1", "keyframeId": "f1"},
+                    {"trackId": "2", "keyframeId": "f2"},
+                ],
+            },
+        },
+    )
+
+    assert [call["tool"] for call in calls] == ["listRegistry", "matchImage"]
+    assert calls[1]["arguments"]["galleryImages"] == {"$ref": "all_video_frames.keyframes"}
+    assert calls[1]["arguments"]["topK"] == 0
+
+
+def test_registry_out_replan_generates_no_registry_or_match_calls_for_known_zero_tracks():
+    calls = _default_plan_calls(
+        _out_fields(),
+        top_k=1,
+        broad_match_top_k=0,
+        replan_hint="补全 listRegistry 与 matchImage",
+        working_scope={
+            "all_video_tracks": {"ok": True, "trackIds": [], "tracks": []},
+        },
+    )
+
+    assert calls == []
+
+
 def test_reflect_acceptance_requests_next_round_when_registry_audit_is_missing():
     fields = _out_fields()
     progress = _build_acceptance_progress(
@@ -56,6 +97,50 @@ def test_reflect_acceptance_requests_next_round_when_registry_audit_is_missing()
     assert progress["pendingRequirements"] == ["已获取完整先验库名录"]
     assert "listRegistry" in progress["nextAction"]
     assert "matchImage" in progress["nextAction"]
+
+
+def test_reflect_acceptance_short_circuits_registry_audit_when_video_has_no_tracks():
+    progress = _build_acceptance_progress(
+        _out_fields(),
+        {"getTrack"},
+        track_count=0,
+        registry_checked=False,
+        registry_listed=False,
+        registry_has_items=False,
+        can_try_visual=False,
+        visual_attempted=False,
+        match_image_attempted=False,
+        match_image_usable=False,
+        has_tool_evidence=True,
+    )
+
+    assert progress["acceptanceSatisfied"] is True
+    assert progress["pendingRequirements"] == []
+    assert progress["videoEmptyShortCircuit"] is True
+    assert "无需 listRegistry" in progress["nextAction"]
+    assert "matchImage" in progress["nextAction"]
+
+
+def test_reflect_acceptance_stops_with_uncertainty_when_image_inputs_are_blocked():
+    progress = _build_acceptance_progress(
+        _out_fields(),
+        {"getTrack", "getFrames", "listRegistry", "matchImage"},
+        track_count=2,
+        registry_checked=True,
+        registry_listed=True,
+        registry_has_items=True,
+        can_try_visual=True,
+        visual_attempted=True,
+        match_image_attempted=True,
+        match_image_usable=False,
+        has_tool_evidence=True,
+        match_image_blocked=True,
+    )
+
+    assert progress["acceptanceSatisfied"] is True
+    assert progress["pendingRequirements"] == []
+    assert progress["terminalState"] == "uncertain"
+    assert progress["matchImageBlocked"] is True
 
 
 def test_reflect_acceptance_passes_after_full_registry_image_match():
@@ -130,6 +215,68 @@ def test_registry_out_synthesis_returns_only_mismatch_tracks():
     assert [item["trackId"] for item in result["uncertainTracks"]] == ["3"]
     assert result["inRegistryMatchCount"] == 1
     assert result["uncertainty"] == "uncertain"
+
+
+def test_registry_out_synthesis_does_not_show_full_registry_when_video_has_no_tracks():
+    controller = AgentController.__new__(AgentController)
+    controller.meta = {
+        "operation": "list",
+        "targetScope": "both",
+        "targetKind": "all",
+        "registryRelation": "out",
+        "questionType": "registry_out_list",
+    }
+    controller.working_scope = {
+        "tracks": {"ok": True, "tracks": [], "trackIds": []},
+        "registry": {
+            "ok": True,
+            "registryItems": [{"registryId": "r1", "hullNumber": "0857"}],
+        },
+        "match": {
+            "ok": True,
+            "matches": [],
+            "error": "argument_missing:galleryImages",
+            "visualAttempted": True,
+        },
+    }
+    controller.tool_records = [
+        {
+            "tool": "getTrack",
+            "ok": True,
+            "skipped": False,
+            "result": {"ok": True, "tracks": [], "trackIds": []},
+            "summary": {"trackCount": 0},
+            "round": 1,
+        },
+        {"tool": "listRegistry", "ok": True, "skipped": False, "round": 2},
+        {
+            "tool": "matchImage",
+            "ok": True,
+            "skipped": False,
+            "error": "argument_missing:galleryImages",
+            "result": {"error": "argument_missing:galleryImages", "matches": []},
+            "round": 2,
+        },
+    ]
+    controller.tool_chain = ["getTrack", "listRegistry", "matchImage"]
+    controller.rounds = []
+    controller.display_limit = 3
+    controller.display_record = None
+    controller.display_groups = []
+    controller.session_id = "session-zero"
+    controller.question = "有哪些未在库船出现在视频中？"
+    controller.event_handler = None
+    controller._pending_registry_items = []
+    controller.tools = type("T", (), {})()
+
+    result = controller._synthesize("uncertain", "旧链路错误地进入了全库匹配")
+
+    assert result["uncertainty"] == "sufficient"
+    assert result["outOfRegistryCount"] == 0
+    assert result["tracks"] == []
+    assert "registryItems" not in result
+    assert result["display"]["registryReferenceCount"] == 0
+    assert "未检测到船舶轨迹" in result["conclusion"]
 
 
 def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_models_fail():
@@ -236,6 +383,85 @@ def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_mode
     assert len(state["rounds"]) == 2
     assert state["final_state"] == "sufficient"
     assert state["tool_chain"] == [
-        "getTrack", "getFrames", "listRegistry", "getTrack", "getFrames", "matchImage"
+        "getTrack", "getFrames", "listRegistry", "matchImage"
+    ]
+    business_records = [
+        record for record in state["tool_records"]
+        if record.get("tool") in {"getTrack", "getFrames", "listRegistry", "matchImage"}
+    ]
+    assert [(record["tool"], record["round"]) for record in business_records] == [
+        ("getTrack", 1), ("getFrames", 1), ("listRegistry", 2), ("matchImage", 2)
     ]
     assert state["reflection"]["acceptanceProgress"]["acceptanceSatisfied"] is True
+
+
+def test_reflect_finishes_registry_out_query_in_first_round_when_video_has_no_tracks():
+    fields = _out_fields()
+    executed_tools = []
+
+    class _FakeAgent:
+        def __init__(self, name):
+            self.name = name
+
+        def stream(self, *args, **kwargs):
+            if self.name == "intent":
+                payload = {"ok": True, "handoff": "plan", "intent": fields, "note": ""}
+                yield "values", {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[{
+                                "name": "handoff_to_plan",
+                                "args": {"intent": fields, "note": ""},
+                                "id": "intent-zero",
+                                "type": "tool_call",
+                            }],
+                        ),
+                        ToolMessage(
+                            content=json.dumps(payload, ensure_ascii=False),
+                            tool_call_id="intent-zero",
+                            name="handoff_to_plan",
+                        ),
+                    ]
+                }
+                return
+            raise RuntimeError(f"{self.name} 模拟未移交")
+
+        def invoke(self, *args, **kwargs):
+            raise RuntimeError(f"{self.name} 模拟未移交")
+
+    class _FakeTools:
+        @staticmethod
+        def execute(name, arguments):
+            executed_tools.append(name)
+            if name == "getTrack":
+                return {
+                    "ok": True,
+                    "trackIds": [],
+                    "tracks": [],
+                    "returnedTrackCount": 0,
+                    "totalTrackCount": 0,
+                }
+            raise AssertionError(f"零轨迹后不应执行 {name}")
+
+    def _fake_create_agent(model, tools, system_prompt, name):
+        return _FakeAgent(name)
+
+    with patch("agent.graph.build_chat_model", return_value=object()), patch(
+        "agent.graph.create_agent", side_effect=_fake_create_agent
+    ):
+        state = run_sea_agent(
+            "有哪些未在库船出现在视频中？",
+            object(),
+            _FakeTools(),
+            max_rounds=5,
+            query_top_k=1,
+            broad_match_top_k=0,
+        )
+
+    assert state["loop_count"] == 1
+    assert state["final_state"] == "sufficient"
+    assert executed_tools == ["getTrack"]
+    assert state["tool_chain"] == ["getTrack"]
+    assert state["reflection"]["acceptanceProgress"]["videoEmptyShortCircuit"] is True
+    assert "无需查询整库" in state["final_reason"] or "没有未在库船舶" in state["final_reason"]

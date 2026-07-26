@@ -290,13 +290,13 @@ def infer_intent_fields(question: str) -> dict[str, Any]:
     if registry_list_q and registry_relation == "out" and not hull:
         expected = "列出视频中出现但未命中任何先验库项的船舶轨迹"
         criteria = (
-            "先完成 getTrack(全量) 与 getFrames 枚举视频目标；再完成 listRegistry 获取完整名录；"
-            "库有参考图时必须执行 matchImage(全部库图↔全部轨迹关键帧)；"
+            "先完成 getTrack(全量) 枚举视频目标；若全量轨迹为 0，直接验收为没有未在库船出现，无需查整库；"
+            "轨迹非空时再完成 getFrames 与 listRegistry，库有参考图时必须执行 matchImage(全部库图↔全部轨迹关键帧)；"
             "仅将最佳库匹配为 mismatch 的轨迹列为未在库，uncertain 必须单列为待确认，禁止只凭轨迹存在下结论"
         )
         focus = (
-            "第一轮只执行 getTrack(全量，不带hullNumber)→getFrames，完整保留视频轨迹候选；"
-            "完成后交由 ReflectAgent 按验收清单决定下一轮动作"
+            "第一轮执行 getTrack(全量，不带hullNumber)，仅在轨迹非空时 getFrames；"
+            "全量轨迹为 0 时结束，否则交由 ReflectAgent 决定下一轮并复用已有轨迹/关键帧补全库匹配"
         )
         question_type = "registry_out_list"
         confidence = 0.88

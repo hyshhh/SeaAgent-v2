@@ -253,6 +253,7 @@ def _default_plan_calls(
     broad_match_top_k: int = 0,
     *,
     replan_hint: str = "",
+    working_scope: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
     hull = str(intent.get("hullNumber") or "").strip()
@@ -309,20 +310,60 @@ def _default_plan_calls(
         return args
 
     def _match_image_from_list_registry() -> list[dict[str, Any]]:
-        return [
-            {"id": "registry", "tool": "listRegistry", "arguments": {}},
-            {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False, all_tracks=True)},
-            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
-            {
-                "id": "match",
-                "tool": "matchImage",
-                "arguments": {
-                    "queryImages": {"$ref": "registry.registryReferences"},
-                    "galleryImages": {"$ref": "frames.keyframes"},
-                    "topK": broad_top,
-                },
+        """生成全库对照链；再规划时复用上一轮已取得的轨迹与关键帧。"""
+        scope = working_scope or {}
+        track_scope_id = "tracks"
+        frame_scope_id = "frames"
+        registry_scope_id = "registry"
+        tracks_result: dict[str, Any] = {}
+        frames_result: dict[str, Any] = {}
+        registry_result: dict[str, Any] = {}
+        # 模型可能使用自定义 call id；按结果字段识别并复用，避免第二轮重复检索。
+        for scope_id, value in reversed(list(scope.items())):
+            if not isinstance(value, dict) or value.get("ok") is False:
+                continue
+            if not tracks_result and isinstance(value.get("trackIds"), list):
+                track_scope_id, tracks_result = str(scope_id), value
+            if not frames_result and isinstance(value.get("keyframes"), list):
+                frame_scope_id, frames_result = str(scope_id), value
+            if not registry_result and isinstance(value.get("registryItems"), list):
+                registry_scope_id, registry_result = str(scope_id), value
+
+        tracks_ready = isinstance(tracks_result.get("trackIds"), list)
+        track_ids = list(tracks_result.get("trackIds") or []) if tracks_ready else []
+        frames_ready = bool(frames_result.get("keyframes"))
+        registry_ready = isinstance(registry_result.get("registryItems"), list)
+
+        # 已明确无轨迹时，图像匹配没有视频侧候选，禁止查整库或制造 galleryImages=null 的伪调用。
+        if tracks_ready and not track_ids:
+            return []
+
+        calls: list[dict[str, Any]] = []
+        if not registry_ready:
+            registry_scope_id = "registry"
+            calls.append({"id": registry_scope_id, "tool": "listRegistry", "arguments": {}})
+        if not tracks_ready:
+            track_scope_id = "tracks"
+            calls.append({"id": track_scope_id, "tool": "getTrack", "arguments": _track_args(with_hull=False, all_tracks=True)})
+        if not frames_ready:
+            frame_scope_id = "frames"
+            calls.append({
+                "id": frame_scope_id,
+                "tool": "getFrames",
+                "arguments": {"trackIds": {"$ref": f"{track_scope_id}.trackIds"}},
+                "condition": {"ref": f"{track_scope_id}.trackIds"},
+            })
+        calls.append({
+            "id": "match",
+            "tool": "matchImage",
+            "arguments": {
+                "queryImages": {"$ref": f"{registry_scope_id}.registryReferences"},
+                "galleryImages": {"$ref": f"{frame_scope_id}.keyframes"},
+                "topK": broad_top,
             },
-        ]
+            "condition": {"ref": f"{frame_scope_id}.keyframes"},
+        })
+        return calls
 
     # 在库船列表（视频中出现的库船）：listRegistry → getTrack → getFrames → matchImage
     if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
@@ -437,6 +478,7 @@ def _apply_retrieval_limits(
     calls: list[dict[str, Any]],
     *,
     broad_match_top_k: int,
+    broad_match_context: bool = False,
 ) -> list[dict[str, Any]]:
     """修正模型计划中的广泛库图匹配参数，避免退回普通检索上限。"""
     has_list_registry = False
@@ -455,7 +497,7 @@ def _apply_retrieval_limits(
             has_unfiltered_track = True
 
     # 只有“全库 + 全轨迹 + 图像匹配”才属于广泛匹配；指定舷号的单库匹配仍沿用普通 topK。
-    if not (has_list_registry and has_unfiltered_track and has_match_image):
+    if not (has_list_registry and has_match_image and (has_unfiltered_track or broad_match_context)):
         return calls
 
     broad_top = _normalize_broad_match_top_k(broad_match_top_k)
@@ -506,6 +548,7 @@ def _build_acceptance_progress(
     match_image_attempted: bool,
     match_image_usable: bool,
     has_tool_evidence: bool,
+    match_image_blocked: bool = False,
 ) -> dict[str, Any]:
     """把验收标准转换为可执行清单，供 Reflect 决定结束或进入下一轮。"""
     mode = _registry_membership_list_mode(intent)
@@ -518,12 +561,18 @@ def _build_acceptance_progress(
         requirements.append({"key": key, "label": label, "completed": bool(completed)})
 
     if mode:
-        require("tracks", "已获取全量视频轨迹", "getTrack" in tool_names)
-        if track_count is None or track_count > 0:
+        # 在库/未在库列表首先取决于视频侧是否存在候选目标。
+        # 全量轨迹明确为 0 时，答案已是“没有船舶出现”，无需查询整库，更不能制造空 gallery 的匹配调用。
+        require("tracks", "已完成全量视频轨迹检索", track_count is not None)
+        if track_count is not None and track_count > 0:
             require("frames", "已获取全部候选轨迹关键帧", "getFrames" in tool_names)
-        require("registry", "已获取完整先验库名录", registry_listed)
-        if registry_listed and registry_has_items and (track_count is None or track_count > 0):
-            require("image_match", "已完成全部库图与全部轨迹关键帧匹配", match_image_usable)
+            require("registry", "已获取完整先验库名录", registry_listed)
+            if registry_listed and registry_has_items:
+                require(
+                    "image_match",
+                    "已完成全部库图与全部轨迹关键帧匹配，或已确认匹配输入不可用",
+                    match_image_usable or match_image_blocked,
+                )
     elif operation == "count":
         require("tracks", "已获取视频轨迹", "getTrack" in tool_names)
         require("frames", "已获取轨迹关键帧", "getFrames" in tool_names)
@@ -543,13 +592,18 @@ def _build_acceptance_progress(
 
     pending = [item["label"] for item in requirements if not item["completed"]]
     completed = [item["label"] for item in requirements if item["completed"]]
-    if mode and pending:
-        if any(item["key"] in {"tracks", "frames"} and not item["completed"] for item in requirements):
-            next_action = "getTrack(全量，不带hullNumber) → getFrames，先完整枚举视频轨迹候选"
+    if mode and track_count == 0 and not pending:
+        next_action = "全量视频轨迹为 0，可直接结束；无需 listRegistry 或 matchImage"
+    elif mode and pending:
+        missing_keys = {item["key"] for item in requirements if not item["completed"]}
+        if "tracks" in missing_keys:
+            next_action = "getTrack(全量，不带hullNumber, limit=0)；仅在 trackIds 非空时继续 getFrames"
+        elif "frames" in missing_keys:
+            next_action = "getFrames(复用已有全量 trackIds) → listRegistry → matchImage"
         else:
             next_action = (
-                "listRegistry → getTrack(全量，不带hullNumber, limit=0) → getFrames → "
-                "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
+                "listRegistry → matchImage(queryImages=$ref registry.registryReferences, "
+                "galleryImages=$ref frames.keyframes)，复用上一轮全量轨迹与关键帧"
             )
     elif pending:
         next_action = str(intent.get("nextAgentFocus") or pending[0])
@@ -566,6 +620,9 @@ def _build_acceptance_progress(
         "acceptanceSatisfied": bool(has_tool_evidence and not pending),
         "nextAction": next_action,
         "matchImageAttempted": match_image_attempted,
+        "matchImageBlocked": match_image_blocked,
+        "terminalState": "uncertain" if match_image_blocked else None,
+        "videoEmptyShortCircuit": bool(mode and track_count == 0 and not pending),
     }
 
 
@@ -1243,6 +1300,7 @@ def build_sea_agent_graph(
                     state.get("broad_match_top_k", default_broad_match_top_k)
                 ),
                 replan_hint=replan_hint,
+                working_scope=state.get("working_scope") or {},
             )
             used_default_plan = True
             plan_hint = f"[补洞计划] {' → '.join(c['tool'] for c in plan_calls)}"
@@ -1312,7 +1370,7 @@ def build_sea_agent_graph(
                         "描述：getTrack → getFrames → matchText(galleryImages=$ref frames.keyframes)",
                         "先验库舷号：getRegistry(hullNumber)",
                         "视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
-                        "广泛多库多轨迹：listRegistry → getTrack(limit=0) → getFrames → matchImage，使用 broadMatchTopK；0 表示不截断，不要复用 queryTopK",
+                        "广泛多库多轨迹：第一轮 getTrack(limit=0)，轨迹非空才 getFrames；第二轮复用已有 frames 执行 listRegistry → matchImage，使用 broadMatchTopK；0 表示不截断，不要复用 queryTopK",
                         "有 replanHint 时优先落实其中点名的工具链",
                         "无法规划时才 handoff_to_reflect",
                     ],
@@ -1339,6 +1397,7 @@ def build_sea_agent_graph(
                 broad_match_top_k=_normalize_broad_match_top_k(
                     state.get("broad_match_top_k", default_broad_match_top_k)
                 ),
+                broad_match_context=bool(_registry_membership_list_mode(intent)),
             )
 
             # 模型未给出 calls 时，按意图 + replanHint 生成最小可执行链
@@ -1350,6 +1409,7 @@ def build_sea_agent_graph(
                         state.get("broad_match_top_k", default_broad_match_top_k)
                     ),
                     replan_hint=replan_hint,
+                    working_scope=state.get("working_scope") or {},
                 )
                 used_default_plan = True
                 if not plan_hint:
@@ -1548,6 +1608,11 @@ def build_sea_agent_graph(
             if cid in (executed.get("scope") or {}):
                 scope_updates[cid] = executed["scope"][cid]
 
+        round_tool_records = [
+            {**record, "round": round_number}
+            for record in (executed.get("tool_records") or [])
+            if isinstance(record, dict)
+        ]
         return Command(
             goto="reflect",
             update={
@@ -1555,7 +1620,7 @@ def build_sea_agent_graph(
                 "observation_summary": observation_summary,
                 "active_agent": "reflect",
                 "tool_chain": executed.get("tool_chain") or [],
-                "tool_records": executed.get("tool_records") or [],
+                "tool_records": round_tool_records,
             },
         )
 
@@ -1618,9 +1683,10 @@ def build_sea_agent_graph(
         if tool_names & {"getRegistry", "listRegistry", "matchHull"}:
             registry_checked = True
         registry_listed = "listRegistry" in tool_names
-        match_image_attempted = "matchImage" in tool_names
+        match_image_attempted = False
         match_image_usable = False
-        visual_matched = bool(tool_names & {"matchImage", "matchText"})
+        match_image_blocked = False
+        visual_matched = False
         match_count_total = 0
         confirmed_match_count = 0
         uncertain_match_count = 0
@@ -1685,6 +1751,31 @@ def build_sea_agent_graph(
                 registry_has_items = True
                 registry_found = True
         track_count = max(track_counts) if track_counts else None
+        membership_mode = _registry_membership_list_mode(intent)
+        if membership_mode:
+            # 列表任务以最后一次成功的“全量、不带舷号”检索为权威，避免旧结果或失败重试污染零轨迹判断。
+            for record in reversed(state.get("tool_records") or []):
+                if (
+                    not isinstance(record, dict)
+                    or record.get("tool") != "getTrack"
+                    or record.get("ok") is False
+                    or record.get("skipped")
+                    or str((record.get("arguments") or {}).get("hullNumber") or "").strip()
+                ):
+                    continue
+                result = record.get("result") if isinstance(record.get("result"), dict) else {}
+                summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+                result_tracks = result.get("tracks")
+                raw_count = len(result_tracks) if isinstance(result_tracks, list) else summary.get("trackCount")
+                if raw_count is None:
+                    raw_count = record.get("trackCount")
+                if raw_count is None:
+                    continue
+                try:
+                    track_count = max(0, int(raw_count))
+                except (TypeError, ValueError):
+                    pass
+                break
         zero_tracks = track_count == 0 if track_count is not None else False
         # 带舷号过滤轨迹为 0，但可能仍有未标舷号的视频目标 → 需要放开 hull 再扫 + matchImage
         hull_filtered_zero = zero_tracks and any(
@@ -1727,11 +1818,13 @@ def build_sea_agent_graph(
                 if isinstance(res.get("matches"), list) or res.get("visualAttempted"):
                     visual_matched = True
                 if tool_name == "matchImage":
-                    match_image_attempted = True
+                    match_image_attempted = not bool(r.get("skipped"))
                     scored_pairs = int(res.get("scoredPairCount") or 0)
                     matches_value = res.get("matches") if isinstance(res.get("matches"), list) else []
                     if r.get("ok") is not False and not res.get("error") and (scored_pairs > 0 or bool(matches_value)):
                         match_image_usable = True
+                    elif not r.get("skipped") and res.get("error"):
+                        match_image_blocked = True
         can_try_visual = bool(registry_searchable or registry_found or registry_has_items)
         should_replan_visual = (
             loop_count < limit
@@ -1743,7 +1836,6 @@ def build_sea_agent_graph(
             and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both", ""})
         )
         # 3) “在库/未在库船列表”必须完成全轨迹与全库对照；Reflect 负责决定是否进入下一轮。
-        membership_mode = _registry_membership_list_mode(intent)
         is_registry_in_list = membership_mode == "in"
         is_registry_out_list = membership_mode == "out"
         should_replan_registry_list_visual = (
@@ -1758,6 +1850,8 @@ def build_sea_agent_graph(
         should_replan_registry_list = (
             loop_count < limit
             and bool(membership_mode)
+            and track_count is not None
+            and track_count > 0
             and not registry_listed
         )
         pure_video_sufficient = (
@@ -1782,6 +1876,7 @@ def build_sea_agent_graph(
             match_image_attempted=match_image_attempted,
             match_image_usable=match_image_usable,
             has_tool_evidence=has_tool_evidence,
+            match_image_blocked=match_image_blocked,
         )
         user = json.dumps(
             {
@@ -1827,8 +1922,9 @@ def build_sea_agent_graph(
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
                     "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
                     "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
-                    "isRegistryInList/isRegistryOutList=true：必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
-                    "shouldReplanRegistryList=true → replan：listRegistry→getTrack(limit=0)→getFrames→matchImage",
+                    "isRegistryInList/isRegistryOutList=true：先检查全量视频轨迹；trackCount=0 时直接验收为没有候选船舶，禁止继续查整库或调用 matchImage",
+                    "trackCount>0 时才必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
+                    "shouldReplanRegistryList=true → replan：复用上一轮 tracks/frames，仅补 listRegistry→matchImage",
                     "acceptanceProgress.pendingRequirements 非空且未到 maxRounds → 必须 replan，并将 nextAction 指向首个关键缺口",
                     "acceptanceProgress.acceptanceSatisfied=true → 才允许 sufficient；未在库任务需把 mismatch 与 uncertain 分开",
                     "禁止在 shouldReplan*=true 时 sufficient",
@@ -1871,6 +1967,24 @@ def build_sea_agent_graph(
                 "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
                 "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
                 "evidenceGap": "未查询先验库",
+            }
+        elif membership_mode and zero_tracks and acceptance_progress.get("acceptanceSatisfied"):
+            relation_label = "在库" if membership_mode == "in" else "未在库"
+            handoff = {
+                "handoff": "finish",
+                "state": "sufficient",
+                "decisionSource": "acceptance_guard",
+                "reason": f"全量视频轨迹为 0，当前范围内没有船舶候选，因此没有{relation_label}船舶出现",
+                "answerHint": "视频侧无候选目标，已按零轨迹短路规则结束；无需查询整库或执行图像匹配",
+            }
+        elif membership_mode and acceptance_progress.get("acceptanceSatisfied") and match_image_blocked:
+            handoff = {
+                "handoff": "finish",
+                "state": "uncertain",
+                "decisionSource": "acceptance_guard",
+                "reason": "视频中存在候选轨迹，但图像匹配缺少有效库图、关键帧或向量，无法可靠判定在库关系",
+                "answerHint": "已停止无收益的重复匹配；仅展示视频候选轨迹，不把完整先验库误当作查询结果",
+                "evidenceGap": "图像匹配输入不可用",
             }
         elif should_replan_visual:
             handoff = {
@@ -1921,11 +2035,16 @@ def build_sea_agent_graph(
             and (handoff.get("handoff") == "plan" or handoff.get("replan") or str(handoff.get("state") or "") == "replan")
         ):
             # 全轨迹、全库与图像匹配均已完成时，不允许无依据地重复相同计划。
+            terminal_state = str(acceptance_progress.get("terminalState") or "sufficient")
             handoff = {
                 "handoff": "finish",
-                "state": "sufficient",
+                "state": terminal_state,
                 "decisionSource": "acceptance_guard",
-                "reason": "全轨迹与全库对照验收已完成，无需重复进入下一轮",
+                "reason": (
+                    "全库对照已到达不可继续的输入边界，停止重复规划"
+                    if terminal_state == "uncertain"
+                    else "全轨迹与全库对照验收已完成，无需重复进入下一轮"
+                ),
                 "answerHint": state.get("observation_summary") or "",
             }
         elif not handoff:

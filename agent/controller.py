@@ -170,10 +170,76 @@ class AgentController:
             isinstance(record, dict) and record.get("tool") == "listRegistry" and record.get("ok") is not False
             for record in self.tool_records
         )
+        successful_track_records = [
+            record for record in self.tool_records
+            if isinstance(record, dict)
+            and record.get("tool") == "getTrack"
+            and record.get("ok") is not False
+            and not record.get("skipped")
+        ]
+        successful_track_counts: list[int] = []
+        for record in successful_track_records:
+            result_tracks = (record.get("result") or {}).get("tracks")
+            raw_count = (
+                len(result_tracks)
+                if isinstance(result_tracks, list)
+                else (record.get("summary") or {}).get("trackCount")
+                if (record.get("summary") or {}).get("trackCount") is not None
+                else record.get("trackCount")
+            )
+            if raw_count is None:
+                continue
+            try:
+                successful_track_counts.append(max(0, int(raw_count)))
+            except (TypeError, ValueError):
+                continue
+        track_query_completed = bool(successful_track_counts)
+        latest_track_count = successful_track_counts[-1] if successful_track_counts else None
         match_image_attempted = any(
             isinstance(record, dict) and record.get("tool") == "matchImage" and not record.get("skipped")
             for record in self.tool_records
         )
+        match_image_blocked = any(
+            isinstance(record, dict)
+            and record.get("tool") == "matchImage"
+            and not record.get("skipped")
+            and bool((record.get("result") or {}).get("error") or record.get("error"))
+            for record in self.tool_records
+        )
+
+        # 在库/未在库列表的首要事实是视频侧候选数。全量轨迹明确为 0 时直接给否定结论，
+        # 禁止把整份先验库展示成“未在库船”，也禁止被空 gallery 的 matchImage 伪失败改成无法确认。
+        if (
+            (is_registry_in_list or is_registry_out_list)
+            and track_query_completed
+            and latest_track_count == 0
+            and not tracks
+        ):
+            relation_label = "在库" if is_registry_in_list else "未在库"
+            extra = {
+                "planMode": "langgraph",
+                "targetScope": "both",
+                "found": False,
+                "matchCount": 0,
+            }
+            if is_registry_out_list:
+                extra.update({
+                    "outOfRegistryTracks": [],
+                    "outOfRegistryCount": 0,
+                    "uncertainTracks": [],
+                    "unscoredTracks": [],
+                })
+            else:
+                extra["inRegistryMatchCount"] = 0
+            return self._finish(
+                f"当前时间范围内未检测到船舶轨迹，因此没有{relation_label}船舶出现",
+                [],
+                answer_hint or "全量视频轨迹为 0，已按视频侧零候选规则结束",
+                "sufficient",
+                extra=extra,
+                display={"tracks": [], "includeClips": False, "includeRegistry": False},
+            )
+
         # 伪描述：用户整句当 matchText 时，命中不可信
         bogus_description = bool(
             description
@@ -400,17 +466,22 @@ class AgentController:
                 )
             if match_image_attempted:
                 return self._finish(
-                    "全库图像匹配未形成可评分结果",
+                    "候选轨迹存在，但全库图像匹配无法形成可评分结果",
                     tracks,
-                    answer_hint or "已尝试 matchImage，但缺少有效库图、关键帧或向量，不能确认哪些轨迹未在库",
+                    answer_hint or (
+                        "图像匹配输入不可用，已停止重复调用；"
+                        "这些轨迹只能列为待确认，不能直接判为未在库"
+                    ),
                     "uncertain",
                     extra={
-                        "registryItems": registry_items,
                         "planMode": "langgraph",
                         "targetScope": "both",
                         "outOfRegistryCount": 0,
+                        "uncertainTracks": tracks,
+                        "matchImageBlocked": match_image_blocked,
+                        "registryItemCount": len(registry_items),
                     },
-                    display={"tracks": tracks, "includeClips": bool(tracks), "includeRegistry": bool(registry_items)},
+                    display={"tracks": tracks, "includeClips": bool(tracks), "includeRegistry": False},
                 )
 
         if registry_items and not tracks:
