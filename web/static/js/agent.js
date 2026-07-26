@@ -448,8 +448,12 @@ function evidenceColumn(title, subtitle, items, emptyText) {
   return `<section class="evidence-column"><div class="evidence-column-head"><strong>${title}</strong><span>${subtitle} · ${count}</span></div><div class="evidence-column-media">${content}</div></section>`;
 }
 
-function evidenceTrackCell(title, subtitle, item) {
-  return `<section class="evidence-track-cell"><div class="evidence-track-cell-head"><strong>${title}</strong><span>${subtitle}</span></div>${evidenceCard(item)}</section>`;
+function evidenceTrackCell(label, item) {
+  return `<section class="evidence-track-cell" role="cell" aria-label="${escapeHtml(label)}" data-label="${escapeHtml(label)}">${evidenceCard(item)}</section>`;
+}
+
+function evidenceTrackTableHead() {
+  return '<div class="evidence-track-table-head" role="row"><span role="columnheader">轨迹信息</span><span role="columnheader">Clip</span><span role="columnheader">Keyframe</span><span role="columnheader">Registry</span></div>';
 }
 
 function evidenceTrackRow(group, index) {
@@ -469,8 +473,8 @@ function evidenceTrackRow(group, index) {
     ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
     : missingEvidence(trackId, 'registry');
   const hull = String(group.hullNumber || '').trim();
-  const badges = `${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>相似度 ${score.toFixed(3)}</em>`}`;
-  return `<article class="evidence-track-row"><div class="evidence-track-row-head"><div><span>Track Evidence</span><strong>Track ${escapeHtml(trackId)}</strong></div><div class="evidence-track-badges">${badges}</div></div><div class="evidence-track-row-media">${evidenceTrackCell('Clip', 'Target Vessel Segment', clip)}${evidenceTrackCell('Keyframe', 'Recognition Frame', keyframe)}${evidenceTrackCell('Registry', 'Database Reference', database)}</div></article>`;
+  const badges = `${hull ? `<em>舷号 ${escapeHtml(hull)}</em>` : '<em>舷号未知</em>'}${score === null ? '' : `<em>相似度 ${score.toFixed(3)}</em>`}`;
+  return `<article class="evidence-track-row" role="row"><div class="evidence-track-meta" role="rowheader"><span>轨迹</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
 }
 
 function representativeRegistryEvidence(registryItems) {
@@ -554,7 +558,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
   if (resultCount) resultCount.textContent = totalRows ? evidenceCountText(rows.length, totalRows, '条结果轨迹') : '无匹配轨迹';
   container.className = 'evidence-track-list';
   container.innerHTML = rows.length
-    ? rows.map((group, index) => evidenceTrackRow(group, index)).join('')
+    ? `<div class="evidence-track-table" role="table" aria-label="多模态轨迹证据">${evidenceTrackTableHead()}<div class="evidence-track-table-body" role="rowgroup">${rows.map((group, index) => evidenceTrackRow(group, index)).join('')}</div></div>`
     : `<div class="evidence-track-empty">${escapeHtml(emptyText)}</div>`;
   observeEvidenceVideos(container);
 }
