@@ -944,7 +944,41 @@ function markSequenceVideo(filename, state) {
   if (label) label.textContent = stateLabels[state] || '待处理';
 }
 
+function confirmedFrameCount(memoryInfo) {
+  const text = String(memoryInfo || '');
+  const match = text.match(/(?:正式帧|Confirmed)\s*(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function renderActiveTrackMonitor(rows) {
+  const container = document.getElementById('activeTrackMonitorRows');
+  const count = document.getElementById('activeTrackMonitorCount');
+  const confirmed = document.getElementById('activeTrackConfirmedFrames');
+  const sync = document.getElementById('activeTrackMonitorSync');
+  if (!container) return;
+  const activeRows = Array.isArray(rows) ? rows : [];
+  if (count) count.textContent = String(activeRows.length);
+  if (confirmed) confirmed.textContent = String(activeRows.reduce((total, row) => total + confirmedFrameCount(row.memoryInfo), 0));
+  if (sync) sync.textContent = activeRows[0]?.time || new Date().toLocaleTimeString('en-GB', {hour12: false});
+  if (!activeRows.length) {
+    container.innerHTML = '<div class="active-track-monitor-empty"><span>◇</span><strong>Awaiting tracks</strong><small>Live trajectory states will appear here.</small></div>';
+    if (sync) sync.textContent = 'Awaiting data';
+    return;
+  }
+  container.innerHTML = activeRows.slice(0, 5).map((row) => {
+    const trackId = row.trackId || '-';
+    const status = pipelineRecordStatus(row.status);
+    const hull = row.hullNumber || 'Unreadable';
+    const description = row.description || 'No visual description';
+    return `<article class="active-track-live-row">
+      <div class="active-track-live-id"><span>Track</span><strong>#${escHtml(trackId)}</strong></div>
+      <div class="active-track-live-copy"><div><strong><i></i>${escHtml(status)}</strong><time>${escHtml(row.time || '--:--:--')}</time></div><p>${escHtml(hull)}</p><small title="${safeAttr(description)}">${escHtml(description)}</small></div>
+    </article>`;
+  }).join('');
+}
+
 function renderTrackRows(rows) {
+  renderActiveTrackMonitor(rows);
   const box = document.getElementById('trackStatusRows');
   if (!box) return;
   if (!rows.length) {
