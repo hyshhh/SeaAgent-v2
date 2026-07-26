@@ -136,7 +136,7 @@ def build_intent_tools(reference_time: datetime | None = None) -> list[Structure
     return [
         StructuredTool.from_function(
             name="parseTime",
-            description="将自然语言时间归一化为 Unix 秒区间 [start, end]",
+            description="仅当用户原问题明确包含时间表达时调用，将该表达归一化为 Unix 秒区间 [start, end]；禁止为无时间问题生成默认范围。",
             func=parse_time,
             args_schema=ParseTimeArgs,
         ),

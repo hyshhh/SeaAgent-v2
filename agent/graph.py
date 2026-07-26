@@ -21,7 +21,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from services import AgentLLMService
-from tools import ToolService
+from tools import ToolService, has_time_expression, normalize_time_range
 from tools.target_parser import infer_intent_fields, normalize_target_items
 
 from .lc_tools import build_intent_tools, build_load_skill_tool
@@ -247,6 +247,58 @@ def _normalize_broad_match_top_k(value: int | None) -> int:
         return 0
 
 
+def _ground_intent_time(
+    intent: dict[str, Any],
+    question: str,
+    *,
+    reference_time: datetime | None = None,
+) -> dict[str, Any]:
+    """只允许用户原问题中明确出现的时间约束进入检索链。"""
+    grounded = dict(intent or {})
+    explicit = has_time_expression(question)
+    grounded["hasExplicitTime"] = explicit
+    if not explicit:
+        # 模型可能把 referenceTime 误当成用户条件，或自行构造“最近一分钟”。
+        # 无显式时间时必须查询全部监控记忆，不能保留任何模型/工具生成的范围。
+        grounded["timeRange"] = None
+        grounded["timeExpression"] = None
+        grounded["queryScope"] = None
+        grounded["timeSource"] = "all_monitoring_time"
+        grounded.pop("timeParseError", None)
+        return grounded
+
+    normalized = normalize_time_range(question, now=reference_time)
+    if normalized is not None:
+        time_range = list(normalized)
+        grounded["timeRange"] = time_range
+        grounded["queryScope"] = time_range
+        grounded["timeSource"] = "question"
+    return grounded
+
+
+def _enforce_plan_time_scope(
+    calls: list[dict[str, Any]],
+    intent: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """落实意图查询范围：无时间不带范围，数量统计不做分页截断。"""
+    strip_time = intent.get("hasExplicitTime") is False
+    count_all = str(intent.get("operation") or "") == "count"
+    if not strip_time and not count_all:
+        return calls
+    guarded: list[dict[str, Any]] = []
+    for call in calls:
+        item = dict(call)
+        arguments = dict(item.get("arguments") or {})
+        if strip_time:
+            arguments.pop("timeRange", None)
+        if count_all and str(item.get("tool") or "") == "getTrack":
+            arguments["offset"] = 0
+            arguments["limit"] = 0
+        item["arguments"] = arguments
+        guarded.append(item)
+    return guarded
+
+
 def _default_plan_calls(
     intent: dict[str, Any],
     top_k: int,
@@ -258,7 +310,7 @@ def _default_plan_calls(
     """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
     hull = str(intent.get("hullNumber") or "").strip()
     description = str(intent.get("description") or "").strip()
-    time_range = intent.get("timeRange")
+    time_range = None if intent.get("hasExplicitTime") is False else intent.get("timeRange")
     operation = str(intent.get("operation") or "list")
     target_scope = str(intent.get("targetScope") or "track_memory")
     top = max(1, min(20, int(top_k or 3)))
@@ -439,7 +491,7 @@ def _default_plan_calls(
             return _match_image_from_list_registry()
         return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
 
-    track_args = _track_args(with_hull=bool(hull))
+    track_args = _track_args(with_hull=bool(hull), all_tracks=operation == "count")
     calls: list[dict[str, Any]] = [
         {"id": "tracks", "tool": "getTrack", "arguments": track_args},
     ]
@@ -547,6 +599,7 @@ def _prepare_plan_calls(
         broad_match_top_k=broad_match_top_k,
         broad_match_context=broad_match_context,
     )
+    normalized = _enforce_plan_time_scope(normalized, intent)
     return normalized, repair
 
 
@@ -1112,6 +1165,7 @@ def build_sea_agent_graph(
                 "task": "识别意图并必须调用 handoff_to_plan",
                 "question": question,
                 "referenceTime": reference_time.isoformat(timespec="seconds"),
+                "timeConstraintRule": "仅当用户原问题明确包含时间表达时才设置 timeRange/timeExpression 或调用 parseTime；未提供时间时两者必须为 null，禁止依据 referenceTime 生成最近一分钟、当前一分钟或任意默认范围。",
                 "queryTopK": state.get("query_top_k") or default_top_k,
                 "broadMatchTopK": _normalize_broad_match_top_k(state.get("broad_match_top_k", default_broad_match_top_k)),
                 "intentSchema": {
@@ -1161,7 +1215,11 @@ def build_sea_agent_graph(
         # 工具结果优先写入时间/多目标/舷号
         for record in out.get("tool_records") or []:
             result = record.get("result") or {}
-            if record.get("tool") == "parseTime" and result.get("timeRange"):
+            if (
+                record.get("tool") == "parseTime"
+                and has_time_expression(question)
+                and result.get("timeRange")
+            ):
                 intent["timeRange"] = result.get("timeRange")
                 intent["timeExpression"] = result.get("expression")
                 intent["timeSource"] = "tool"
@@ -1286,6 +1344,8 @@ def build_sea_agent_graph(
 
         intent.setdefault("question", question)
         intent["selectedSkills"] = out.get("skill_ids") or []
+        # 最终确定性守卫：无论 handoff 或 parseTime 返回什么，时间必须可追溯到用户原问题。
+        intent = _ground_intent_time(intent, question, reference_time=reference_time)
         if intent.get("timeRange") and not intent.get("queryScope"):
             intent["queryScope"] = intent.get("timeRange")
         _emit(
