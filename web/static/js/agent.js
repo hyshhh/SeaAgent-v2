@@ -636,12 +636,26 @@ function compactAgentText(event) {
       .filter(Boolean).join('\n') || '本轮没有工具结果';
   }
   if (event.role === 'reflector') {
+    const progress = event.acceptanceProgress || {};
+    const requirements = Array.isArray(progress.requirements) ? progress.requirements : [];
+    const completedCount = requirements.filter((item) => item && item.completed).length;
+    const progressText = requirements.length ? `${completedCount}/${requirements.length}` : '';
+    const sourceLabel = event.decisionSource === 'model'
+      ? '模型判定'
+      : event.decisionSource === 'acceptance_guard'
+        ? '验收规则纠偏'
+        : event.decisionSource === 'deterministic_fallback'
+          ? '验收规则接管'
+          : '';
     return [
-      event.acceptanceGoal ? `验收：${compactAgentValue(event.acceptanceGoal, 110)}` : '',
-      `判断：${stateLabel(event.state)}`,
-      event.evidenceGap ? `缺口：${compactAgentValue(event.evidenceGap, 100)}` : '',
-      event.nextAction ? `下一步：${compactAgentValue(event.nextAction, 110)}` : '',
-      summary ? `依据：${compactAgentValue(summary, 160)}` : '',
+      event.acceptanceGoal ? `验收标准：${compactAgentValue(event.acceptanceGoal, 140)}` : '',
+      event.currentFocus ? `当前焦点：${compactAgentValue(event.currentFocus, 120)}` : '',
+      progressText ? `验收进度：${progressText}${progress.acceptanceSatisfied ? '（已满足）' : '（未满足）'}` : '',
+      `权威判断：${stateLabel(event.state)}${sourceLabel ? ` · ${sourceLabel}` : ''}`,
+      event.evidenceGap ? `关键缺口：${compactAgentValue(event.evidenceGap, 130)}` : '',
+      event.nextAction ? `下一轮动作：${compactAgentValue(event.nextAction, 150)}` : '',
+      event.nextRound ? `流转：进入第 ${event.nextRound} 轮 PlanAgent` : '',
+      summary ? `判定依据：${compactAgentValue(summary, 180)}` : '',
     ].filter(Boolean).join('\n');
   }
   return summary;
@@ -1069,6 +1083,7 @@ function renderIntentAgentCard(event) {
   const confidenceText = Number.isFinite(confidence) ? confidence.toFixed(2) : '—';
   const route = `${scopeLabel(event.targetScope)} · ${operationLabel(event.operation)} · ${relationLabel(event.registryRelation)}`;
   const acceptance = event.successCriteria || event.expectedOutcome || '按查询目标返回可核验证据';
+  const focus = event.nextAgentFocus || '根据当前验收缺口规划第一轮工具调用';
   if (card) {
     card.className = event.timeParseError ? 'intent-agent-card pending compact' : 'intent-agent-card ready compact';
     card.innerHTML = `
@@ -1076,7 +1091,8 @@ function renderIntentAgentCard(event) {
       <p><strong>目标：</strong>${escapeHtml(String(targetText))}</p>
       <p><strong>路径：</strong>${escapeHtml(route)}</p>
       <p><strong>时间：</strong>${escapeHtml(timeScope)}</p>
-      <p><strong>验收：</strong>${escapeHtml(String(acceptance))}</p>
+      <p><strong>验收标准：</strong>${escapeHtml(String(acceptance))}</p>
+      <p><strong>当前焦点：</strong>${escapeHtml(String(focus))}</p>
     </div>
     <div class="intent-agent-chips compact">
       <span>规则 ${escapeHtml(rules)}</span>
@@ -1093,8 +1109,8 @@ function renderIntentAgentCard(event) {
       `目标：${targetText || '—'}`,
       `路径：${route}`,
       `时间：${timeScope}`,
-      `验收：${acceptance}`,
-      event.nextAgentFocus ? `焦点：${event.nextAgentFocus}` : '',
+      `验收标准：${acceptance}`,
+      `当前焦点：${focus}`,
     ].filter(Boolean).join('\n');
     thought.classList.remove('active');
     thought.classList.toggle('failed', Boolean(event.timeParseError));

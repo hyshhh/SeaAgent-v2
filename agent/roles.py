@@ -33,11 +33,20 @@ def role_system_prompt(
         # tool_chains 已 always 注入；仍保留可选 skill 目录，但不鼓励多轮 loadSkill
         work_style = (
             "## 工作方式\n"
-            "- 你只有 handoff（及可选 loadSkill），不要执行检索工具。\n"
+            "- 你只有 handoff，不要执行检索工具。\n"
             "- **第一动作**优先 handoff_to_observe(goal, calls, planHint)；勿空转。\n"
             "- calls 用 $ref 串联；简体中文写 goal/planHint。\n"
-            "- 可选 skill 仅在确实缺细则时 loadSkill 一次，然后立即 handoff。\n"
+            "- 当前所需规划规则已全部注入，不要尝试加载额外技能。\n"
             "- 禁止只输出 JSON 正文而不调用工具。\n"
+        )
+    elif agent_key == "reflect_agent":
+        work_style = (
+            "## 工作方式\n"
+            "- 你是是否进入下一轮的唯一决策者，只能调用一个移交工具。\n"
+            "- 先读取 acceptanceProgress：pendingRequirements 非空且未达轮次上限时，必须 handoff_to_plan_replan。\n"
+            "- 只有 acceptanceSatisfied=true，或继续检索已无收益时，才允许 handoff_finish。\n"
+            "- nextAction 必须是 PlanAgent 可直接执行的工具链，禁止空泛地写‘继续查询’。\n"
+            "- 第一动作就完成移交，禁止只输出正文、重复调用或加载额外技能。\n"
         )
     prompt = (
         f"你是海域船舶监控系统的{title}。\n"

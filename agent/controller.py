@@ -160,6 +160,20 @@ class AgentController:
             and not hull
             and (target_scope in {"both", "registry"} or question_type == "registry_in_list")
         )
+        is_registry_out_list = (
+            registry_relation == "out"
+            and operation == "list"
+            and not hull
+            and (target_scope in {"both", "registry"} or question_type == "registry_out_list")
+        )
+        registry_listed = any(
+            isinstance(record, dict) and record.get("tool") == "listRegistry" and record.get("ok") is not False
+            for record in self.tool_records
+        )
+        match_image_attempted = any(
+            isinstance(record, dict) and record.get("tool") == "matchImage" and not record.get("skipped")
+            for record in self.tool_records
+        )
         # 伪描述：用户整句当 matchText 时，命中不可信
         bogus_description = bool(
             description
@@ -175,7 +189,58 @@ class AgentController:
             )
             confirmed = [m for m in ranked if str(m.get("scoreBand") or "") == "match"]
             uncertain = [m for m in ranked if str(m.get("scoreBand") or "") == "uncertain"]
+            mismatch = [m for m in ranked if str(m.get("scoreBand") or "") == "mismatch"]
             supported = confirmed or uncertain  # 展示优先确认，否则灰区
+
+            if is_registry_out_list:
+                # matchImage 已对每条轨迹选择最佳库项；最佳结果仍为 mismatch 才能列为“未在库”。
+                out_tracks = self._tracks_ranked_by_matches(mismatch, tracks)
+                out_tracks.sort(key=lambda item: float(item.get("embeddingScore") or 0))
+                uncertain_tracks = self._tracks_ranked_by_matches(uncertain, tracks)
+                scored_ids = {
+                    str(item.get("matchedTrackId") or item.get("trackId"))
+                    for item in ranked
+                    if item.get("matchedTrackId") is not None or item.get("trackId") is not None
+                }
+                unscored_tracks = [
+                    item for item in tracks
+                    if str(item.get("trackId")) not in scored_ids
+                ]
+                display_tracks = out_tracks or uncertain_tracks or unscored_tracks
+                if out_tracks:
+                    conclusion = f"发现 {len(out_tracks)} 条未在库候选轨迹"
+                    if uncertain_tracks or unscored_tracks:
+                        conclusion += f"，另有 {len(uncertain_tracks) + len(unscored_tracks)} 条待确认"
+                    finish_state = "uncertain" if (uncertain_tracks or unscored_tracks) else "sufficient"
+                elif uncertain_tracks or unscored_tracks:
+                    conclusion = "尚未确认未在库轨迹，存在灰区或不可评分目标"
+                    finish_state = "uncertain"
+                else:
+                    conclusion = "未发现未在库轨迹"
+                    finish_state = "sufficient"
+                return self._finish(
+                    conclusion,
+                    display_tracks,
+                    answer_hint or "已完成全量轨迹与完整先验库图像对照",
+                    finish_state,
+                    extra={
+                        "matches": ranked,
+                        "registryItems": registry_items,
+                        "outOfRegistryTracks": out_tracks,
+                        "uncertainTracks": uncertain_tracks,
+                        "unscoredTracks": unscored_tracks,
+                        "outOfRegistryCount": len(out_tracks),
+                        "inRegistryMatchCount": len(confirmed),
+                        "uncertainMatchCount": len(uncertain_tracks),
+                        "planMode": "langgraph",
+                        "targetScope": "both",
+                    },
+                    display={
+                        "tracks": display_tracks,
+                        "includeClips": bool(display_tracks),
+                        "includeRegistry": bool(registry_items),
+                    },
+                )
             # 展示轨迹必须按匹配分排序，禁止用 getTrack 全量列表的 1,2,3 顺序盖住
             hit_tracks = self._tracks_ranked_by_matches(supported, tracks)
             if supported and not (is_registry_in_list and bogus_description):
@@ -317,6 +382,37 @@ class AgentController:
                     "includeRegistry": bool(registry_items),
                 },
             )
+        if is_registry_out_list:
+            if registry_listed and not registry_items:
+                return self._finish(
+                    f"先验库为空，视频中的 {len(tracks)} 条轨迹均属于未在库候选",
+                    tracks,
+                    answer_hint or "已列出完整先验库，当前库内无可对照项",
+                    "sufficient",
+                    extra={
+                        "outOfRegistryTracks": tracks,
+                        "outOfRegistryCount": len(tracks),
+                        "registryItems": [],
+                        "planMode": "langgraph",
+                        "targetScope": "both",
+                    },
+                    display={"tracks": tracks, "includeClips": bool(tracks), "includeRegistry": False},
+                )
+            if match_image_attempted:
+                return self._finish(
+                    "全库图像匹配未形成可评分结果",
+                    tracks,
+                    answer_hint or "已尝试 matchImage，但缺少有效库图、关键帧或向量，不能确认哪些轨迹未在库",
+                    "uncertain",
+                    extra={
+                        "registryItems": registry_items,
+                        "planMode": "langgraph",
+                        "targetScope": "both",
+                        "outOfRegistryCount": 0,
+                    },
+                    display={"tracks": tracks, "includeClips": bool(tracks), "includeRegistry": bool(registry_items)},
+                )
+
         if registry_items and not tracks:
             if not self.meta.get("targetScope"):
                 self.meta["targetScope"] = "registry"
@@ -659,19 +755,22 @@ class AgentController:
     def _display_tracks(self, tracks: list[dict[str, Any]], include_clips: bool = True, include_registry: bool = False) -> None:
         if self.display_record is not None:
             return
+        # 兼容测试、恢复任务等绕过 __init__ 构造的控制器实例。
+        working_scope = getattr(self, "working_scope", {}) or {}
+        pending_registry_items = getattr(self, "_pending_registry_items", []) or []
         unique_tracks = list({str(item["trackId"]): item for item in tracks if item.get("trackId") is not None}.values())
         if not unique_tracks:
             # 仅先验库结果：优先用本轮合成得到的 registry 命中项，再回退 working_scope
             reference_ids: list[str] = []
             preferred_items: list[dict[str, Any]] = []
             if include_registry:
-                preferred_items = list(self._pending_registry_items or [])
+                preferred_items = list(pending_registry_items or [])
                 sources = [preferred_items] if preferred_items else []
                 if not sources:
-                    for value in self.working_scope.values():
+                    for value in working_scope.values():
                         if isinstance(value, dict) and value.get("registryItems"):
                             sources.append(value.get("registryItems") or [])
-                for value in self.working_scope.values():
+                for value in working_scope.values():
                     if not isinstance(value, dict):
                         continue
                     for key in ("registryReferenceIds", "shownRegistryReferenceIds"):
@@ -757,7 +856,7 @@ class AgentController:
             keyframe_ids = self._ids(track, "matchedKeyframeIds", "queryKeyframeIds", "keyframeIds")
             # 匹配结果常只有 trackId+分数，从 working_scope.matches 补关键帧
             if not keyframe_ids:
-                for value in self.working_scope.values():
+                for value in working_scope.values():
                     if not isinstance(value, dict):
                         continue
                     for match in value.get("matches") or []:
@@ -789,7 +888,7 @@ class AgentController:
             # 库参考图：有 matchImage 结果时始终尝试挂上，不依赖 include_registry 开关
             raw_refs = self._ids(track, "matchedRegistryReferenceIds", "registryReferenceIds", "queryRegistryReferenceIds")
             if not raw_refs:
-                for value in self.working_scope.values():
+                for value in working_scope.values():
                     if not isinstance(value, dict):
                         continue
                     for match in value.get("matches") or []:
@@ -816,7 +915,7 @@ class AgentController:
                                         raw_refs.append(str(ref["referenceId"]))
             if include_registry and not raw_refs:
                 # 无匹配参考图时，用本轮库项代表图兜底
-                for item in self._pending_registry_items or self._collect_registry():
+                for item in pending_registry_items or self._collect_registry():
                     if not isinstance(item, dict):
                         continue
                     for ref in item.get("references") or []:

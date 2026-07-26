@@ -99,12 +99,19 @@ class TrackMemoryManager:
         if retention <= 0:
             return []
         protected = {str(value) for value in protected_track_ids}
-        expired = [
-            item["trackId"] for item in self.repository.find_tracks()
-            if str(item["trackId"]) not in protected
-            and float(item["endTime"]) >= 946684800
-            and reference_time - float(item["endTime"]) > retention
-        ]
+        epoch_floor = 946684800.0
+        expired = []
+        for item in self.repository.find_tracks():
+            end_time = float(item["endTime"])
+            # 只比较同一时间域：真实时间戳对真实时间戳，相对视频秒数对相对秒数。
+            # 避免用当前纪元时间误删以视频内秒数保存的轨迹，同时支持离线相对时间清理。
+            same_time_domain = (float(reference_time) >= epoch_floor) == (end_time >= epoch_floor)
+            if (
+                str(item["trackId"]) not in protected
+                and same_time_domain
+                and float(reference_time) - end_time > retention
+            ):
+                expired.append(item["trackId"])
         if not expired:
             return []
         with self._lock:

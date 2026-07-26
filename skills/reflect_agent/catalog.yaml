@@ -9,7 +9,7 @@ skills:
 
   - id: acceptance_audit
     title: 验收进度审计
-    description: acceptanceProgress 与 pendingRequirements 的软参考用法
+    description: acceptanceProgress 与 pendingRequirements 的权威验收规则
     file: acceptance_audit.md
     always: false
     when: 有验收上下文或 pending 项

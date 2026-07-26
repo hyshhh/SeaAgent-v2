@@ -475,6 +475,100 @@ def _apply_retrieval_limits(
     return normalized
 
 
+def _registry_membership_list_mode(intent: dict[str, Any]) -> str:
+    """识别“在库/未在库船舶列表”任务，返回 in/out；其他任务返回空字符串。"""
+    relation = str(intent.get("registryRelation") or "")
+    operation = str(intent.get("operation") or "")
+    hull = str(intent.get("hullNumber") or "").strip()
+    target_scope = str(intent.get("targetScope") or "")
+    question_type = str(intent.get("questionType") or "")
+    expected_type = f"registry_{relation}_list" if relation in {"in", "out"} else ""
+    if (
+        relation in {"in", "out"}
+        and operation == "list"
+        and not hull
+        and (target_scope in {"both", "registry"} or question_type == expected_type)
+    ):
+        return relation
+    return ""
+
+
+def _build_acceptance_progress(
+    intent: dict[str, Any],
+    tool_names: set[str],
+    *,
+    track_count: int | None,
+    registry_checked: bool,
+    registry_listed: bool,
+    registry_has_items: bool,
+    can_try_visual: bool,
+    visual_attempted: bool,
+    match_image_attempted: bool,
+    match_image_usable: bool,
+    has_tool_evidence: bool,
+) -> dict[str, Any]:
+    """把验收标准转换为可执行清单，供 Reflect 决定结束或进入下一轮。"""
+    mode = _registry_membership_list_mode(intent)
+    operation = str(intent.get("operation") or "")
+    hull = str(intent.get("hullNumber") or "").strip()
+    description = str(intent.get("description") or "").strip()
+    requirements: list[dict[str, Any]] = []
+
+    def require(key: str, label: str, completed: bool) -> None:
+        requirements.append({"key": key, "label": label, "completed": bool(completed)})
+
+    if mode:
+        require("tracks", "已获取全量视频轨迹", "getTrack" in tool_names)
+        if track_count is None or track_count > 0:
+            require("frames", "已获取全部候选轨迹关键帧", "getFrames" in tool_names)
+        require("registry", "已获取完整先验库名录", registry_listed)
+        if registry_listed and registry_has_items and (track_count is None or track_count > 0):
+            require("image_match", "已完成全部库图与全部轨迹关键帧匹配", match_image_usable)
+    elif operation == "count":
+        require("tracks", "已获取视频轨迹", "getTrack" in tool_names)
+        require("frames", "已获取轨迹关键帧", "getFrames" in tool_names)
+        require("dedup", "已完成跨轨迹去重计数", "dedupTracks" in tool_names)
+    elif description:
+        require("tracks", "已获取视频轨迹", "getTrack" in tool_names)
+        require("frames", "已获取轨迹关键帧", "getFrames" in tool_names)
+        require("text_match", "已完成描述与关键帧匹配", "matchText" in tool_names)
+    elif hull and operation == "existence":
+        require("tracks", f"已按舷号 {hull} 检索视频轨迹", "getTrack" in tool_names)
+        if track_count == 0:
+            require("registry", "视频未直接命中后已查询先验库", registry_checked)
+            if registry_checked and can_try_visual:
+                require("image_match", "已有库图时已完成库图与视频关键帧匹配", visual_attempted)
+    else:
+        require("tracks", "已完成视频轨迹检索", "getTrack" in tool_names)
+
+    pending = [item["label"] for item in requirements if not item["completed"]]
+    completed = [item["label"] for item in requirements if item["completed"]]
+    if mode and pending:
+        if any(item["key"] in {"tracks", "frames"} and not item["completed"] for item in requirements):
+            next_action = "getTrack(全量，不带hullNumber) → getFrames，先完整枚举视频轨迹候选"
+        else:
+            next_action = (
+                "listRegistry → getTrack(全量，不带hullNumber, limit=0) → getFrames → "
+                "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
+            )
+    elif pending:
+        next_action = str(intent.get("nextAgentFocus") or pending[0])
+    else:
+        next_action = "验收清单已满足，可结束循环"
+
+    return {
+        "mode": mode or "general",
+        "goal": intent.get("successCriteria") or intent.get("expectedOutcome") or "工具证据足以回答用户问题",
+        "currentFocus": intent.get("nextAgentFocus"),
+        "requirements": requirements,
+        "completedRequirements": completed,
+        "pendingRequirements": pending,
+        "acceptanceSatisfied": bool(has_tool_evidence and not pending),
+        "nextAction": next_action,
+        "matchImageAttempted": match_image_attempted,
+    }
+
+
 def build_sea_agent_graph(
     llm: AgentLLMService,
     tools: ToolService,
@@ -490,12 +584,12 @@ def build_sea_agent_graph(
     default_top_k = int(query_top_k or 3)
     default_broad_match_top_k = _normalize_broad_match_top_k(broad_match_top_k)
 
-    @tool("handoff_to_plan", args_schema=HandoffToPlanArgs)
+    @tool("handoff_to_plan", args_schema=HandoffToPlanArgs, return_direct=True)
     def handoff_to_plan(intent: dict[str, Any] | None = None, note: str = "") -> str:
         """意图完成后移交给 PlanAgent。"""
         return json.dumps({"ok": True, "handoff": "plan", "intent": intent or {}, "note": note}, ensure_ascii=False)
 
-    @tool("handoff_to_observe", args_schema=HandoffToObserveArgs)
+    @tool("handoff_to_observe", args_schema=HandoffToObserveArgs, return_direct=True)
     def handoff_to_observe(
         goal: str,
         calls: list[dict[str, Any]] | None = None,
@@ -515,7 +609,7 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    @tool("handoff_to_reflect", args_schema=HandoffToReflectArgs)
+    @tool("handoff_to_reflect", args_schema=HandoffToReflectArgs, return_direct=True)
     def handoff_to_reflect(summary: str, evidenceGap: str = "", proposedState: str = "replan") -> str:
         """观察或规划后移交给 ReflectAgent。"""
         return json.dumps(
@@ -529,7 +623,7 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    @tool("handoff_finish", args_schema=HandoffFinishArgs)
+    @tool("handoff_finish", args_schema=HandoffFinishArgs, return_direct=True)
     def handoff_finish(state: str, reason: str, answerHint: str = "") -> str:
         """证据充分或应结束时退出循环。"""
         return json.dumps(
@@ -537,7 +631,7 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    @tool("handoff_to_plan_replan", args_schema=HandoffReplanArgs)
+    @tool("handoff_to_plan_replan", args_schema=HandoffReplanArgs, return_direct=True)
     def handoff_to_plan_replan(reason: str, nextAction: str = "", evidenceGap: str = "") -> str:
         """Reflect 判定 replan，交回 PlanAgent。"""
         return json.dumps(
@@ -588,9 +682,8 @@ def build_sea_agent_graph(
         build_load_skill_tool("intent_agent", _skill_loader("intent_agent")),
         handoff_to_plan,
     ]
-    # Plan：core+tool_chains 已 always；保留 loadSkill 供可选 recovery/acceptance 自主补载（限 1 次）
+    # Plan 的核心规划、工具链规则已注入；只保留移交工具，避免 loadSkill 空转耗尽递归轮次。
     plan_tools = [
-        build_load_skill_tool("plan_agent", _skill_loader("plan_agent")),
         handoff_to_observe,
         handoff_to_reflect,
     ]
@@ -885,6 +978,8 @@ def build_sea_agent_graph(
                     (state.get("intent") or {}).get("successCriteria")
                     or (state.get("intent") or {}).get("expectedOutcome")
                 )
+                # Reflect 的最终状态可能被验收规则纠偏，延后到 reflect_node 统一发出。
+                end_event["_defer_emit"] = True
             if end_event.get("_defer_emit"):
                 end_event.pop("_defer_emit", None)
             else:
@@ -900,7 +995,7 @@ def build_sea_agent_graph(
             "plan_calls": plan_calls,
             "invoke_error": invoke_error,
             "thinking": thinking,
-            "deferred_end_event": end_event if role == "planner" else None,
+            "deferred_end_event": end_event if role in {"planner", "reflector"} else None,
         }
 
     def intent_node(state: AgentState) -> Command:
@@ -986,9 +1081,9 @@ def build_sea_agent_graph(
         if desc_now and (
             any(token in desc_now for token in ("哪些", "有哪些", "在库", "未在库", "先验库", "库船"))
             or desc_now in {"船", "船舶", "船只", "目标", "对象"}
-            or str(inferred.get("questionType") or "") == "registry_in_list"
+            or str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}
         ):
-            if not inferred.get("description") or str(inferred.get("questionType") or "") == "registry_in_list":
+            if not inferred.get("description") or str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}:
                 intent["description"] = None
         if not intent.get("targetItems") and inferred.get("targetItems"):
             intent["targetItems"] = inferred["targetItems"]
@@ -998,14 +1093,15 @@ def build_sea_agent_graph(
             "existence", "list", "time", "count", "explain",
         }:
             intent["operation"] = inferred.get("operation") or "list"
-        # 在库列表问法：强制 list + in + both（覆盖模型误判 existence/OCR）
-        if str(inferred.get("questionType") or "") == "registry_in_list":
+        # 在库/未在库列表问法：强制 list + 对应关系 + both（覆盖模型误判 existence/OCR）
+        inferred_question_type = str(inferred.get("questionType") or "")
+        if inferred_question_type in {"registry_in_list", "registry_out_list"}:
             intent["operation"] = "list"
-            intent["registryRelation"] = "in"
+            intent["registryRelation"] = "in" if inferred_question_type == "registry_in_list" else "out"
             intent["targetScope"] = inferred.get("targetScope") or "both"
             intent["targetKind"] = "all"
             intent["description"] = None
-            intent["questionType"] = "registry_in_list"
+            intent["questionType"] = inferred_question_type
         if not intent.get("targetKind") or intent.get("targetKind") == "all":
             if intent.get("hullNumber"):
                 intent["targetKind"] = "hull"
@@ -1046,14 +1142,30 @@ def build_sea_agent_graph(
                     return True
             return False
 
+        def _focus_too_vague(value: Any) -> bool:
+            text = str(value or "").strip()
+            if not text:
+                return True
+            if text in {
+                str(intent.get("expectedOutcome") or "").strip(),
+                str(intent.get("successCriteria") or "").strip(),
+            }:
+                return True
+            low = text.lower()
+            if intent.get("registryRelation") in {"in", "out"} and any(
+                token in low for token in ("按需匹配", "工具结果足以", "回答用户问题")
+            ):
+                return True
+            return False
+
         if _acceptance_too_narrow(intent.get("expectedOutcome")) and inferred.get("expectedOutcome"):
             intent["expectedOutcome"] = inferred["expectedOutcome"]
         if _acceptance_too_narrow(intent.get("successCriteria")) and inferred.get("successCriteria"):
             intent["successCriteria"] = inferred["successCriteria"]
-        if _acceptance_too_narrow(intent.get("nextAgentFocus")) and inferred.get("nextAgentFocus"):
+        if _focus_too_vague(intent.get("nextAgentFocus")) and inferred.get("nextAgentFocus"):
             intent["nextAgentFocus"] = inferred["nextAgentFocus"]
-        # registry_in_list 始终用规则验收覆盖模型 OCR 写法
-        if str(inferred.get("questionType") or "") == "registry_in_list":
+        # 在库/未在库列表始终使用规则生成的验收与阶段焦点，避免两者混成同一句泛化描述
+        if str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}:
             for key in ("expectedOutcome", "successCriteria", "nextAgentFocus"):
                 if inferred.get(key):
                     intent[key] = inferred[key]
@@ -1505,6 +1617,9 @@ def build_sea_agent_graph(
         tool_names.update(str(t) for t in (state.get("tool_chain") or []))
         if tool_names & {"getRegistry", "listRegistry", "matchHull"}:
             registry_checked = True
+        registry_listed = "listRegistry" in tool_names
+        match_image_attempted = "matchImage" in tool_names
+        match_image_usable = False
         visual_matched = bool(tool_names & {"matchImage", "matchText"})
         match_count_total = 0
         confirmed_match_count = 0
@@ -1569,7 +1684,8 @@ def build_sea_agent_graph(
             if (res.get("registryItemCount") or summary.get("registryItemCount") or 0) > 0:
                 registry_has_items = True
                 registry_found = True
-        zero_tracks = bool(track_counts) and max(track_counts) == 0
+        track_count = max(track_counts) if track_counts else None
+        zero_tracks = track_count == 0 if track_count is not None else False
         # 带舷号过滤轨迹为 0，但可能仍有未标舷号的视频目标 → 需要放开 hull 再扫 + matchImage
         hull_filtered_zero = zero_tracks and any(
             isinstance(r, dict)
@@ -1604,11 +1720,18 @@ def build_sea_agent_graph(
         for r in state.get("tool_records") or []:
             if not isinstance(r, dict):
                 continue
-            if r.get("tool") in {"matchImage", "matchText"}:
+            tool_name = str(r.get("tool") or "")
+            if tool_name in {"matchImage", "matchText"}:
                 visual_attempted = True
                 res = r.get("result") if isinstance(r.get("result"), dict) else {}
                 if isinstance(res.get("matches"), list) or res.get("visualAttempted"):
                     visual_matched = True
+                if tool_name == "matchImage":
+                    match_image_attempted = True
+                    scored_pairs = int(res.get("scoredPairCount") or 0)
+                    matches_value = res.get("matches") if isinstance(res.get("matches"), list) else []
+                    if r.get("ok") is not False and not res.get("error") and (scored_pairs > 0 or bool(matches_value)):
+                        match_image_usable = True
         can_try_visual = bool(registry_searchable or registry_found or registry_has_items)
         should_replan_visual = (
             loop_count < limit
@@ -1619,28 +1742,23 @@ def build_sea_agent_graph(
             and op in {"existence", "list", "explain", "time", ""}
             and (zero_tracks or hull_filtered_zero or target_scope in {"track_memory", "both", ""})
         )
-        # 3) 「有哪些在库船出现」：已 list 库但未做 matchImage，应 replan 视觉对照
-        is_registry_in_list = (
-            registry_relation == "in"
-            and op == "list"
-            and not hull
-            and (
-                target_scope in {"both", "registry"}
-                or str(intent.get("questionType") or "") == "registry_in_list"
-            )
-        )
+        # 3) “在库/未在库船列表”必须完成全轨迹与全库对照；Reflect 负责决定是否进入下一轮。
+        membership_mode = _registry_membership_list_mode(intent)
+        is_registry_in_list = membership_mode == "in"
+        is_registry_out_list = membership_mode == "out"
         should_replan_registry_list_visual = (
             loop_count < limit
-            and is_registry_in_list
-            and registry_checked
-            and can_try_visual
-            and not visual_attempted
+            and bool(membership_mode)
+            and registry_listed
+            and registry_has_items
+            and (track_count is None or track_count > 0)
+            and not match_image_attempted
         )
-        # 4) 在库列表完全没查库
+        # 4) 在库/未在库列表尚未取得完整库名录
         should_replan_registry_list = (
             loop_count < limit
-            and is_registry_in_list
-            and not registry_checked
+            and bool(membership_mode)
+            and not registry_listed
         )
         pure_video_sufficient = (
             has_tool_evidence
@@ -1652,6 +1770,19 @@ def build_sea_agent_graph(
             and registry_checked
             and (visual_attempted or not can_try_visual)
         )
+        acceptance_progress = _build_acceptance_progress(
+            intent,
+            tool_names,
+            track_count=track_count,
+            registry_checked=registry_checked,
+            registry_listed=registry_listed,
+            registry_has_items=registry_has_items,
+            can_try_visual=can_try_visual,
+            visual_attempted=visual_attempted,
+            match_image_attempted=match_image_attempted,
+            match_image_usable=match_image_usable,
+            has_tool_evidence=has_tool_evidence,
+        )
         user = json.dumps(
             {
                 "task": "判定是否退出。replan→handoff_to_plan_replan；否则必须 handoff_finish",
@@ -1659,6 +1790,7 @@ def build_sea_agent_graph(
                 "expectedOutcome": intent.get("expectedOutcome"),
                 "successCriteria": intent.get("successCriteria"),
                 "nextAgentFocus": intent.get("nextAgentFocus"),
+                "acceptanceProgress": acceptance_progress,
                 "targetScope": target_scope,
                 "registryRelation": registry_relation,
                 "hullNumber": hull or None,
@@ -1681,6 +1813,11 @@ def build_sea_agent_graph(
                 "shouldReplanVisual": should_replan_visual or should_replan_registry_list_visual,
                 "shouldReplanRegistryList": should_replan_registry_list,
                 "isRegistryInList": is_registry_in_list,
+                "isRegistryOutList": is_registry_out_list,
+                "membershipMode": membership_mode or None,
+                "registryListed": registry_listed,
+                "matchImageAttempted": match_image_attempted,
+                "matchImageUsable": match_image_usable,
                 "zeroTracks": zero_tracks,
                 "hullFilteredZero": hull_filtered_zero,
                 "toolChain": list(tool_names)[:20],
@@ -1690,8 +1827,10 @@ def build_sea_agent_graph(
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
                     "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
                     "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
-                    "isRegistryInList=true：问题是「哪些在库船出现」，禁止用 matchText(用户问句) 当证据",
-                    "shouldReplanRegistryList=true → replan：listRegistry→getTrack→getFrames→matchImage",
+                    "isRegistryInList/isRegistryOutList=true：必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
+                    "shouldReplanRegistryList=true → replan：listRegistry→getTrack(limit=0)→getFrames→matchImage",
+                    "acceptanceProgress.pendingRequirements 非空且未到 maxRounds → 必须 replan，并将 nextAction 指向首个关键缺口",
+                    "acceptanceProgress.acceptanceSatisfied=true → 才允许 sufficient；未在库任务需把 mismatch 与 uncertain 分开",
                     "禁止在 shouldReplan*=true 时 sufficient",
                     "visualAttempted=true 或 matchCount 已给出 → 勿再要求 matchImage",
                     "canTryVisual=false（无可搜库图）且已查库 → 可 sufficient「库有记录但无法视觉匹配/视频未发现」",
@@ -1711,7 +1850,6 @@ def build_sea_agent_graph(
             "反思判定智能体（ReflectAgent）",
             REFLECT_RESPONSIBILITY,
             [
-                build_load_skill_tool("reflect_agent", _skill_loader("reflect_agent")),
                 handoff_to_plan_replan,
                 handoff_finish,
             ],
@@ -1719,7 +1857,7 @@ def build_sea_agent_graph(
             user,
             role="reflector",
             round_number=loop_count,
-            recursion_limit=6,
+            recursion_limit=8,
         )
         handoff = out.get("handoff") or {}
         # 硬兜底：模型误判 sufficient / 漏写 nextAction 时强制 replan（始终覆盖）
@@ -1729,6 +1867,7 @@ def build_sea_agent_graph(
                 "replan": True,
                 "hardReplan": True,
                 "state": "replan",
+                "decisionSource": "acceptance_guard",
                 "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
                 "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
                 "evidenceGap": "未查询先验库",
@@ -1739,6 +1878,7 @@ def build_sea_agent_graph(
                 "replan": True,
                 "hardReplan": True,
                 "state": "replan",
+                "decisionSource": "acceptance_guard",
                 "reason": "先验库已命中且有可搜参考图，需 matchImage 对照视频关键帧",
                 "nextAction": (
                     f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
@@ -1748,43 +1888,90 @@ def build_sea_agent_graph(
                 "evidenceGap": "已有可搜库图但未做库图↔视频关键帧匹配",
             }
         elif should_replan_registry_list or should_replan_registry_list_visual:
+            relation_label = "在库" if membership_mode == "in" else "未在库"
             handoff = {
                 "handoff": "plan",
                 "replan": True,
                 "hardReplan": True,
                 "state": "replan",
-                "reason": "在库船列表需 listRegistry + 库图↔视频关键帧 matchImage，禁止 matchText(用户问句)",
-                "nextAction": (
-                    "listRegistry → getTrack(不带hullNumber) → getFrames($ref trackIds) → "
-                    "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
-                ),
-                "evidenceGap": (
-                    "未列出先验库" if should_replan_registry_list
-                    else "已有库图但未做库图↔视频关键帧匹配（在库列表）"
-                ),
+                "decisionSource": "acceptance_guard",
+                "reason": f"{relation_label}船舶列表的验收条件尚未满足，必须进入下一轮完成全库对照",
+                "nextAction": acceptance_progress.get("nextAction"),
+                "evidenceGap": "；".join(acceptance_progress.get("pendingRequirements") or []),
+            }
+        elif (
+            str(handoff.get("state") or "") in {"sufficient", "uncertain"}
+            and acceptance_progress.get("pendingRequirements")
+            and loop_count < limit
+        ):
+            # 模型想提前结束，但验收清单仍有明确可执行缺口：Reflect 必须启动下一轮。
+            handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "decisionSource": "acceptance_guard",
+                "reason": "当前工具证据只完成了部分验收，不能提前结束循环",
+                "nextAction": acceptance_progress.get("nextAction"),
+                "evidenceGap": "；".join(acceptance_progress.get("pendingRequirements") or []),
+            }
+        elif (
+            membership_mode
+            and acceptance_progress.get("acceptanceSatisfied")
+            and (handoff.get("handoff") == "plan" or handoff.get("replan") or str(handoff.get("state") or "") == "replan")
+        ):
+            # 全轨迹、全库与图像匹配均已完成时，不允许无依据地重复相同计划。
+            handoff = {
+                "handoff": "finish",
+                "state": "sufficient",
+                "decisionSource": "acceptance_guard",
+                "reason": "全轨迹与全库对照验收已完成，无需重复进入下一轮",
+                "answerHint": state.get("observation_summary") or "",
             }
         elif not handoff:
-            if loop_count < limit and not has_tool_evidence:
+            pending_requirements = acceptance_progress.get("pendingRequirements") or []
+            if pending_requirements and loop_count < limit:
+                handoff = {
+                    "handoff": "plan",
+                    "replan": True,
+                    "hardReplan": bool(membership_mode),
+                    "state": "replan",
+                    "decisionSource": "deterministic_fallback",
+                    "reason": "反思模型未完成移交，但验收清单仍有缺口，按验收规则进入下一轮",
+                    "nextAction": acceptance_progress.get("nextAction"),
+                    "evidenceGap": "；".join(pending_requirements),
+                }
+            elif acceptance_progress.get("acceptanceSatisfied"):
+                relation_label = "在库/未在库对照" if membership_mode else "当前任务"
+                handoff = {
+                    "handoff": "finish",
+                    "state": "sufficient",
+                    "decisionSource": "deterministic_fallback",
+                    "reason": f"{relation_label}的验收清单已满足，允许结束循环",
+                    "answerHint": state.get("observation_summary") or "",
+                }
+            elif loop_count < limit and not has_tool_evidence:
                 handoff = {
                     "handoff": "plan",
                     "replan": True,
                     "hardReplan": False,
+                    "state": "replan",
+                    "decisionSource": "deterministic_fallback",
                     "reason": "本轮未获得可用工具证据",
-                    "nextAction": "补充 getTrack/getFrames 或匹配工具",
+                    "nextAction": acceptance_progress.get("nextAction") or "补充 getTrack/getFrames 或匹配工具",
                     "evidenceGap": "working_scope 为空",
                 }
-            elif pure_video_sufficient or has_tool_evidence:
+            elif pure_video_sufficient:
                 if visual_attempted and match_count_total == 0 and (zero_tracks or hull_filtered_zero):
                     reason = f"先验库有记录，但库图与视频关键帧无匹配，视频中未发现{hull or '目标'}"
                 elif registry_checked and not can_try_visual and (zero_tracks or hull_filtered_zero):
                     reason = f"先验库有记录但无可搜参考图，无法视觉匹配；视频 OCR 未检出{hull or '目标'}"
-                elif pure_video_sufficient and (zero_tracks or hull_filtered_zero):
-                    reason = f"getTrack 返回 0 条舷号命中，视频中未发现{hull or '目标'}"
                 else:
-                    reason = "已有工具证据，模型未显式 handoff，按充分结束"
+                    reason = f"getTrack 返回 0 条舷号命中，视频中未发现{hull or '目标'}"
                 handoff = {
                     "handoff": "finish",
                     "state": "sufficient",
+                    "decisionSource": "deterministic_fallback",
                     "reason": reason,
                     "answerHint": state.get("observation_summary") or "",
                 }
@@ -1792,8 +1979,10 @@ def build_sea_agent_graph(
                 handoff = {
                     "handoff": "finish",
                     "state": "uncertain",
-                    "reason": "无工具证据且无法继续",
+                    "decisionSource": "deterministic_fallback",
+                    "reason": "验收条件未满足且继续检索收益不足",
                     "answerHint": state.get("observation_summary") or "",
+                    "evidenceGap": "；".join(pending_requirements),
                 }
         elif (
             str(handoff.get("state") or "") == "sufficient"
@@ -1803,52 +1992,59 @@ def build_sea_agent_graph(
             and loop_count < limit
             and (zero_tracks or hull_filtered_zero)
         ):
-            # 模型在未视觉匹配时宣称充分 → 纠偏
             handoff = {
                 "handoff": "plan",
                 "replan": True,
                 "hardReplan": True,
                 "state": "replan",
+                "decisionSource": "acceptance_guard",
                 "reason": "库有可搜参考图但尚未 matchImage，不能直接结束",
-                "nextAction": (
-                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber) → getFrames → matchImage"
-                ),
+                "nextAction": f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber) → getFrames → matchImage",
                 "evidenceGap": "未做库图↔视频关键帧匹配",
             }
-        elif (
-            str(handoff.get("state") or "") == "sufficient"
-            and is_registry_in_list
-            and not visual_attempted
-            and loop_count < limit
-        ):
-            handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": True,
-                "state": "replan",
-                "reason": "在库船列表尚未完成库图↔视频匹配，matchText(问句) 不算充分",
-                "nextAction": (
-                    "listRegistry → getTrack(不带hullNumber) → getFrames → "
-                    "matchImage(queryImages=$ref registry.registryReferences, galleryImages=$ref frames.keyframes)"
-                ),
-                "evidenceGap": "在库列表缺少 matchImage",
-            }
-        elif (
-            str(handoff.get("state") or "") == "sufficient"
-            and zero_tracks
-            and bool(hull)
-            and not registry_checked
-            and loop_count < limit
-        ):
-            handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": True,
-                "state": "replan",
-                "reason": "视频 0 轨迹且未查库，不能直接判定未出现",
-                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库",
-                "evidenceGap": "未查询先验库",
-            }
+
+        handoff.setdefault("decisionSource", "model")
+        handoff["acceptanceProgress"] = acceptance_progress
+        reflect_state = str(handoff.get("state") or (
+            "replan" if handoff.get("handoff") == "plan" or handoff.get("replan") else "uncertain"
+        ))
+        if reflect_state not in {"sufficient", "replan", "conflict", "uncertain"}:
+            reflect_state = "uncertain"
+        handoff["state"] = reflect_state
+
+        # Reflect 卡片必须展示纠偏后的权威决策，而不是模型递归异常产生的临时状态。
+        deferred = out.get("deferred_end_event") or {
+            "type": "agent_end",
+            "title": "反思判定智能体（ReflectAgent）",
+            "role": "reflector",
+            "round": loop_count,
+        }
+        reflect_end_event = dict(deferred)
+        reflect_reason = str(handoff.get("reason") or "反思验收完成")
+        reflect_end_event.update({
+            "type": "agent_end",
+            "title": "反思判定智能体（ReflectAgent）",
+            "role": "reflector",
+            "round": loop_count,
+            "message": reflect_reason[:300],
+            "state": reflect_state,
+            "evidenceGap": handoff.get("evidenceGap"),
+            "nextAction": handoff.get("nextAction"),
+            "nextRound": loop_count + 1 if reflect_state == "replan" and loop_count < limit else None,
+            "decisionSource": handoff.get("decisionSource"),
+            "acceptanceGoal": acceptance_progress.get("goal"),
+            "currentFocus": acceptance_progress.get("currentFocus"),
+            "acceptanceProgress": acceptance_progress,
+            "pendingRequirements": acceptance_progress.get("pendingRequirements") or [],
+            "modelSummary": {
+                **(reflect_end_event.get("modelSummary") or {}),
+                "summary": reflect_reason[:500],
+                "reason": reflect_reason[:300],
+            },
+        })
+        if out.get("thinking") and not reflect_end_event.get("thinking"):
+            reflect_end_event["thinking"] = str(out.get("thinking") or "")[:2000]
+        _emit(event_handler, reflect_end_event)
 
         round_item = {
             "round": loop_count,
@@ -1868,6 +2064,10 @@ def build_sea_agent_graph(
                 "role": "reflector",
                 "evidenceGap": handoff.get("evidenceGap"),
                 "nextAction": handoff.get("nextAction"),
+                "nextRound": loop_count + 1 if reflect_state == "replan" and loop_count < limit else None,
+                "decisionSource": handoff.get("decisionSource"),
+                "acceptanceProgress": acceptance_progress,
+                "pendingRequirements": acceptance_progress.get("pendingRequirements") or [],
             },
         )
 
@@ -1883,6 +2083,8 @@ def build_sea_agent_graph(
                             "reason": f"已达最大轮次 {limit}，仍要求 replan",
                             "nextAction": handoff.get("nextAction"),
                             "evidenceGap": handoff.get("evidenceGap"),
+                            "acceptanceProgress": acceptance_progress,
+                            "decisionSource": handoff.get("decisionSource"),
                         },
                         "final_state": "uncertain",
                         "final_reason": f"已达最大轮次 {limit}，仍要求 replan",
@@ -1900,6 +2102,9 @@ def build_sea_agent_graph(
                         "reason": handoff.get("reason") or "需要补充证据",
                         "nextAction": handoff.get("nextAction"),
                         "evidenceGap": handoff.get("evidenceGap"),
+                        "hardReplan": bool(handoff.get("hardReplan")),
+                        "acceptanceProgress": acceptance_progress,
+                        "decisionSource": handoff.get("decisionSource"),
                     },
                     "plan_hint": str(handoff.get("nextAction") or handoff.get("reason") or ""),
                     "active_agent": "plan",
@@ -1922,6 +2127,8 @@ def build_sea_agent_graph(
                     "reason": final_reason,
                     "answerHint": handoff.get("answerHint"),
                     "evidenceGap": handoff.get("evidenceGap"),
+                    "acceptanceProgress": acceptance_progress,
+                    "decisionSource": handoff.get("decisionSource"),
                 },
                 "final_state": final_state,
                 "final_reason": final_reason,
