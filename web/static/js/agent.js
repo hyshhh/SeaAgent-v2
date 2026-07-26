@@ -296,6 +296,78 @@ function renderRegistryHits(result) {
   return `<div class="answer-tracks">${rows}</div>`;
 }
 
+function resultScoreBand(item) {
+  return String(item?.scoreBand || item?.verifyDecision || '').trim().toLowerCase();
+}
+
+function bestMatchByResultId(matches, kind) {
+  const best = new Map();
+  (matches || []).forEach((match) => {
+    const id = kind === 'registry'
+      ? match?.matchedRegistryId || match?.registryId
+      : match?.matchedTrackId || match?.trackId;
+    if (id == null) return;
+    const key = String(id);
+    const score = Number(match?.embeddingScore ?? match?.score);
+    const previous = best.get(key);
+    const previousScore = Number(previous?.embeddingScore ?? previous?.score);
+    if (!previous || !Number.isFinite(previousScore) || (Number.isFinite(score) && score > previousScore)) best.set(key, match);
+  });
+  return best;
+}
+
+function classifiedResultItems(result) {
+  const matches = Array.isArray(result?.matches) ? result.matches : [];
+  const registryBest = bestMatchByResultId(matches, 'registry');
+  const trackBest = bestMatchByResultId(matches, 'track');
+  const registryItems = (Array.isArray(result?.registryItems) ? result.registryItems : []).map((item) => {
+    const match = registryBest.get(String(item?.registryId || item?.matchedRegistryId || ''));
+    return match ? {...item, embeddingScore: match.embeddingScore, scoreBand: match.scoreBand || item.scoreBand} : item;
+  });
+  const tracks = (Array.isArray(result?.tracks) ? result.tracks : []).map((item) => {
+    const match = trackBest.get(String(item?.trackId || item?.matchedTrackId || ''));
+    return match ? {...item, embeddingScore: match.embeddingScore, scoreBand: match.scoreBand || item.scoreBand} : item;
+  });
+  const registryClassifiable = registryItems.some((item) => ['match', 'uncertain'].includes(resultScoreBand(item)));
+  const trackClassifiable = tracks.some((item) => ['match', 'uncertain'].includes(resultScoreBand(item)));
+  const items = registryClassifiable ? registryItems : trackClassifiable ? tracks : [];
+  if (!items.length) return null;
+  return {
+    kind: registryClassifiable ? 'registry' : 'track',
+    confirmed: items.filter((item) => resultScoreBand(item) === 'match'),
+    pending: items.filter((item) => resultScoreBand(item) === 'uncertain'),
+  };
+}
+
+function classifiedResultRow(item, kind) {
+  const score = Number(item?.embeddingScore ?? item?.score);
+  if (kind === 'registry') {
+    const hull = item?.hullNumber || item?.hull || '未知舷号';
+    const registryId = item?.registryId || item?.matchedRegistryId || '未知库项';
+    const description = item?.description || '';
+    return `<div class="classified-result-row"><strong>${escapeHtml(hull)}</strong><span>库项 ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}${description ? ` · ${escapeHtml(description)}` : ''}</span></div>`;
+  }
+  const trackId = item?.trackId || item?.matchedTrackId || '未知轨迹';
+  const hull = item?.finalHullNumber || item?.hullNumber || '无稳定舷号';
+  const start = Number(item?.startTime ?? item?.start_time);
+  const end = Number(item?.endTime ?? item?.end_time);
+  const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : '时间未知';
+  return `<div class="classified-result-row"><strong>轨迹 ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
+}
+
+function renderClassifiedResults(result) {
+  const grouped = classifiedResultItems(result);
+  if (!grouped) return '';
+  const confirmedRows = grouped.confirmed.map((item) => classifiedResultRow(item, grouped.kind)).join('');
+  const pendingRows = grouped.pending.map((item) => classifiedResultRow(item, grouped.kind)).join('');
+  return `<section class="answer-classification">
+    <div class="answer-result-groups">
+      <section class="answer-result-group confirmed"><header><div><strong>确定结果</strong><span>达到确认阈值</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">暂无确定结果</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>待确认</strong><span>灰区匹配，建议人工复核</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">暂无待确认结果</div>'}</div></section>
+    </div>
+  </section>`;
+}
+
 function showAgentProcessView() {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
@@ -312,19 +384,24 @@ function showAgentFinalView() {
 
 function renderAgentAnswer(result) {
   showAgentFinalView();
-    const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
+  const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
   const records = Array.isArray(result.toolRecords) && result.toolRecords.length
     ? result.toolRecords
     : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
   const chain = records.map((item) => `<span class="tool-tag">${escapeHtml(formatToolCall(item.round, item))}</span>`).join('');
+  const classified = renderClassifiedResults(result);
+  const fallbackResults = `${renderRegistryHits(result)}${renderTracks(result.tracks, result.questionType)}`;
+  const rawMatchCount = Number(result.matchCount);
+  const hitCount = Number.isFinite(rawMatchCount) ? rawMatchCount : Number((result.tracks || []).length);
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
-    <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
-    <p>${escapeHtml(result.answerText || '未生成回答')}</p>
-    <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>命中数量：${Number((result.tracks || []).length)}</span></div>
-    ${renderRegistryHits(result)}
-    ${renderTracks(result.tracks, result.questionType)}
-    ${chain ? `<div class="tool-tags">${chain}</div>` : ''}`;
+    <div class="answer-overview">
+      <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
+      <p>${escapeHtml(result.answerText || '未生成回答')}</p>
+      <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>命中数量：${hitCount}</span></div>
+    </div>
+    <div class="answer-results-scroll">${classified || fallbackResults}</div>
+    ${chain ? `<section class="answer-tool-chain"><header><strong>工具调用链</strong><span>${records.length} 条记录</span></header><div class="tool-tags">${chain}</div></section>` : ''}`;
 }
 
 function evidenceItem(type, id, trackId = null, options = {}) {
