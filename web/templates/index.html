@@ -3,19 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SeaAgent 海域船舶轨迹分析系统</title>
+<title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=2">
+<link rel="stylesheet" href="/static/css/academic.css?v=3">
 </head>
 <body class="academic-theme">
 <header class="app-header">
   <div class="brand-mark" aria-hidden="true"><span>研</span></div>
-  <div class="header-copy">
-    <span class="header-kicker">学术研究原型 · 海域智能感知</span>
-    <h1>SeaAgent 海域船舶轨迹分析系统</h1>
-    <p>轨迹记忆、先验库检索与多智能体闭环推理实验平台</p>
-  </div>
-  <div class="system-badge"><span></span><div><strong>系统状态</strong><small>运行就绪</small></div></div>
+  <div class="header-copy"><h1>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</h1></div>
+  <div class="system-badge"><span></span><strong>运行就绪</strong></div>
 </header>
 <nav class="tab-nav" aria-label="系统功能导航">
   <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">海域监控</button>
@@ -130,25 +126,11 @@
 </section>
 <section class="tab-content" id="tab-agent-qa">
   <div class="agent-workspace">
-    <section class="panel agent-overview-panel">
-      <div class="panel-head">
-        <div><span class="eyebrow">轨迹记忆问答中枢</span><h2>面向三层记忆的闭环智能体</h2><p>从轨迹记忆与先验库中规划证据，通过观察和反思生成可核验回答。</p></div>
-        <div class="panel-actions"><span class="hint" id="agentQaMemoryCount">问答记忆 0 条</span><span class="hint" id="agentMemoryRefreshStatus">等待读取</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">刷新记忆状态</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">清除问答记忆</button></div>
-      </div>
-      <div class="agent-memory-flow">
-        <article><span>01</span><div><small>轨迹记忆</small><strong id="agentTrackCount">等待读取</strong><p>轨迹、舷号、正式关键帧与时间范围</p></div></article>
-        <i>→</i>
-        <article><span>02</span><div><small>先验记忆</small><strong id="agentRegistryStatus">已连接</strong><p>库项描述、多视角参考图与向量索引</p></div></article>
-        <i>→</i>
-        <article><span>03</span><div><small>闭环推理</small><strong id="agentModelName">等待读取</strong><p>规划智能体、观察智能体与反思智能体</p></div></article>
-      </div>
-    </section>
-
     <div class="agent-query-grid">
       <section class="panel agent-query-panel">
-        <div class="panel-head">
+        <div class="panel-head agent-query-head">
           <div><span class="eyebrow">自然语言查询</span><div class="agent-query-title"><h2>向当前监控记忆提问</h2><label class="agent-topk-control"><input id="agentTopKEnabled" type="checkbox" checked><span>启用 TopK</span><input id="agentTopKValue" type="number" min="1" max="20" value="3" aria-label="TopK 返回数量"></label></div></div>
-          <span class="round-limit" id="agentRoundLimit">最多三轮</span>
+          <div class="panel-actions agent-query-actions"><span class="round-limit" id="agentRoundLimit">最多三轮</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">刷新</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">清除记忆</button></div>
         </div>
         <div class="question-examples agent-example-grid">
           <button onclick="useQuestion('舷号 0857 有没有在视频中出现？')">舷号查询</button>
@@ -218,11 +200,14 @@
       </section>
     </div>
     <section class="panel evidence-panel evidence-panel-wide">
-      <div class="panel-head evidence-panel-head"><div><span class="eyebrow">实验结果与证据</span><h3>多模态证据记录</h3></div><div class="evidence-head-actions"><span id="evidenceResultCount" class="round-limit">等待查询</span><button id="evidenceSettingsToggle" class="btn ghost btn-sm" type="button" onclick="toggleEvidenceDisplaySettings()" aria-expanded="false" aria-controls="evidenceDisplaySettings">显示设置</button></div></div>
-      <div id="evidenceDisplaySettings" class="evidence-display-settings" hidden>
-        <label>视频压缩倍率<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output><small>按原视频证据分辨率缩放并单独缓存。</small></label>
-        <label>图片压缩倍率<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output><small>关键帧和先验库参考图按所选倍率生成预览图。</small></label>
-        <label>最多显示条数<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">全部</output><small>输入 0 表示显示当前结果的全部轨迹。</small></label>
+      <div class="panel-head evidence-panel-head evidence-toolbar">
+        <div class="evidence-toolbar-title"><span class="eyebrow">实验结果与证据</span><h3>多模态证据记录</h3></div>
+        <div id="evidenceDisplaySettings" class="evidence-display-settings evidence-display-inline">
+          <label title="按原视频证据分辨率缩放并单独缓存">视频倍率<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
+          <label title="关键帧和先验库参考图按所选倍率生成预览图">图片倍率<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
+          <label title="输入 0 表示显示全部结果">显示条数<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">全部</output></label>
+        </div>
+        <span id="evidenceResultCount" class="round-limit evidence-result-count">等待查询</span>
       </div>
       <div id="evidenceGallery" class="evidence-track-list"><div class="evidence-track-empty">No evidence available</div></div>
     </section>
@@ -372,7 +357,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=43"></script>
+<script src="/static/js/agent.js?v=44"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>

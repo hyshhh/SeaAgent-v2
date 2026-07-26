@@ -172,14 +172,6 @@ function bindEvidenceDisplayControls() {
   video.dataset.bound = 'true';
 }
 
-function toggleEvidenceDisplaySettings() {
-  const panel = document.getElementById('evidenceDisplaySettings');
-  const button = document.getElementById('evidenceSettingsToggle');
-  if (!panel || !button) return;
-  panel.hidden = !panel.hidden;
-  button.setAttribute('aria-expanded', String(!panel.hidden));
-}
-
 function evidenceSimilarity(value) {
   const score = Number(value?.embeddingScore ?? value?.score ?? value?.matchScore);
   return Number.isFinite(score) ? score : null;
@@ -204,43 +196,26 @@ function evidenceCountText(shown, total, unit) {
 }
 
 async function loadAgentMemorySummary(showNotice = false) {
-  const trackCount = document.getElementById('agentTrackCount');
-  const registryStatus = document.getElementById('agentRegistryStatus');
-  const modelName = document.getElementById('agentModelName');
   const refreshButton = document.getElementById('agentMemoryRefreshButton');
-  const refreshStatus = document.getElementById('agentMemoryRefreshStatus');
-  const qaMemoryCount = document.getElementById('agentQaMemoryCount');
   if (refreshButton) {
     refreshButton.disabled = true;
     refreshButton.textContent = '刷新中…';
   }
-  if (refreshStatus) refreshStatus.textContent = '正在读取记忆状态…';
   try {
     const summary = await apiFetch('/api/agent/memory-summary');
-    const numberOfTracks = summary.trackCount ?? summary.total ?? summary.tracks?.length ?? 0;
-    const numberOfRegistryItems = summary.registryCount ?? summary.registryTotal ?? 0;
-    if (trackCount) trackCount.textContent = `${numberOfTracks} 条轨迹`;
-    if (registryStatus) registryStatus.textContent = `${numberOfRegistryItems} 个库项`;
-    if (modelName) modelName.textContent = summary.recognitionModel || '模型已连接';
-    if (qaMemoryCount) qaMemoryCount.textContent = `问答记忆 ${summary.qaSessionCount || 0} 条`;
     initializeTopKControl(summary.retrievalTopK || 3);
     const limit = document.getElementById('agentRoundLimit');
     if (limit) {
       const maxRounds = summary.maxRounds || 3;
       limit.textContent = `最多 ${maxRounds} 轮`;
     }
-    if (refreshStatus) {
-      const updateTime = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-      refreshStatus.textContent = `已更新 ${updateTime}`;
-    }
     if (showNotice && typeof showToast === 'function') showToast('记忆状态已刷新');
   } catch (error) {
-    if (refreshStatus) refreshStatus.textContent = `刷新失败：${error.message || '服务不可用'}`;
     if (showNotice && typeof showToast === 'function') showToast(`记忆状态刷新失败：${error.message || '服务不可用'}`, 'error');
   } finally {
     if (refreshButton) {
       refreshButton.disabled = false;
-      refreshButton.textContent = '刷新记忆状态';
+      refreshButton.textContent = '刷新';
     }
   }
 }
@@ -1416,4 +1391,3 @@ window.useQuestion = useQuestion;
 window.askAgent = askAgent;
 window.loadAgentMemorySummary = loadAgentMemorySummary;
 window.clearAgentMemory = clearAgentMemory;
-window.toggleEvidenceDisplaySettings = toggleEvidenceDisplaySettings;
