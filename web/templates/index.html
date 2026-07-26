@@ -3,19 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SeaAgent 海域船舶监控智能体</title>
-<link rel="stylesheet" href="/static/css/style.css?v=27">
+<title>SeaAgent 海域船舶轨迹分析系统</title>
+<link rel="stylesheet" href="/static/css/style.css?v=28">
+<link rel="stylesheet" href="/static/css/academic.css?v=1">
 </head>
-<body>
+<body class="academic-theme">
 <header class="app-header">
-  <div class="brand-mark">SA</div>
-  <div><h1>SeaAgent</h1><p>面向海域船舶监控的轨迹记忆闭环多智能体系统</p></div>
-  <div class="system-badge"><span></span>系统就绪</div>
+  <div class="brand-mark" aria-hidden="true"><span>研</span></div>
+  <div class="header-copy">
+    <span class="header-kicker">学术研究原型 · 海域智能感知</span>
+    <h1>SeaAgent 海域船舶轨迹分析系统</h1>
+    <p>轨迹记忆、先验库检索与多智能体闭环推理实验平台</p>
+  </div>
+  <div class="system-badge"><span></span><div><strong>系统状态</strong><small>运行就绪</small></div></div>
 </header>
-<nav class="tab-nav">
+<nav class="tab-nav" aria-label="系统功能导航">
   <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">海域监控</button>
   <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">轨迹记忆</button>
-  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">智能体问答</button>
+  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">研究问答</button>
   <button class="tab-btn" data-tab="database" onclick="switchTab('database')">先验库管理</button>
   <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">实时摄像头</button>
   <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">系统设置</button>
@@ -220,7 +225,7 @@
       </section>
     </div>
     <section class="panel evidence-panel evidence-panel-wide">
-      <div class="panel-head evidence-panel-head"><div><span class="eyebrow">Evidence Workspace</span><h3>Multimodal Evidence</h3></div><div class="evidence-head-actions"><span id="evidenceResultCount" class="round-limit">等待查询</span><button id="evidenceSettingsToggle" class="btn ghost btn-sm" type="button" onclick="toggleEvidenceDisplaySettings()" aria-expanded="false" aria-controls="evidenceDisplaySettings">显示设置</button></div></div>
+      <div class="panel-head evidence-panel-head"><div><span class="eyebrow">实验结果与证据</span><h3>多模态证据记录</h3></div><div class="evidence-head-actions"><span id="evidenceResultCount" class="round-limit">等待查询</span><button id="evidenceSettingsToggle" class="btn ghost btn-sm" type="button" onclick="toggleEvidenceDisplaySettings()" aria-expanded="false" aria-controls="evidenceDisplaySettings">显示设置</button></div></div>
       <div id="evidenceDisplaySettings" class="evidence-display-settings" hidden>
         <label>视频压缩倍率<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output><small>按原视频证据分辨率缩放并单独缓存。</small></label>
         <label>图片压缩倍率<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output><small>关键帧和先验库参考图按所选倍率生成预览图。</small></label>
