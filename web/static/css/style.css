@@ -215,8 +215,8 @@
 }
 .agent-thought-card {
   min-height: 148px;
-  grid-template-rows: auto auto minmax(54px, auto) auto;
-  gap: 7px;
+  grid-template-rows: auto minmax(72px, auto) auto;
+  gap: 9px;
   padding: 10px;
   border-color: rgba(56, 101, 127, .7);
   background: rgba(2, 17, 27, .84);
@@ -522,15 +522,15 @@
 }
 .agent-fixed-stack {
   display: grid;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 12px;
   height: 100%;
-  min-height: 720px;
+  min-height: 620px;
 }
 .agent-fixed-stack .agent-thought-card {
   min-height: 0;
-  grid-template-rows: auto auto minmax(56px, 1fr) auto;
-  padding: 12px 13px;
+  grid-template-rows: auto minmax(88px, 1fr) auto;
+  padding: 14px 15px;
 }
 .agent-fixed-stack .agent-stream-text {
   max-height: none;
@@ -568,7 +568,7 @@
     min-height: auto;
   }
   .agent-fixed-stack {
-    min-height: 620px;
+    min-height: 560px;
   }
 }
 @media (max-width: 680px) {

@@ -920,3 +920,78 @@ tbody tr:hover td { background: #f2f6f9; }
   margin: 0;
   text-align: center;
 }
+
+/* 研究问答：左侧意图识别，右侧三智能体协作 */
+.agent-process-intent .intent-result-card {
+  min-height: 176px;
+  margin: 0;
+  padding: 15px 16px;
+  grid-template-rows: auto minmax(82px, auto) auto;
+  gap: 10px;
+  border: 1px solid #cbd7e1;
+  border-left: 4px solid #506f8c;
+  border-radius: 3px;
+  background: #fbfcfd;
+}
+.agent-process-intent .intent-result-card .agent-stream-text {
+  min-height: 82px;
+  max-height: 220px;
+}
+.agent-fixed-stack {
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  min-height: 620px;
+  gap: 12px;
+}
+.agent-fixed-stack .agent-thought-card {
+  grid-template-rows: auto minmax(104px, 1fr) auto;
+  gap: 10px;
+  padding: 16px 17px;
+}
+.agent-thought-card .agent-stage {
+  gap: 10px;
+}
+.agent-thought-card .agent-stage > b,
+.agent-fixed-stack .agent-stage > b {
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+}
+.agent-thought-card .agent-thought-head strong,
+.agent-fixed-stack .agent-thought-head strong {
+  font-size: 16px;
+  line-height: 1.35;
+}
+.agent-thought-card .agent-thought-head span,
+.agent-fixed-stack .agent-thought-head span {
+  font-size: 12px;
+  line-height: 1.4;
+}
+.agent-thought-card .agent-thought-head em,
+.agent-fixed-stack .agent-thought-head em {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.agent-thought-card .agent-card-round,
+.agent-fixed-stack .agent-card-round {
+  font-size: 10px !important;
+}
+.agent-thought-card .agent-stream-text,
+.agent-fixed-stack .agent-stream-text {
+  padding: 12px 13px;
+  color: #2f3e4f;
+  font-size: 14px;
+  line-height: 1.75;
+}
+.agent-thought-card .agent-thought-tags span,
+.agent-fixed-stack .agent-thought-tags span {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+@media (max-width: 1120px) {
+  .agent-fixed-stack { min-height: 560px; }
+}
+@media (max-width: 760px) {
+  .agent-process-intent .intent-result-card { min-height: 164px; padding: 13px; }
+  .agent-thought-card .agent-thought-head { align-items: flex-start; }
+  .agent-card-state { gap: 4px !important; }
+}

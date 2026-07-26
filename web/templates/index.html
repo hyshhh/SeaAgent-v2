@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent 海域船舶轨迹分析系统</title>
-<link rel="stylesheet" href="/static/css/style.css?v=28">
-<link rel="stylesheet" href="/static/css/academic.css?v=1">
+<link rel="stylesheet" href="/static/css/style.css?v=29">
+<link rel="stylesheet" href="/static/css/academic.css?v=2">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -164,16 +164,18 @@
 
         <section class="agent-response-panel">
           <div id="agentProcessView" class="agent-process-view">
-            <div class="agent-response-head"><div><span>智能体执行过程</span><em>意图识别与完整计划</em></div><b id="agentIntentState">等待识别</b></div>
+            <div class="agent-response-head"><div><span>查询解析与计划</span></div><b id="agentIntentState">等待识别</b></div>
             <div class="agent-process-intent">
-              <div class="agent-section-heading"><div><span>意图识别结果</span><em>查询目标与验收条件</em></div></div>
-              <div id="agentIntentResult" class="intent-agent-card pending compact">
-                <div class="intent-agent-body"><p>提交问题后，这里将显示目标、查询范围、推理路径与验收标准。</p></div>
-              </div>
+              <div class="agent-section-heading"><div><span>意图识别结果</span></div></div>
+              <article id="agentIntentResult" class="agent-thought-card intent intent-result-card" data-role="intent" data-round="0">
+                <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>IntentAgent</strong><span>意图识别</span></div></div><div class="agent-card-state"><span class="agent-card-round">全局</span><em>等待</em></div></div>
+                <div class="agent-stream-text"><span class="agent-stream-placeholder">等待意图识别…</span></div>
+                <div class="agent-thought-tags"></div>
+              </article>
             </div>
             <div class="agent-process-divider"></div>
             <div class="agent-process-plan">
-              <div class="agent-section-heading"><div><span>执行计划</span><em>未完成步骤持续旋转，完成后自动打勾</em></div><b id="agentPlanRound">等待计划</b></div>
+              <div class="agent-section-heading"><div><span>执行计划</span></div><b id="agentPlanRound">等待计划</b></div>
               <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
               <div id="agentPlanProgress" class="agent-plan-list">
                 <div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示全部步骤。</div>
@@ -190,33 +192,24 @@
 
       <section class="panel agent-thinking-panel">
         <div class="panel-head">
-          <div><span class="eyebrow">实时协同状态</span><h2>四智能体执行过程</h2></div>
+          <div><span class="eyebrow">实时协同状态</span><h2>三智能体协作</h2></div>
           <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
         </div>
-        <div class="thought-notice"><span id="agentPlanMode">LangGraph 模式：Intent→Plan→Observe→Reflect，Agent 间 handoff 协同。</span></div>
+        <div class="thought-notice"><span id="agentPlanMode">闭环流程：规划 → 观察 → 验收；验收结果决定结束或进入下一轮。</span></div>
         <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
           <div class="agent-fixed-stack">
-            <article class="agent-thought-card intent" data-role="intent" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>IntentAgent</strong><span>意图识别</span></div></div><div class="agent-card-state"><span class="agent-card-round">全局</span><em>等待</em></div></div>
-              <p class="agent-thought-hint">解析目标、时间与验收条件，再移交规划</p>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待意图识别…</span></div>
-              <div class="agent-thought-tags"></div>
-            </article>
             <article class="agent-thought-card planner" data-role="planner" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>规划智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <p class="agent-thought-hint">理解验收缺口并生成本轮工具计划</p>
+              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>规划</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
               <div class="agent-stream-text"><span class="agent-stream-placeholder">等待规划…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
             <article class="agent-thought-card observer" data-role="observer" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>观察智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <p class="agent-thought-hint">执行计划中的工具并返回结构化结果</p>
+              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>观察</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
               <div class="agent-stream-text"><span class="agent-stream-placeholder">等待执行…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
             <article class="agent-thought-card reflector" data-role="reflector" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>反思智能体</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <p class="agent-thought-hint">对照验收目标判断继续、结束或不确定</p>
+              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>验收决策</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
               <div class="agent-stream-text"><span class="agent-stream-placeholder">等待验收…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
@@ -379,7 +372,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=12"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=42"></script>
+<script src="/static/js/agent.js?v=43"></script>
 <script src="/static/js/settings.js?v=8"></script>
 </body>
 </html>
