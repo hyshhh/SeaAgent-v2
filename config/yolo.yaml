@@ -27,4 +27,3 @@ yolo:
     appearance_thresh: 0.8
     proximity_thresh: 0.5
     model: auto
-
