@@ -2115,14 +2115,16 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-monitoring .result-area {
   position: relative;
   isolation: isolate;
-  min-height: clamp(430px, 50vh, 560px);
-  height: clamp(430px, 50vh, 560px);
+  min-height: clamp(470px, 54vh, 600px);
+  height: clamp(470px, 54vh, 600px);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 370px);
+  grid-template-columns: minmax(0, 1.3fr) minmax(380px, .9fr);
   place-items: stretch;
+  gap: clamp(18px, 2.2vw, 38px);
+  padding: clamp(16px, 2vw, 30px) clamp(24px, 4vw, 76px);
   overflow: hidden;
   border: 0;
-  background: #020609;
+  background: #000;
 }
 #tab-monitoring .result-area::before {
   content: "";
@@ -2156,7 +2158,7 @@ tbody tr:hover td { background: #f2f6f9; }
   height: 100%;
   max-height: none;
   object-fit: contain;
-  object-position: left center;
+  object-position: center center;
   background: #000;
 }
 #tab-monitoring .video-preview-label {
@@ -2182,270 +2184,130 @@ tbody tr:hover td { background: #f2f6f9; }
   background: rgba(2, 10, 15, .72);
 }
 
-/* 与黑色监控画布融为一体，不使用独立悬浮卡片 */
+/* 实时轨迹字幕：直接在黑色画布中滚动，不使用卡片、标题框或统计框 */
 .active-track-monitor {
   position: relative;
   inset: auto;
   z-index: 2;
   grid-column: 2;
-  width: auto;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
-  color: #d9e7ed;
+  color: #eef4f6;
   border: 0;
-  border-left: 1px solid rgba(82, 126, 145, .24);
   border-radius: 0;
-  background:
-    linear-gradient(rgba(55, 102, 124, .045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(55, 102, 124, .035) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(4, 17, 25, .97), rgba(1, 8, 13, .99));
-  background-size: 26px 26px, 26px 26px, auto;
+  background: #000;
   box-shadow: none;
-  backdrop-filter: none;
 }
-.active-track-monitor::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 1px;
-  background: linear-gradient(transparent 4%, rgba(69, 176, 193, .42) 28%, rgba(69, 176, 193, .18) 72%, transparent 96%);
-}
-.active-track-monitor-head {
-  min-height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px 10px;
-  border: 0;
-  background: transparent;
-}
-.active-track-monitor-head > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-.active-track-monitor-head span {
-  color: #5eb4c4;
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: .18em;
-  text-transform: uppercase;
-}
-.active-track-monitor-head h3 {
-  margin: 0;
-  overflow: hidden;
-  color: #f1f7f9;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.active-track-monitor-head em {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #6fd2ad;
-  font-size: 7px;
-  font-style: normal;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-.active-track-monitor-head em i,
-.active-track-live-line strong i {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 5px;
-  border-radius: 50%;
-  background: #54d7a7;
-  box-shadow: 0 0 9px rgba(84, 215, 167, .72);
-  animation: liveTrackPulse 1.8s ease-in-out infinite;
-}
-@keyframes liveTrackPulse {
-  0%, 100% { opacity: .5; transform: scale(.82); }
-  50% { opacity: 1; transform: scale(1.12); }
-}
-.active-track-monitor-stats {
-  min-height: 31px;
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 0 18px 9px;
-  color: #6d8997;
-  border: 0;
-  background: transparent;
-  font-size: 8px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.active-track-monitor-stats > span {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  white-space: nowrap;
-}
-.active-track-monitor-stats strong {
-  color: #e7f3f6;
-  font: 700 15px/1 Georgia, "Times New Roman", serif;
-}
+.active-track-monitor::before { display: none; }
 .active-track-monitor-rows {
-  position: relative;
+  position: absolute;
+  inset: 0;
   min-height: 0;
-  overflow: hidden auto;
-  padding: 4px 18px 12px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(86, 137, 157, .48) transparent;
-  mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: clamp(22px, 3.2vh, 38px) clamp(12px, 1.4vw, 24px) clamp(24px, 3.2vh, 38px) clamp(18px, 2.1vw, 36px);
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(188, 204, 211, .62) rgba(255, 255, 255, .08);
+  overscroll-behavior: contain;
 }
-.active-track-monitor-rows::before {
-  content: "LIVE MATCH FEED";
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: block;
-  padding: 5px 0 7px;
-  color: #4f6c79;
-  background: linear-gradient(180deg, #041119 70%, transparent);
-  font-size: 7px;
-  font-weight: 700;
-  letter-spacing: .18em;
+.active-track-monitor-rows::-webkit-scrollbar { width: 10px; }
+.active-track-monitor-rows::-webkit-scrollbar-track { background: rgba(255, 255, 255, .07); }
+.active-track-monitor-rows::-webkit-scrollbar-thumb {
+  border: 2px solid #000;
+  border-radius: 8px;
+  background: rgba(188, 204, 211, .62);
 }
+.active-track-monitor-rows::-webkit-scrollbar-thumb:hover { background: rgba(220, 229, 233, .82); }
+.active-track-monitor-rows::before { display: none; }
 .active-track-live-row {
   min-width: 0;
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  gap: 2px 9px;
-  padding: 10px 0 11px;
+  margin: 0 0 clamp(22px, 3.4vh, 38px);
+  padding: 0;
   border: 0;
-  border-bottom: 1px solid rgba(83, 126, 144, .16);
   background: transparent;
-  animation: trackTickerIn .28s ease-out both;
+  animation: trackTickerIn .3s ease-out both;
 }
-.active-track-live-row:hover { background: linear-gradient(90deg, rgba(32, 92, 111, .1), transparent); }
+.active-track-live-row:last-child { margin-bottom: 0; }
+.active-track-live-row:hover { background: transparent; }
 @keyframes trackTickerIn {
-  from { opacity: 0; transform: translateY(5px); }
+  from { opacity: 0; transform: translateY(7px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.active-track-live-row > time {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  padding-top: 2px;
-  color: #536f7d;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
-  letter-spacing: -.02em;
-}
 .active-track-live-line {
-  grid-column: 2;
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.active-track-live-line strong {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-  color: #6fd2df;
-  font: 700 13px/1.2 Georgia, "Times New Roman", serif;
-  text-overflow: ellipsis;
+  align-items: baseline;
+  gap: clamp(7px, .65vw, 12px);
+  color: #dce7eb;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: clamp(15px, 1vw, 20px);
+  line-height: 1.45;
+  letter-spacing: .01em;
   white-space: nowrap;
+}
+.active-track-live-line time {
+  flex: 0 0 auto;
+  color: #a7b7be;
+  font: inherit;
+}
+.active-track-live-line > i {
+  flex: 0 0 auto;
+  color: #58676d;
+  font-style: normal;
 }
 .active-track-live-line > span {
   flex: 0 0 auto;
-  color: #76caaa;
-  font-size: 8px;
+  color: #7fd5ad;
+  font-size: inherit;
   font-weight: 700;
   text-transform: uppercase;
 }
-.active-track-live-row > p {
-  grid-column: 2;
+.active-track-live-line strong {
   min-width: 0;
-  margin: 2px 0 0;
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
   overflow: hidden;
-  color: #91a8b2;
-  font-size: 9px;
-  line-height: 1.45;
+  color: #83d7e2;
+  font: 700 clamp(18px, 1.12vw, 22px)/1.35 Georgia, "Times New Roman", serif;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.active-track-live-row > p {
+  min-width: 0;
+  margin: 7px 0 0;
+  color: #d2dce0;
+  font-size: clamp(16px, 1.02vw, 20px);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 .active-track-live-row > p b {
-  flex: 0 0 auto;
-  max-width: 38%;
-  overflow: hidden;
-  color: #d4e2e8;
-  font-weight: 600;
-  text-overflow: ellipsis;
+  color: #f1f5f6;
+  font-weight: 650;
 }
-.active-track-live-row > p > span { color: #45606c; }
-.active-track-live-row > p small {
-  min-width: 0;
-  overflow: hidden;
-  color: #78929d;
-  font-size: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.active-track-monitor-empty {
-  height: calc(100% - 28px);
-  min-height: 120px;
-  display: grid;
-  place-content: center;
-  justify-items: start;
-  gap: 5px;
-  padding: 20px 0;
-  color: #607b88;
-  text-align: left;
-}
-.active-track-monitor-empty > span {
-  color: #4ea6b8;
-  font-size: 25px;
-  line-height: 1;
-}
-.active-track-monitor-empty strong {
-  color: #a3b8c1;
-  font: 600 11px/1.3 Georgia, "Times New Roman", serif;
-}
-.active-track-monitor-empty small {
-  max-width: 220px;
-  color: #5f7883;
-  font-size: 7px;
-  line-height: 1.55;
-}
-.active-track-monitor > footer {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 18px 9px;
-  color: #506d79;
-  border: 0;
-  background: linear-gradient(transparent, rgba(3, 13, 19, .92) 42%);
-  font-size: 6px;
-  letter-spacing: .1em;
+.active-track-description-label {
+  margin-right: 8px;
+  color: #85979f;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: .82em;
+  letter-spacing: .03em;
   text-transform: uppercase;
 }
-.active-track-monitor > footer strong {
-  overflow: hidden;
-  color: #77909b;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 7px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.active-track-monitor-empty {
+  min-height: 100%;
+  display: grid;
+  place-content: center start;
+  gap: 10px;
+  padding: 0;
+  color: #75858c;
+  text-align: left;
+}
+.active-track-monitor-empty strong {
+  color: #aebbc0;
+  font: 500 clamp(15px, 1vw, 19px)/1.45 "SFMono-Regular", Consolas, monospace;
+}
+.active-track-monitor-empty small {
+  color: #68777e;
+  font: 400 clamp(12px, .78vw, 15px)/1.7 "SFMono-Regular", Consolas, monospace;
 }
 
 /* 下方轨迹池：收紧高度并增强论文表格层级 */
@@ -2481,11 +2343,12 @@ tbody tr:hover td { background: #f2f6f9; }
   }
   #tab-monitoring .monitor-control-title { display: grid; gap: 2px; }
   #tab-monitoring .monitor-control-title .eyebrow { padding-left: 0; border-left: 0; }
-  #tab-monitoring .result-area { grid-template-columns: minmax(0, 1fr) 290px; }
-  .active-track-monitor-head,
-  .active-track-monitor-stats,
-  .active-track-monitor-rows,
-  .active-track-monitor > footer { padding-inline: 14px; }
+  #tab-monitoring .result-area {
+    grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr);
+    gap: 20px;
+    padding-inline: 28px;
+  }
+  .active-track-monitor-rows { padding-inline: 18px 12px; }
 }
 @media (max-width: 900px) {
   #tab-monitoring .monitor-control-bar { grid-template-columns: 1fr auto; }
@@ -2499,24 +2362,24 @@ tbody tr:hover td { background: #f2f6f9; }
     height: auto;
     min-height: 0;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(360px, 52vw) 210px;
+    grid-template-rows: minmax(360px, 52vw) 240px;
+    gap: 0;
+    padding: 0;
   }
   #tab-monitoring #resultPlaceholder { grid-column: 1; grid-row: 1; }
   .active-track-monitor {
     grid-column: 1;
     grid-row: 2;
-    border-top: 1px solid rgba(82, 126, 145, .24);
+    border-top: 0;
     border-left: 0;
   }
-  .active-track-monitor-head { min-height: 48px; padding-block: 9px 6px; }
-  .active-track-monitor-stats { padding-bottom: 6px; }
-  .active-track-monitor-rows { padding-bottom: 5px; }
-  .active-track-monitor-empty { min-height: 70px; }
+  .active-track-monitor-rows { padding: 20px 18px; }
+  .active-track-monitor-empty { min-height: 100%; }
 }
 @media (max-width: 620px) {
   #tab-monitoring .monitor-control-bar { grid-template-columns: 1fr; align-items: stretch; }
   #tab-monitoring .monitor-control-actions { grid-row: 3; }
-  #tab-monitoring .result-area { grid-template-rows: minmax(280px, 58vw) 205px; }
+  #tab-monitoring .result-area { grid-template-rows: minmax(280px, 58vw) 220px; }
   #tab-monitoring .pool-status-grid { grid-template-columns: 1fr; }
   #tab-monitoring .pool-table-body { height: 180px; }
 }

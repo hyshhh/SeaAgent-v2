@@ -944,38 +944,33 @@ function markSequenceVideo(filename, state) {
   if (label) label.textContent = stateLabels[state] || '待处理';
 }
 
-function confirmedFrameCount(memoryInfo) {
-  const text = String(memoryInfo || '');
-  const match = text.match(/(?:正式帧|Confirmed)\s*(\d+)/i);
-  return match ? Number(match[1]) : 0;
-}
-
 function renderActiveTrackMonitor(rows) {
   const container = document.getElementById('activeTrackMonitorRows');
-  const count = document.getElementById('activeTrackMonitorCount');
-  const confirmed = document.getElementById('activeTrackConfirmedFrames');
-  const sync = document.getElementById('activeTrackMonitorSync');
   if (!container) return;
   const activeRows = Array.isArray(rows) ? rows : [];
-  if (count) count.textContent = String(activeRows.length);
-  if (confirmed) confirmed.textContent = String(activeRows.reduce((total, row) => total + confirmedFrameCount(row.memoryInfo), 0));
-  if (sync) sync.textContent = activeRows[0]?.time || new Date().toLocaleTimeString('en-GB', {hour12: false});
+  const previousScrollTop = container.scrollTop;
+  const previousScrollHeight = container.scrollHeight;
+  const followsLatest = previousScrollTop < 12;
   if (!activeRows.length) {
-    container.innerHTML = '<div class="active-track-monitor-empty"><span>⌁</span><strong>Awaiting trajectory matches</strong><small>Track identity, match result and visual description will stream here.</small></div>';
-    if (sync) sync.textContent = 'Awaiting data';
+    container.innerHTML = '<div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong><small>Time · Status · Track<br>Visual description</small></div>';
     return;
   }
-  container.innerHTML = activeRows.slice(0, 5).map((row) => {
+  container.innerHTML = activeRows.slice(0, 40).map((row) => {
     const trackId = row.trackId || '-';
     const status = pipelineRecordStatus(row.status);
     const hull = row.hullNumber || 'Unreadable';
     const description = row.description || 'No visual description';
+    const descriptionText = hull === 'Unreadable' ? description : `${hull} · ${description}`;
     return `<article class="active-track-live-row">
-      <time>${escHtml(row.time || '--:--:--')}</time>
-      <div class="active-track-live-line"><strong><i></i>Track #${escHtml(trackId)}</strong><span>${escHtml(status)}</span></div>
-      <p><b>${escHtml(hull)}</b><span aria-hidden="true">—</span><small title="${safeAttr(description)}">${escHtml(description)}</small></p>
+      <div class="active-track-live-line"><time>${escHtml(row.time || '--:--:--')}</time><i aria-hidden="true">·</i><span>${escHtml(status)}</span><i aria-hidden="true">·</i><strong>Track #${escHtml(trackId)}</strong></div>
+      <p><span class="active-track-description-label">Description:</span><b>${escHtml(descriptionText)}</b></p>
     </article>`;
   }).join('');
+  if (followsLatest) {
+    container.scrollTop = 0;
+  } else {
+    container.scrollTop = previousScrollTop + Math.max(0, container.scrollHeight - previousScrollHeight);
+  }
 }
 
 function renderTrackRows(rows) {

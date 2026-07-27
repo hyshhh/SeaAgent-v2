@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=9">
+<link rel="stylesheet" href="/static/css/academic.css?v=10">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -36,17 +36,8 @@
         </div>
         <div class="result-area">
           <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
-          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹匹配信息流">
-            <header class="active-track-monitor-head">
-              <div><span>Track–Match Stream</span><h3>Live Trajectory Intelligence</h3></div>
-              <em><i></i>Live</em>
-            </header>
-            <div class="active-track-monitor-stats">
-              <span>Active <strong id="activeTrackMonitorCount">0</strong></span>
-              <span>Confirmed Frames <strong id="activeTrackConfirmedFrames">0</strong></span>
-            </div>
-            <div id="activeTrackMonitorRows" class="active-track-monitor-rows"><div class="active-track-monitor-empty"><span>⌁</span><strong>Awaiting trajectory matches</strong><small>Track identity, match result and visual description will stream here.</small></div></div>
-            <footer><span>Last Sync</span><strong id="activeTrackMonitorSync">Awaiting data</strong></footer>
+          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹字幕流">
+            <div id="activeTrackMonitorRows" class="active-track-monitor-rows" role="log" aria-live="polite" aria-relevant="additions text"><div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong><small>Time · Status · Track<br>Visual description</small></div></div>
           </aside>
         </div>
         <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
@@ -362,7 +353,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=14"></script>
+<script src="/static/js/pipeline.js?v=15"></script>
   <script src="/static/js/memory.js?v=5"></script>
 <script src="/static/js/agent.js?v=47"></script>
 <script src="/static/js/settings.js?v=8"></script>
