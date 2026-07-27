@@ -56,8 +56,8 @@ embedding:
 yolo:
   model: yolov8n.pt
   device: ""
-  confidence: 0.25
-  iou: 0.45
+  confidence: 0.5
+  iou: 0.1
   classes: [8]
   tracker: bytetrack
 ```

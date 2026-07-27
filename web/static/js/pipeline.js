@@ -272,8 +272,8 @@ async function deleteVideo(filename) {
 /** 收集视频 Demo 页的 pipeline 参数 */
 function collectVideoParams() {
   return {
-    conf_threshold: parseFloat(document.getElementById('optConf').value) || 0.25,
-    iou_threshold: parseFloat(document.getElementById('optIou').value) || 0.45,
+    conf_threshold: parseFloat(document.getElementById('optConf').value) || 0.5,
+    iou_threshold: parseFloat(document.getElementById('optIou').value) || 0.1,
     detect_every: parseInt(document.getElementById('optDetectEvery').value, 10) || 2,
     target_fps: parseFloat(document.getElementById('optTargetFps').value) || 0,
     pipe_scale: parseFloat(document.getElementById('optPipeScale').value) || 0.25,
@@ -287,8 +287,8 @@ function collectVideoParams() {
 /** 收集摄像头页的 pipeline 参数 */
 function collectCameraParams() {
   return {
-    conf_threshold: parseFloat(document.getElementById('camConf').value) || 0.25,
-    iou_threshold: parseFloat(document.getElementById('camIou').value) || 0.45,
+    conf_threshold: parseFloat(document.getElementById('camConf').value) || 0.5,
+    iou_threshold: parseFloat(document.getElementById('camIou').value) || 0.1,
     detect_every: parseInt(document.getElementById('camDetectEvery').value, 10) || 2,
     target_fps: parseFloat(document.getElementById('camTargetFps').value) || 0,
     capture_fps: parseInt(document.getElementById('camCaptureFps').value, 10) || 15,

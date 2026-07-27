@@ -78,8 +78,8 @@
         <section class="panel compact-panel">
           <div class="panel-head"><div><span class="eyebrow">流水线参数</span><h3>监控设置</h3></div></div>
           <div class="param-grid">
-            <label>检测置信度<input id="optConf" type="number" value="0.25" min="0" max="1" step="0.05"></label>
-            <label>交并比阈值<input id="optIou" type="number" value="0.45" min="0" max="1" step="0.05"></label>
+            <label>检测置信度<input id="optConf" type="number" value="0.5" min="0" max="1" step="0.05"></label>
+            <label>交并比阈值<input id="optIou" type="number" value="0.1" min="0" max="1" step="0.05"></label>
             <label>检测帧间隔<input id="optDetectEvery" type="number" value="2" min="1"></label>
             <label>目标帧率<input id="optTargetFps" type="number" value="0" min="0"></label>
             <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="optPipeScale" type="number" value="0.25" min="0.1" max="1" step="0.05"></label>
@@ -236,8 +236,8 @@
         <label>输入地址<input id="cameraUrl" type="text" placeholder="输入视频地址" style="display:none"></label>
         <label id="camStreamModeRow">推流方式<select id="camStreamMode"><option value="webrtc">低延迟连接</option><option value="h264">压缩视频流</option><option value="mjpeg">逐帧图像流</option></select></label>
         <span id="camStreamModeHint" class="hint" style="display:none">服务器输入统一使用压缩视频流。</span>
-        <label>检测置信度<input id="camConf" type="number" value="0.25" step="0.05"></label>
-        <label>交并比阈值<input id="camIou" type="number" value="0.45" step="0.05"></label>
+        <label>检测置信度<input id="camConf" type="number" value="0.5" step="0.05"></label>
+        <label>交并比阈值<input id="camIou" type="number" value="0.1" step="0.05"></label>
         <label>检测帧间隔<input id="camDetectEvery" type="number" value="2" min="1"></label>
         <label>目标帧率<input id="camTargetFps" type="number" value="0" min="0"></label>
         <label>采集帧率<input id="camCaptureFps" type="number" value="15" min="1"></label>
@@ -260,8 +260,8 @@
       <section class="panel settings-card">
         <div class="panel-head"><div><span class="eyebrow">检测与跟踪</span><h3>目标关联参数</h3></div></div>
         <div class="settings-fields">
-          <label>检测置信度<input data-setting="yolo.confidence" type="number"><small>越低召回更多目标，但误检可能增加。</small></label>
-          <label>交并比阈值<input data-setting="yolo.iou" type="number"><small>控制检测框抑制，通常保持在 0.4—0.6。</small></label>
+          <label>检测置信度<input data-setting="yolo.confidence" type="number"><small>默认 0.5；越低召回更多目标，但误检可能增加。</small></label>
+          <label>交并比阈值<input data-setting="yolo.iou" type="number"><small>默认 0.1；控制重叠检测框的抑制强度。</small></label>
           <label>检测帧间隔<input data-setting="yolo.detect_every_n_frames" type="number"><small>每隔多少帧执行一次目标检测。</small></label>
           <label>轨迹最大保持帧<input data-setting="pipeline.max_stale_frames" type="number"><small>连续未匹配时保留轨迹的最大帧数。</small></label>
           <label>跟踪缓冲帧数<input data-setting="yolo.tracker_params.track_buffer" type="number"><small>跟踪器短时丢检后的缓存长度。</small></label>
@@ -353,7 +353,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=15"></script>
+<script src="/static/js/pipeline.js?v=16"></script>
   <script src="/static/js/memory.js?v=5"></script>
 <script src="/static/js/agent.js?v=47"></script>
 <script src="/static/js/settings.js?v=8"></script>
