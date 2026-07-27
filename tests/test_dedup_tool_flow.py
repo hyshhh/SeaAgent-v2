@@ -71,6 +71,41 @@ def test_dedup_executor_converts_frames_result_to_keyframes_by_track():
     assert result["scope"]["dedup"]["highThresholdShipCount"] == 2
 
 
+def test_dedup_executor_recovers_full_tracks_when_plan_passes_track_ids():
+    tools = _CaptureTools()
+    executor = PlanExecutor(tools)
+    track_records = [
+        {"trackId": "1", "startTime": 0, "endTime": 1},
+        {"trackId": "2", "startTime": 2, "endTime": 3},
+    ]
+    scope = {
+        "tracks": {"ok": True, "trackIds": [1, 2], "tracks": track_records},
+        "frames": {
+            "ok": True,
+            "keyframesByTrack": {
+                "1": {"keyframes": [{"trackId": "1", "keyframeId": "frame-1", "keyframeVectorId": 1}]},
+                "2": {"keyframes": [{"trackId": "2", "keyframeId": "frame-2", "keyframeVectorId": 2}]},
+            },
+        },
+    }
+    calls = [{
+        "id": "dedup",
+        "tool": "dedupTracks",
+        "arguments": {
+            # 复现实际后端错误：模型误把 trackIds 传给需要完整轨迹记录的 tracks。
+            "tracks": {"$ref": "tracks.trackIds"},
+            "keyframesByTrack": {"$ref": "frames.keyframesByTrack"},
+        },
+    }]
+
+    result = executor.execute(calls, scope)
+
+    assert result["summary"]["failedCount"] == 0
+    sent_tracks = tools.calls[0][1]["tracks"]
+    assert sent_tracks == track_records
+    assert all(isinstance(item, dict) for item in sent_tracks)
+
+
 def test_count_acceptance_requires_successful_dedup_result_not_just_tool_name():
     base_kwargs = dict(
         track_count=11,
@@ -160,3 +195,40 @@ def test_dedup_tracks_returns_confirmed_and_pending_merge_groups():
     assert result["pendingMergeGroups"][0]["currentGroups"] == [["1", "2"], ["3"]]
     assert result["pendingReduction"] == 1
     assert result["countStability"] == "sensitive"
+
+def test_dedup_tool_recovers_track_records_from_id_list():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.9, "dedup_low": 0.7}
+    track_records = {
+        "1": {"trackId": "1", "startTime": 0, "endTime": 1},
+        "2": {"trackId": "2", "startTime": 2, "endTime": 3},
+    }
+    service.repository = SimpleNamespace(get_track=lambda track_id: track_records.get(str(track_id)))
+    service.vectors = SimpleNamespace(
+        keyframes=_FakeVectorIndex({
+            1: np.array([1.0, 0.0], dtype=np.float32),
+            2: np.array([1.0, 0.0], dtype=np.float32),
+        })
+    )
+    groups = {
+        1: [{"trackId": "1", "keyframeId": "frame-1", "keyframeVectorId": "1", "retentionScore": 0.9}],
+        2: [{"trackId": "2", "keyframeId": "frame-2", "keyframeVectorId": "2", "retentionScore": 0.8}],
+    }
+
+    result = service.dedupTracks([1, 2], groups)
+
+    assert result["ok"] is True
+    assert result["trackCount"] == 2
+    assert result["highThresholdShipCount"] == 1
+    assert result["unresolvedTrackIds"] == []
+
+
+def test_dedup_tool_returns_structured_error_for_unresolved_track_ids():
+    service = ToolService.__new__(ToolService)
+    service.repository = SimpleNamespace(get_track=lambda track_id: None)
+
+    result = service.dedupTracks([999], {})
+
+    assert result["ok"] is False
+    assert result["error"] == "dedup_tracks_unresolved"
+    assert result["unresolvedTrackIds"] == ["999"]

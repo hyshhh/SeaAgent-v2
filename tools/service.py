@@ -682,29 +682,98 @@ class ToolService:
             "shownRegistryReferenceIds": self._representative_registry_reference_ids(registryReferenceIds or []),
         }
 
-    def dedupTracks(self, tracks: list[dict[str, Any]], keyframesByTrack: dict[str, Any]) -> dict[str, Any]:
-        candidates = {}
+    def _normalize_dedup_track_records(self, tracks: Any) -> tuple[list[dict[str, Any]], list[str]]:
+        """兼容完整轨迹、getTrack 结果外壳和纯 trackId 列表，并恢复完整时间字段。"""
+        raw = tracks.get("tracks") if isinstance(tracks, dict) else tracks
+        if not isinstance(raw, (list, tuple)):
+            return [], ["<invalid-tracks>"] if raw not in (None, "") else []
+        repository = getattr(self, "repository", None)
+        records: list[dict[str, Any]] = []
+        unresolved: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            track_id = item.get("trackId") if isinstance(item, dict) else item
+            if track_id is None:
+                unresolved.append("<missing-trackId>")
+                continue
+            key = str(track_id)
+            if key in seen:
+                continue
+            record = item if isinstance(item, dict) else None
+            needs_full_record = not isinstance(record, dict) or any(
+                record.get(field) is None for field in ("trackId", "startTime", "endTime")
+            )
+            if needs_full_record and repository is not None and callable(getattr(repository, "get_track", None)):
+                recovered = repository.get_track(track_id)
+                if isinstance(recovered, dict):
+                    record = recovered
+            if not isinstance(record, dict) or any(
+                record.get(field) is None for field in ("trackId", "startTime", "endTime")
+            ):
+                unresolved.append(key)
+                continue
+            seen.add(key)
+            records.append(record)
+        return records, unresolved
+
+    @staticmethod
+    def _normalize_dedup_keyframe_groups(value: Any) -> dict[str, Any]:
+        """兼容 getFrames 外壳、按轨迹分组对象和关键帧平铺列表。"""
+        if isinstance(value, dict) and isinstance(value.get("keyframesByTrack"), dict):
+            value = value["keyframesByTrack"]
+        if isinstance(value, list):
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for frame in value:
+                if isinstance(frame, dict) and frame.get("trackId") is not None:
+                    grouped.setdefault(str(frame["trackId"]), []).append(frame)
+            return grouped
+        if not isinstance(value, dict):
+            return {}
+        return {str(track_id): group for track_id, group in value.items()}
+
+    def dedupTracks(self, tracks: Any, keyframesByTrack: Any) -> dict[str, Any]:
+        tracks, unresolved_track_ids = self._normalize_dedup_track_records(tracks)
+        if unresolved_track_ids:
+            return {
+                "ok": False,
+                "error": "dedup_tracks_unresolved",
+                "unresolvedTrackIds": unresolved_track_ids,
+                "hint": "dedupTracks 需要完整轨迹记录；请传入 getTrack.tracks，而不是 trackIds",
+            }
+        keyframes_by_track = self._normalize_dedup_keyframe_groups(keyframesByTrack)
+        candidates: dict[str, list[dict[str, Any]]] = {}
         for track in tracks:
             track_id = str(track["trackId"])
-            group = (keyframesByTrack or {}).get(track_id, {})
+            group = keyframes_by_track.get(track_id, {})
             if isinstance(group, dict):
                 frames = group.get("keyframes") if isinstance(group.get("keyframes"), list) else []
             elif isinstance(group, list):
                 frames = group
             else:
                 frames = []
-            # isEmbedded 标志可能滞后；只要有向量编号就允许参与去重。
-            candidates[track_id] = [
-                frame for frame in frames
-                if isinstance(frame, dict) and frame.get("keyframeVectorId") is not None and frame.get("isEmbedded") is not False
-            ]
+            valid_frames: list[dict[str, Any]] = []
+            for frame in frames:
+                if not isinstance(frame, dict) or frame.get("keyframeVectorId") is None or frame.get("isEmbedded") is False:
+                    continue
+                try:
+                    vector_id = int(frame["keyframeVectorId"])
+                except (TypeError, ValueError):
+                    continue
+                normalized_frame = dict(frame)
+                normalized_frame["keyframeVectorId"] = vector_id
+                valid_frames.append(normalized_frame)
+            candidates[track_id] = valid_frames
         track_map = {str(item["trackId"]): item for item in tracks}
         vector_ids = [frame["keyframeVectorId"] for frames in candidates.values() for frame in frames]
         vectors = self.vectors.keyframes.get_many(vector_ids) if vector_ids else {}
         selected, missing = {}, []
         for track_id, frames in candidates.items():
             available = [frame for frame in frames if int(frame["keyframeVectorId"]) in vectors]
-            selected[track_id] = sorted(available, key=lambda item: item["retentionScore"], reverse=True)[:3]
+            selected[track_id] = sorted(
+                available,
+                key=lambda item: float(item.get("retentionScore") or 0.0),
+                reverse=True,
+            )[:3]
             if not selected[track_id]:
                 missing.append(track_id)
         pair_scores: dict[tuple[str, str], float] = {}
@@ -789,6 +858,7 @@ class ToolService:
             "pairScores": scores,
             "grayPairs": gray,
             "unsearchableTrackIds": missing,
+            "unresolvedTrackIds": [],
         }
 
     @classmethod

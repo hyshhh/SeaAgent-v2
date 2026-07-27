@@ -666,7 +666,10 @@ def _find_tool_contract_failures(records: list[dict[str, Any]], round_number: in
             continue
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
         error = str(record.get("error") or result.get("error") or "")
-        if any(token in error for token in ("argument_not_allowed:", "tool_not_allowed:", "unexpected keyword argument")):
+        if any(token in error for token in (
+            "argument_not_allowed:", "argument_invalid:", "tool_not_allowed:",
+            "unexpected keyword argument", "dedup_tracks_",
+        )):
             failures.append(f"{record.get('tool')}: {error}")
     return failures
 

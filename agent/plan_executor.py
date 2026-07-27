@@ -174,7 +174,11 @@ class PlanExecutor:
             arguments = self._resolve(call.get("arguments", {}), working)
             if tool == "dedupTracks":
                 arguments = self._enrich_dedup_tracks_args(arguments, working)
-            argument_issue = self._argument_contract_issue(tool, arguments) or self._required_argument_issue(tool, arguments)
+            argument_issue = (
+                self._argument_contract_issue(tool, arguments)
+                or self._required_argument_issue(tool, arguments)
+                or self._resolved_argument_issue(tool, arguments)
+            )
             if argument_issue:
                 result = {"ok": False, "error": argument_issue, "tool": tool}
                 observation = {
@@ -335,6 +339,22 @@ class PlanExecutor:
             return "argument_missing:evidence"
         return None
 
+    @classmethod
+    def _resolved_argument_issue(cls, tool: str, arguments: dict[str, Any]) -> str | None:
+        """校验已经解析完 $ref 的运行时参数，避免类型错误进入业务工具。"""
+        if tool != "dedupTracks":
+            return None
+        tracks = arguments.get("tracks")
+        if not isinstance(tracks, list) or any(
+            not isinstance(item, dict) or item.get("trackId") is None
+            for item in tracks
+        ):
+            return "argument_invalid:dedupTracks:tracks_requires_track_records"
+        grouped = arguments.get("keyframesByTrack")
+        if not isinstance(grouped, dict):
+            return "argument_invalid:dedupTracks:keyframesByTrack_requires_object"
+        return None
+
     @staticmethod
     def _skipped_record(observation: dict[str, Any]) -> dict[str, Any]:
         """跳过步骤也写入 tool_records，供 Reflect 识别「已尝试 matchImage」。"""
@@ -382,10 +402,9 @@ class PlanExecutor:
     def _enrich_dedup_tracks_args(cls, arguments: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
         """把模型可能传入的 frames / getFrames 结果兜底整理为 dedupTracks 需要的 keyframesByTrack。"""
         args = dict(arguments or {})
-        if cls._empty_dependency(args.get("tracks")):
-            tracks = cls._collect_tracks(scope)
-            if tracks:
-                args["tracks"] = tracks
+        tracks = cls._normalize_dedup_tracks(args.get("tracks"), scope)
+        if tracks:
+            args["tracks"] = tracks
         grouped = cls._keyframes_by_track_from(args.get("keyframesByTrack"))
         if not grouped:
             grouped = cls._keyframes_by_track_from(args.get("frames"))
@@ -396,6 +415,40 @@ class PlanExecutor:
         # dedupTracks 的函数签名不接受 frames，整理后移除别名参数，避免额外关键字导致执行失败。
         args.pop("frames", None)
         return args
+
+    @classmethod
+    def _normalize_dedup_tracks(cls, value: Any, scope: dict[str, Any]) -> list[dict[str, Any]]:
+        """把 trackIds、getTrack 外壳或轨迹记录统一恢复为完整轨迹记录。"""
+        available = cls._collect_tracks(scope)
+        available_by_id = {
+            str(item["trackId"]): item
+            for item in available
+            if isinstance(item, dict) and item.get("trackId") is not None
+        }
+        raw = value.get("tracks") if isinstance(value, dict) and isinstance(value.get("tracks"), list) else value
+        if not isinstance(raw, (list, tuple)):
+            return available
+
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if isinstance(item, dict):
+                track_id = item.get("trackId")
+            else:
+                track_id = item
+            if track_id is None:
+                continue
+            key = str(track_id)
+            if key in seen:
+                continue
+            record = available_by_id.get(key)
+            if record is None and isinstance(item, dict):
+                record = item
+            if not isinstance(record, dict) or record.get("trackId") is None:
+                continue
+            seen.add(key)
+            normalized.append(record)
+        return normalized or available
 
     @classmethod
     def _keyframes_by_track_from(cls, value: Any) -> dict[str, dict[str, Any]]:
