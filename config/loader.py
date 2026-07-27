@@ -39,6 +39,7 @@ def _build_runtime_config(config: dict[str, Any]) -> None:
         "conf_threshold": yolo.get("confidence"), "iou_threshold": yolo.get("iou"),
         "detect_classes": yolo.get("classes"), "detect_every_n_frames": yolo.get("detect_every_n_frames"),
         "tracker": yolo.get("tracker"), "tracker_params": yolo.get("tracker_params"),
+        "appearance_tracking": yolo.get("appearance_tracking"),
     }
     for key, value in mapping.items():
         if value is not None:

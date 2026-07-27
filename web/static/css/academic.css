@@ -2604,3 +2604,96 @@ tbody tr:hover td { background: #f2f6f9; }
   border-color: #dfb9b9;
   background: #fbefef;
 }
+
+
+/* 系统设置：提高参数说明层级和可读性 */
+
+#tab-settings .settings-fields:not(.tracking-settings-fields) label {
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid #e0e6ec;
+  border-radius: 4px;
+  background: #fafbfc;
+  color: #304257;
+  font-size: 12px;
+  font-weight: 650;
+}
+#tab-settings .settings-fields:not(.tracking-settings-fields) small {
+  min-height: 0;
+  color: #607083;
+  font-size: 10.5px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+#tab-settings .tracking-settings-fields {
+  gap: 14px;
+}
+#tab-settings .tracking-settings-fields label {
+  display: grid;
+  grid-template-columns: minmax(140px, .78fr) minmax(150px, 1fr);
+  align-items: center;
+  gap: 7px 14px;
+  min-height: 112px;
+  padding: 13px 15px;
+  border: 1px solid #d8e0e8;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #243447;
+}
+#tab-settings .tracking-settings-fields .setting-name {
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+#tab-settings .tracking-settings-fields input[type="number"] {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border-color: #b9c7d5;
+  background: #fff;
+  color: #1f3042;
+  font-size: 13px;
+  font-weight: 600;
+}
+#tab-settings .tracking-settings-fields small {
+  grid-column: 1 / -1;
+  min-height: 0;
+  color: #536477;
+  font-size: 11px;
+  line-height: 1.65;
+  font-weight: 400;
+}
+#tab-settings .tracking-settings-fields small strong {
+  color: #2a4158;
+  font-weight: 700;
+}
+#tab-settings .settings-toggle-field {
+  grid-template-columns: minmax(140px, .78fr) minmax(220px, 1fr);
+}
+#tab-settings .setting-switch {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #415469;
+  font-size: 11px;
+  line-height: 1.4;
+}
+#tab-settings .setting-switch input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #225f8f;
+}
+#tab-settings .tracking-settings-fields label.is-disabled {
+  background: #f3f5f7;
+  opacity: .62;
+}
+#tab-settings .tracking-settings-fields label.is-disabled input {
+  cursor: not-allowed;
+}
+@media (max-width: 760px) {
+  #tab-settings .tracking-settings-fields label,
+  #tab-settings .settings-toggle-field { grid-template-columns: 1fr; }
+  #tab-settings .tracking-settings-fields small { grid-column: 1; }
+}

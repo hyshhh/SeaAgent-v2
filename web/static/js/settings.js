@@ -25,6 +25,10 @@ function settingsStatus(message, type = '') {
 }
 
 function updateSettingInput(input, value, spec = {}) {
+  if (spec.type === 'bool' || input.type === 'checkbox') {
+    input.checked = Boolean(value);
+    return;
+  }
   if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
     input.value = value ?? '';
     if (spec.max_chars) input.maxLength = spec.max_chars;
@@ -55,7 +59,19 @@ function fillSystemSettings(data) {
     const path = input.dataset.setting;
     updateSettingInput(input, settingValue(systemSettings, path), systemSettingSpecs[path]);
   });
+  syncAppearanceTrackingFields();
   syncMonitoringOptions(systemSettings);
+}
+
+function syncAppearanceTrackingFields() {
+  const toggle = document.querySelector('[data-appearance-toggle]');
+  const enabled = Boolean(toggle?.checked);
+  document.querySelectorAll('[data-appearance-dependent] input').forEach((input) => {
+    input.disabled = !enabled;
+  });
+  document.querySelectorAll('[data-appearance-dependent]').forEach((field) => {
+    field.classList.toggle('is-disabled', !enabled);
+  });
 }
 
 function syncMonitoringOptions(settings) {
@@ -77,6 +93,10 @@ function collectSystemSettings() {
     const path = input.dataset.setting;
     const spec = systemSettingSpecs[path] || {};
     const raw = input.value;
+    if (spec.type === 'bool' || input.type === 'checkbox') {
+      setSettingValue(values, path, input.checked);
+      continue;
+    }
     if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
       const text = String(raw || '').trim();
       if (!text) throw new Error(`提示词“${spec.label || path}”不能为空`);
@@ -164,3 +184,8 @@ window.saveSystemSettings = saveSystemSettings;
 window.resetSystemSettings = resetSystemSettings;
 
 document.addEventListener('DOMContentLoaded', () => loadSystemSettings(false));
+
+
+document.addEventListener('change', (event) => {
+  if (event.target?.matches?.('[data-appearance-toggle]')) syncAppearanceTrackingFields();
+});

@@ -1,7 +1,7 @@
 """
 ShipDetector — 基于 YOLO 的船只检测与跟踪
 
-使用 ultralytics YOLO 原生追踪算法（ByteTrack），输出带 track ID 的检测框。
+使用 ultralytics YOLO 原生追踪算法，默认采用 ByteTrack；启用外观相似度后切换为 BoT-SORT。
 """
 
 from __future__ import annotations
@@ -47,9 +47,10 @@ class ShipDetector:
         model_path: str = "yolov8n.pt",
         device: str = "",
         conf_threshold: float = 0.5,
-        iou_threshold: float = 0.1,
+        iou_threshold: float = 0.5,
         tracker_type: str = "bytetrack",
         tracker_params: dict[str, Any] | None = None,
+        appearance_tracking: dict[str, Any] | None = None,
         classes: list[int] | None = None,
     ):
         from ultralytics import YOLO
@@ -58,9 +59,25 @@ class ShipDetector:
         self._iou_threshold = iou_threshold
         self._classes = classes
         self._device = device
-        self._tracker_yaml = _build_tracker_yaml(tracker_type, tracker_params)
-        self._tracker_type = tracker_type
-        self._tracker_tmp_file: str | None = self._tracker_yaml if self._tracker_yaml != f"{tracker_type}.yaml" else None
+        appearance = dict(appearance_tracking or {})
+        effective_tracker = str(tracker_type or "bytetrack").strip().lower()
+        effective_params = dict(tracker_params or {})
+        self._appearance_tracking_enabled = bool(appearance.get("enabled", False))
+        if self._appearance_tracking_enabled:
+            effective_tracker = "botsort"
+            effective_params.update({
+                "with_reid": True,
+                "appearance_thresh": float(appearance.get("appearance_thresh", 0.8)),
+                "proximity_thresh": float(appearance.get("proximity_thresh", 0.5)),
+                "gmc_method": appearance.get("gmc_method", "sparseOptFlow") or "sparseOptFlow",
+                "model": appearance.get("model", "auto") or "auto",
+            })
+        self._tracker_type = effective_tracker
+        self._tracker_params = effective_params
+        low_threshold = float(effective_params.get("track_low_thresh", conf_threshold))
+        self._tracker_conf_threshold = min(conf_threshold, low_threshold)
+        self._tracker_yaml = _build_tracker_yaml(effective_tracker, effective_params)
+        self._tracker_tmp_file: str | None = self._tracker_yaml if self._tracker_yaml != f"{effective_tracker}.yaml" else None
 
         logger.info("加载 YOLO 模型: %s (device=%s)", model_path, device or "auto")
         self._model = YOLO(model_path)
@@ -73,12 +90,12 @@ class ShipDetector:
         except Exception as e:
             logger.warning("YOLO 预热失败（不影响后续使用）: %s", e)
 
-        logger.info("YOLO 模型加载完成，追踪器: %s", tracker_type)
+        logger.info("YOLO 模型加载完成，追踪器: %s，外观相似度: %s", self._tracker_type, "开启" if self._appearance_tracking_enabled else "关闭")
 
     def detect(self, frame: np.ndarray, frame_id: int = 0) -> list[Detection]:
         try:
             results = self._model.track(
-                source=frame, persist=True, conf=self._conf_threshold,
+                source=frame, persist=True, conf=self._tracker_conf_threshold,
                 iou=self._iou_threshold,
                 tracker=self._tracker_yaml, classes=self._classes,
                 verbose=False, device=self._device or None,
@@ -102,6 +119,9 @@ class ShipDetector:
             if x2 <= x1 or y2 <= y1:
                 continue
             conf = float(boxes.conf[i].item())
+            # 允许低分框在跟踪器内部参与第二阶段关联，但不把低于检测阈值的结果写入轨迹记忆。
+            if conf < self._conf_threshold:
+                continue
 
             # 裁剪（加 padding）
             h, w = frame.shape[:2]

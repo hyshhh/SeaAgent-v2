@@ -273,7 +273,7 @@ async function deleteVideo(filename) {
 function collectVideoParams() {
   return {
     conf_threshold: parseFloat(document.getElementById('optConf').value) || 0.5,
-    iou_threshold: parseFloat(document.getElementById('optIou').value) || 0.1,
+    iou_threshold: parseFloat(document.getElementById('optIou').value) || 0.5,
     detect_every: parseInt(document.getElementById('optDetectEvery').value, 10) || 2,
     target_fps: parseFloat(document.getElementById('optTargetFps').value) || 0,
     pipe_scale: parseFloat(document.getElementById('optPipeScale').value) || 0.25,
@@ -288,7 +288,7 @@ function collectVideoParams() {
 function collectCameraParams() {
   return {
     conf_threshold: parseFloat(document.getElementById('camConf').value) || 0.5,
-    iou_threshold: parseFloat(document.getElementById('camIou').value) || 0.1,
+    iou_threshold: parseFloat(document.getElementById('camIou').value) || 0.5,
     detect_every: parseInt(document.getElementById('camDetectEvery').value, 10) || 2,
     target_fps: parseFloat(document.getElementById('camTargetFps').value) || 0,
     capture_fps: parseInt(document.getElementById('camCaptureFps').value, 10) || 15,

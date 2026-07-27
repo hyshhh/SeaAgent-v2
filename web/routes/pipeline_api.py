@@ -202,8 +202,8 @@ class PipelineStartRequest(BaseModel):
     display: bool = False
     monitor_start_time: float | None = None  # 连续监控序列中的模拟起始时间
     # ── 核心检测参数 ──
-    conf_threshold: float = 0.25
-    iou_threshold: float = 0.45
+    conf_threshold: float = 0.5
+    iou_threshold: float = 0.5
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
@@ -218,8 +218,8 @@ class PipelineStartRequest(BaseModel):
 class BrowserCameraStartRequest(BaseModel):
     stream_mode: str = "mjpeg"  # "mjpeg" 或 "h264"
     # ── 核心检测参数 ──
-    conf_threshold: float = 0.25
-    iou_threshold: float = 0.45
+    conf_threshold: float = 0.5
+    iou_threshold: float = 0.5
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率

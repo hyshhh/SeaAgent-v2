@@ -4,7 +4,7 @@ pipeline:
   candidate_every_n_frames: 15
   candidate_pool_size: 8
   keyframe_pool_size: 6
-  max_stale_frames: 90
+  max_stale_frames: 120
   recognition_workers: 3
   recognition_timeout_seconds: 45
   min_crop_width: 80

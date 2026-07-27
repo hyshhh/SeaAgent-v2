@@ -392,7 +392,7 @@ class TrackMemoryBuilder:
             logger.info("轨迹记忆自动清理：%s", ", ".join(expired))
 
     def _finalize_stale(self) -> None:
-        threshold = int(self.settings.get("max_stale_frames", 90))
+        threshold = int(self.settings.get("max_stale_frames", 120))
         for track_id, state in list(self.active.items()):
             if state.missed_frames > threshold:
                 self._drain_track(state, wait_for_all=True)

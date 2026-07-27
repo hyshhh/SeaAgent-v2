@@ -57,12 +57,24 @@ yolo:
   model: yolov8n.pt
   device: ""
   confidence: 0.5
-  iou: 0.1
+  iou: 0.5
   classes: [8]
   tracker: bytetrack
+  tracker_params:
+    track_high_thresh: 0.5
+    track_low_thresh: 0.1
+    new_track_thresh: 0.5
+    track_buffer: 90
+    match_thresh: 0.8
+    fuse_score: true
+  appearance_tracking:
+    enabled: false
+    appearance_thresh: 0.8
+    proximity_thresh: 0.5
+    model: auto
 ```
 
-自训练船舶模型时改 `model` / `classes`。检测只出船舶区域，不评舷号质量。
+自训练船舶模型时改 `model` / `classes`。检测只出船舶区域，不评舷号质量。低分检测仅参与跟踪器的第二阶段关联，不会写入轨迹记忆。开启 `appearance_tracking.enabled` 后会切换到支持外观重识别的跟踪器，以提高遮挡和交叉场景下的轨迹身份稳定性。
 
 ## 存储
 

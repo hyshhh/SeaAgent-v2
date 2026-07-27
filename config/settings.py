@@ -44,8 +44,14 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.iou": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.detect_every_n_frames": {"type": "int", "min": 1, "max": 100, "step": 1},
+    "yolo.tracker_params.track_high_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
+    "yolo.tracker_params.track_low_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
+    "yolo.tracker_params.new_track_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
     "yolo.tracker_params.track_buffer": {"type": "int", "min": 1, "max": 1000, "step": 1},
     "yolo.tracker_params.match_thresh": {"type": "float", "min": 0.01, "max": 1.0, "step": 0.01},
+    "yolo.appearance_tracking.enabled": {"type": "bool"},
+    "yolo.appearance_tracking.appearance_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
+    "yolo.appearance_tracking.proximity_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
     "pipeline.max_stale_frames": {"type": "int", "min": 1, "max": 1000, "step": 1},
     "pipeline.candidate_every_n_frames": {"type": "int", "min": 1, "max": 1000, "step": 1},
     "pipeline.candidate_pool_size": {"type": "int", "min": 1, "max": 100, "step": 1},
@@ -126,10 +132,19 @@ def _write_runtime(data: dict[str, Any]) -> None:
     temporary.replace(RUNTIME_FILE)
 
 
-def _coerce(path: str, value: Any) -> int | float | str:
+def _coerce(path: str, value: Any) -> int | float | str | bool:
     # numeric specs first; prompt specs second
     if path in SETTING_SPECS:
         spec = SETTING_SPECS[path]
+        if spec["type"] == "bool":
+            if isinstance(value, bool):
+                return value
+            text_value = str(value if value is not None else "").strip().lower()
+            if text_value in {"1", "true", "yes", "on"}:
+                return True
+            if text_value in {"0", "false", "no", "off"}:
+                return False
+            raise ValueError(f"参数 {path} 必须是布尔值")
         if spec["type"] == "enum":
             text_value = str(value if value is not None else "").strip().lower()
             choices = [str(item).lower() for item in spec.get("choices", [])]
@@ -155,6 +170,11 @@ def _coerce(path: str, value: Any) -> int | float | str:
 
 
 def _validate_relations(config: dict[str, Any]) -> None:
+    tracker = config["yolo"]["tracker_params"]
+    if tracker["track_low_thresh"] > tracker["track_high_thresh"]:
+        raise ValueError("跟踪低分阈值不能高于跟踪高分阈值")
+    if tracker["new_track_thresh"] < tracker["track_high_thresh"]:
+        raise ValueError("新建轨迹阈值不能低于跟踪高分阈值")
     retrieval = config["pipeline"]["retrieval"]
     if retrieval["text_exclude"] >= retrieval["text_match"]:
         raise ValueError("文本排除阈值必须小于文本匹配阈值")
