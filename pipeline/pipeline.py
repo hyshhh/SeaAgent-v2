@@ -30,7 +30,7 @@ class ShipPipeline:
         self._stop_file = Path(settings["stop_file"]) if settings.get("stop_file") else None
         self._raw_stdout = bool(settings.get("raw_stdout", False))
         self._no_output = bool(settings.get("no_output", False))
-        self._detector = ShipDetector(model_path=settings.get("yolo_model", "yolov8n.pt"), device=settings.get("device", ""), conf_threshold=float(settings.get("conf_threshold", 0.5)), iou_threshold=float(settings.get("iou_threshold", 0.5)), tracker_type=settings.get("tracker", "bytetrack"), tracker_params=settings.get("tracker_params"), appearance_tracking=settings.get("appearance_tracking"), classes=settings.get("detect_classes", [8]))
+        self._detector = ShipDetector(model_path=settings.get("yolo_model", "yolov8n.pt"), device=settings.get("device", ""), conf_threshold=float(settings.get("conf_threshold", 0.5)), tracking_candidate_confidence=float(settings.get("tracking_candidate_confidence", 0.2)), iou_threshold=float(settings.get("iou_threshold", 0.5)), tracker_type=settings.get("tracker", "bytetrack"), tracker_params=settings.get("tracker_params"), appearance_tracking=settings.get("appearance_tracking"), classes=settings.get("detect_classes", [8]))
         self._memory = TrackMemoryBuilder(self._config, pool_event_callback=pool_event_callback)
         self._renderer = DemoRenderer(show_fps=True, show_track_id=True)
         self._fps = FPSMeter(window_seconds=10.0)

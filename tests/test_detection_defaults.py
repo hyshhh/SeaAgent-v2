@@ -9,10 +9,13 @@ def test_detection_threshold_defaults_are_consistent():
     signature = inspect.signature(ShipDetector.__init__)
 
     assert config["yolo"]["confidence"] == 0.5
+    assert config["yolo"]["tracking_candidate_confidence"] == 0.2
     assert config["yolo"]["iou"] == 0.5
     assert config["pipeline"]["conf_threshold"] == 0.5
+    assert config["pipeline"]["tracking_candidate_confidence"] == 0.2
     assert config["pipeline"]["iou_threshold"] == 0.5
     assert signature.parameters["conf_threshold"].default == 0.5
+    assert signature.parameters["tracking_candidate_confidence"].default == 0.2
     assert signature.parameters["iou_threshold"].default == 0.5
 
 
@@ -22,8 +25,8 @@ def test_tracking_defaults_are_consistent():
     appearance = config["yolo"]["appearance_tracking"]
 
     assert tracker["track_high_thresh"] == 0.5
-    assert tracker["track_low_thresh"] == 0.1
-    assert tracker["new_track_thresh"] == 0.5
+    assert tracker["track_low_thresh"] == 0.2
+    assert tracker["new_track_thresh"] == 0.6
     assert tracker["track_buffer"] == 90
     assert tracker["match_thresh"] == 0.8
     assert tracker["fuse_score"] is True

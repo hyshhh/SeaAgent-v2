@@ -47,6 +47,7 @@ class ShipDetector:
         model_path: str = "yolov8n.pt",
         device: str = "",
         conf_threshold: float = 0.5,
+        tracking_candidate_confidence: float = 0.2,
         iou_threshold: float = 0.5,
         tracker_type: str = "bytetrack",
         tracker_params: dict[str, Any] | None = None,
@@ -56,6 +57,7 @@ class ShipDetector:
         from ultralytics import YOLO
 
         self._conf_threshold = conf_threshold
+        self._tracking_candidate_confidence = tracking_candidate_confidence
         self._iou_threshold = iou_threshold
         self._classes = classes
         self._device = device
@@ -74,8 +76,7 @@ class ShipDetector:
             })
         self._tracker_type = effective_tracker
         self._tracker_params = effective_params
-        low_threshold = float(effective_params.get("track_low_thresh", conf_threshold))
-        self._tracker_conf_threshold = min(conf_threshold, low_threshold)
+        self._tracker_conf_threshold = tracking_candidate_confidence
         self._tracker_yaml = _build_tracker_yaml(effective_tracker, effective_params)
         self._tracker_tmp_file: str | None = self._tracker_yaml if self._tracker_yaml != f"{effective_tracker}.yaml" else None
 

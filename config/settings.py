@@ -42,6 +42,7 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
 SETTING_SPECS: dict[str, dict[str, Any]] = {
 
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
+    "yolo.tracking_candidate_confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.05},
     "yolo.iou": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.detect_every_n_frames": {"type": "int", "min": 1, "max": 100, "step": 1},
     "yolo.tracker_params.track_high_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
@@ -170,7 +171,10 @@ def _coerce(path: str, value: Any) -> int | float | str | bool:
 
 
 def _validate_relations(config: dict[str, Any]) -> None:
-    tracker = config["yolo"]["tracker_params"]
+    yolo = config["yolo"]
+    tracker = yolo["tracker_params"]
+    if yolo["tracking_candidate_confidence"] > tracker["track_low_thresh"]:
+        raise ValueError("跟踪候选置信度不能高于跟踪低分阈值，否则第二阶段关联区间不完整")
     if tracker["track_low_thresh"] > tracker["track_high_thresh"]:
         raise ValueError("跟踪低分阈值不能高于跟踪高分阈值")
     if tracker["new_track_thresh"] < tracker["track_high_thresh"]:

@@ -36,7 +36,9 @@ def _build_runtime_config(config: dict[str, Any]) -> None:
     yolo = config.setdefault("yolo", {})
     mapping = {
         "yolo_model": yolo.get("model"), "device": yolo.get("device"),
-        "conf_threshold": yolo.get("confidence"), "iou_threshold": yolo.get("iou"),
+        "conf_threshold": yolo.get("confidence"),
+        "tracking_candidate_confidence": yolo.get("tracking_candidate_confidence"),
+        "iou_threshold": yolo.get("iou"),
         "detect_classes": yolo.get("classes"), "detect_every_n_frames": yolo.get("detect_every_n_frames"),
         "tracker": yolo.get("tracker"), "tracker_params": yolo.get("tracker_params"),
         "appearance_tracking": yolo.get("appearance_tracking"),
