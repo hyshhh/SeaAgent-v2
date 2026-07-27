@@ -2697,3 +2697,101 @@ tbody tr:hover td { background: #f2f6f9; }
   #tab-settings .settings-toggle-field { grid-template-columns: 1fr; }
   #tab-settings .tracking-settings-fields small { grid-column: 1; }
 }
+
+
+/* 智能体技能与工具过程：默认折叠，保持正文流式输出简洁。 */
+.agent-stream-text .agent-activity {
+  display: block;
+  margin: 0 0 7px;
+  border: 1px solid #d8e0e8;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: #526274;
+  white-space: normal;
+  overflow: hidden;
+}
+.agent-stream-text .agent-activity summary {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 8px;
+  cursor: pointer;
+  list-style: none;
+  color: #4e5f71;
+  font-size: 11px;
+  line-height: 1.45;
+  user-select: none;
+}
+.agent-stream-text .agent-activity summary::-webkit-details-marker { display: none; }
+.agent-stream-text .agent-activity summary:hover { background: #f1f5f8; }
+.agent-stream-text .agent-activity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #c8d3de;
+  border-radius: 4px;
+  background: #fff;
+  color: #536c83;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+.agent-stream-text .agent-activity summary > b {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid #758596;
+  border-bottom: 1.5px solid #758596;
+  transform: rotate(45deg);
+  transition: transform .16s ease;
+}
+.agent-stream-text .agent-activity[open] summary > b { transform: rotate(225deg); }
+.agent-stream-text .agent-activity-cursor {
+  display: inline-block;
+  width: 5px;
+  height: 12px;
+  background: #315f86;
+  animation: thinkingPulse .8s steps(1) infinite;
+}
+.agent-stream-text .agent-activity-body {
+  display: grid;
+  gap: 4px;
+  padding: 0 8px 8px 33px;
+  border-top: 1px solid #e4e9ee;
+  background: #fff;
+}
+.agent-stream-text .agent-activity-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed #e2e7ec;
+  color: #34475a;
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.agent-stream-text .agent-activity-item:last-child { border-bottom: 0; }
+.agent-stream-text .agent-activity-item em {
+  color: #718194;
+  font-size: 9.5px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.agent-stream-text .agent-activity-item small {
+  grid-column: 1 / -1;
+  color: #6c7c8e;
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+.agent-stream-text .agent-activity-item.failed,
+.agent-stream-text .agent-activity-item.failed em { color: #944653; }
+.agent-stream-text .agent-stream-copy {
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-stream-text .agent-activity + .agent-stream-copy { margin-top: 3px; }

@@ -962,6 +962,9 @@ def build_sea_agent_graph(
         emit_start: bool = True,
         emit_end: bool = True,
         emit_initial_skill_events: bool = True,
+        emit_live_deltas: bool = True,
+        stream_char_limit: int | None = None,
+        retry_non_stream: bool = True,
     ) -> dict[str, Any]:
         prompt_context = {
             "question": state.get("question"),
@@ -989,7 +992,7 @@ def build_sea_agent_graph(
                 {
                     "type": "status",
                     "title": title,
-                    "message": f"{title} 开始（skills: {', '.join(skill_ids) or 'core'}）",
+                    "message": f"{title} 开始，正在读取相关技能",
                     "enabledSkills": skill_ids,
                     "skillReads": skill_reads,
                     "role": role,
@@ -1034,9 +1037,10 @@ def build_sea_agent_graph(
         messages: list[Any] = []
         streamed_thinking = ""
         streamed_text = ""
+        stream_guard_triggered = False
 
         def _emit_delta(delta: str, *, kind: str = "thinking") -> None:
-            if not delta or not role:
+            if not delta or not role or not emit_live_deltas:
                 return
             _emit(
                 event_handler,
@@ -1114,11 +1118,15 @@ def build_sea_agent_graph(
                         if piece:
                             streamed_text += piece
                             _emit_delta(piece, kind="token")
-            if final_values and isinstance(final_values.get("messages"), list):
+                    if stream_char_limit and len(streamed_thinking) + len(streamed_text) >= stream_char_limit:
+                        stream_guard_triggered = True
+                        invoke_error = f"{title} 流式内容超过限制，已由确定性验收规则接管"
+                        break
+            if final_values and isinstance(final_values.get("messages"), list) and not stream_guard_triggered:
                 # values 含完整对话，优先于边收边攒的 messages
                 messages = list(final_values.get("messages") or [])
-            elif not messages:
-                # 仅当流式完全没拿到状态时才 invoke 一次（不再双重重试）
+            elif not messages and retry_non_stream and not stream_guard_triggered:
+                # 仅当流式完全没拿到状态时才 invoke 一次（反思节点由确定性规则接管，不重复请求模型）
                 result = agent.invoke(
                     {"messages": [HumanMessage(content=user_content)]},
                     config={"recursion_limit": recursion_limit},
@@ -1126,7 +1134,7 @@ def build_sea_agent_graph(
                 messages = result.get("messages") or []
         except Exception as error:
             invoke_error = str(error)
-            if not messages:
+            if not messages and retry_non_stream:
                 # 流式失败时只做一次非流式兜底
                 try:
                     result = agent.invoke(
@@ -1202,7 +1210,6 @@ def build_sea_agent_graph(
                                         **record,
                                     },
                                 )
-                                _emit_delta(f"\n[已读取技能：{record.get('title') or skill_id}]\n", kind="thinking")
                     continue
                 call_id = tool_call_id or f"{tname}-{len(tool_records)+1}"
                 scope_updates[call_id] = payload
@@ -2298,6 +2305,87 @@ def build_sea_agent_graph(
             registry_coverage_complete=registry_coverage_complete,
             dedup_usable=dedup_usable,
         )
+        pending_requirements = acceptance_progress.get("pendingRequirements") or []
+        pre_handoff: dict[str, Any] | None = None
+        # 可由验收清单直接判定的场景不再等待模型长篇推理，避免 ReflectAgent 空转或重复调用。
+        if tool_contract_failures and loop_count < limit:
+            pre_handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": True,
+                "state": "replan",
+                "decisionSource": "tool_contract_guard",
+                "reason": "本轮工具参数与后端契约不一致，已阻止重复调用并切换为确定性正确工具链",
+                "nextAction": acceptance_progress.get("nextAction") or intent.get("nextAgentFocus") or "按意图重新生成正确工具链",
+                "evidenceGap": "；".join(tool_contract_failures),
+            }
+        elif should_replan_registry:
+            pre_handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": False,
+                "state": "replan",
+                "decisionSource": "acceptance_guard",
+                "reason": "视频轨迹为 0，尚需对照先验库确认身份或在库情况",
+                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
+                "evidenceGap": "未查询先验库",
+            }
+        elif membership_mode and zero_tracks and acceptance_progress.get("acceptanceSatisfied"):
+            relation_label = "在库" if membership_mode == "in" else "未在库"
+            pre_handoff = {
+                "handoff": "finish",
+                "state": "sufficient",
+                "decisionSource": "acceptance_guard",
+                "reason": f"全量视频轨迹为 0，当前范围内没有船舶候选，因此没有{relation_label}船舶出现",
+                "answerHint": "视频侧无候选目标，已按零轨迹短路规则结束；无需查询整库或执行图像匹配",
+            }
+        elif membership_mode and acceptance_progress.get("acceptanceSatisfied") and match_image_blocked:
+            pre_handoff = {
+                "handoff": "finish",
+                "state": "uncertain",
+                "decisionSource": "acceptance_guard",
+                "reason": "视频中存在候选轨迹，但图像匹配缺少有效库图、关键帧或向量，无法可靠判定在库关系",
+                "answerHint": "已停止无收益的重复匹配；仅展示视频候选轨迹，不把完整先验库误当作查询结果",
+                "evidenceGap": "图像匹配输入不可用",
+            }
+        elif should_replan_visual:
+            pre_handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": False,
+                "state": "replan",
+                "decisionSource": "acceptance_guard",
+                "reason": "先验库已命中且有可搜参考图，需使用图像匹配对照视频关键帧",
+                "nextAction": (
+                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
+                    "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
+                    "galleryImages=$ref frames.keyframes)"
+                ),
+                "evidenceGap": "已有可搜库图但未做库图与视频关键帧匹配",
+            }
+        elif should_replan_registry_list or should_replan_registry_list_visual:
+            relation_label = "在库" if membership_mode == "in" else "未在库"
+            pre_handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": False,
+                "state": "replan",
+                "decisionSource": "acceptance_guard",
+                "reason": f"{relation_label}船舶列表的验收条件尚未满足，必须进入下一轮完成全库对照",
+                "nextAction": acceptance_progress.get("nextAction"),
+                "evidenceGap": "；".join(pending_requirements),
+            }
+        elif pending_requirements and loop_count < limit:
+            pre_handoff = {
+                "handoff": "plan",
+                "replan": True,
+                "hardReplan": False,
+                "state": "replan",
+                "decisionSource": "acceptance_guard",
+                "reason": "当前证据只完成了部分验收，按首个明确缺口直接进入下一轮",
+                "nextAction": acceptance_progress.get("nextAction"),
+                "evidenceGap": "；".join(pending_requirements),
+            }
         user = json.dumps(
             {
                 "task": "判定是否退出。replan→handoff_to_plan_replan；否则必须 handoff_finish",
@@ -2365,25 +2453,96 @@ def build_sea_agent_graph(
             },
             ensure_ascii=False,
         )
-        out = _run_agent(
-            "reflect",
-            "reflect_agent",
-            "反思判定智能体（ReflectAgent）",
-            REFLECT_RESPONSIBILITY,
-            reflect_tools,
-            state,
-            user,
-            role="reflector",
-            round_number=loop_count,
-            recursion_limit=12,
-            skill_context={
-                "acceptanceProgress": acceptance_progress,
-                "acceptance": acceptance_progress,
-                "evidenceGap": "；".join(acceptance_progress.get("pendingRequirements") or []),
+        reflect_skill_context = {
+            "acceptanceProgress": acceptance_progress,
+            "acceptance": acceptance_progress,
+            "evidenceGap": "；".join(pending_requirements),
+            "round": loop_count,
+            "maxRounds": limit,
+        }
+        if pre_handoff:
+            _, reflect_skill_ids = role_system_prompt(
+                "reflect_agent",
+                "反思判定智能体（ReflectAgent）",
+                REFLECT_RESPONSIBILITY,
+                context={
+                    "question": state.get("question"),
+                    "intent": state.get("intent"),
+                    "observation_summary": state.get("observation_summary"),
+                    **reflect_skill_context,
+                },
+            )
+            reflect_skill_reads = _skill_read_records("reflect_agent", reflect_skill_ids, source="auto")
+            _emit(event_handler, {
+                "type": "status",
+                "title": "反思判定智能体（ReflectAgent）",
+                "message": "验收规则正在核对证据并决定是否进入下一轮",
+                "enabledSkills": reflect_skill_ids,
+                "skillReads": reflect_skill_reads,
+                "role": "reflector",
                 "round": loop_count,
-                "maxRounds": limit,
-            },
-        )
+            })
+            _emit(event_handler, {
+                "type": "agent_start",
+                "title": "反思判定智能体（ReflectAgent）",
+                "message": "反思判定智能体开始",
+                "role": "reflector",
+                "round": loop_count,
+                "enabledSkills": reflect_skill_ids,
+                "skillReads": reflect_skill_reads,
+            })
+            for record in reflect_skill_reads:
+                _emit(event_handler, {
+                    "type": "agent_skill",
+                    "title": "反思判定智能体（ReflectAgent）",
+                    "message": record.get("title") or record.get("skillId"),
+                    "role": "reflector",
+                    "round": loop_count,
+                    "phase": "completed" if record.get("ok") else "failed",
+                    **record,
+                })
+            reflect_reason = str(pre_handoff.get("reason") or "验收规则已完成判定")
+            out = {
+                "handoff": pre_handoff,
+                "text": reflect_reason,
+                "tool_chain": [],
+                "tool_records": [],
+                "scope_updates": {},
+                "skill_ids": [item.get("skillId") for item in reflect_skill_reads if item.get("ok")],
+                "skill_reads": reflect_skill_reads,
+                "plan_calls": [],
+                "invoke_error": "",
+                "thinking": "",
+                "deferred_end_event": {
+                    "type": "agent_end",
+                    "title": "反思判定智能体（ReflectAgent）",
+                    "message": reflect_reason[:300],
+                    "role": "reflector",
+                    "round": loop_count,
+                    "thinking": "",
+                    "enabledSkills": [item.get("skillId") for item in reflect_skill_reads if item.get("ok")],
+                    "skillReads": reflect_skill_reads,
+                    "modelSummary": {"summary": reflect_reason[:500], "reason": reflect_reason[:300]},
+                    "calls": [],
+                },
+            }
+        else:
+            out = _run_agent(
+                "reflect",
+                "reflect_agent",
+                "反思判定智能体（ReflectAgent）",
+                REFLECT_RESPONSIBILITY,
+                reflect_tools,
+                state,
+                user,
+                role="reflector",
+                round_number=loop_count,
+                recursion_limit=6,
+                skill_context=reflect_skill_context,
+                emit_live_deltas=False,
+                stream_char_limit=900,
+                retry_non_stream=False,
+            )
         handoff = out.get("handoff") or {}
         # 工具参数契约错误必须切换为确定性计划，禁止让模型重复同一错误调用。
         if tool_contract_failures and loop_count < limit:
@@ -2615,14 +2774,14 @@ def build_sea_agent_graph(
             "currentFocus": acceptance_progress.get("currentFocus"),
             "acceptanceProgress": acceptance_progress,
             "pendingRequirements": acceptance_progress.get("pendingRequirements") or [],
+            "thinking": "",
             "modelSummary": {
                 **(reflect_end_event.get("modelSummary") or {}),
                 "summary": reflect_reason[:500],
                 "reason": reflect_reason[:300],
+                "thinking": "",
             },
         })
-        if out.get("thinking") and not reflect_end_event.get("thinking"):
-            reflect_end_event["thinking"] = str(out.get("thinking") or "")[:2000]
         _emit(event_handler, reflect_end_event)
 
         round_item = {

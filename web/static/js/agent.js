@@ -752,19 +752,15 @@ function normalizedSkillReads(event) {
 function compactSkillReads(event) {
   const reads = normalizedSkillReads(event);
   if (!reads.length) return '';
-  return `技能阅读：${reads.map((item) => {
-    const source = item.source === 'dynamic' ? '按需' : '自动';
-    return `${item.title || item.skillId}（${source}${item.ok === false ? '失败' : ''}）`;
-  }).join('、')}`;
+  const failed = reads.filter((item) => item.ok === false).length;
+  return `已读取 ${reads.length} 项技能${failed ? `，${failed} 项失败` : ''}`;
 }
 
 function skillReadTags(event) {
-  return normalizedSkillReads(event).map((item) => {
-    const source = item.source === 'dynamic' ? '按需读取' : '自动注入';
-    const failed = item.ok === false;
-    const title = `${source}${item.description ? `：${item.description}` : ''}`;
-    return `<span class="skill-read ${item.source === 'dynamic' ? 'dynamic' : 'auto'}${failed ? ' failed' : ''}" title="${escapeHtml(title)}">技能 · ${escapeHtml(item.title || item.skillId)}</span>`;
-  }).join('');
+  const reads = normalizedSkillReads(event);
+  if (!reads.length) return '';
+  const failed = reads.filter((item) => item.ok === false).length;
+  return `<span class="skill-read${failed ? ' failed' : ''}">技能 ${reads.length} 项${failed ? ` · ${failed} 项失败` : ''}</span>`;
 }
 
 function compactToolCall(call) {
@@ -784,7 +780,6 @@ function compactToolCall(call) {
 function compactAgentText(event) {
   const summary = modelSummaryText(event.modelSummary).trim();
   const calls = Array.isArray(event.calls) ? event.calls : [];
-  const skillText = compactSkillReads(event);
   if (event.role === 'planner') {
     const model = event.modelSummary || {};
     const lines = [];
@@ -793,22 +788,18 @@ function compactAgentText(event) {
     if (model.reason) lines.push(`依据：${compactAgentValue(model.reason, 140)}`);
     if (event.planRepair) lines.push('校验：上一版计划无效，已重新规划');
     if (event.fallback) lines.push(`说明：${compactAgentValue(event.fallback, 120)}`);
-    if (skillText) lines.unshift(skillText);
     return lines.join('\n') || '本轮未生成可执行计划';
   }
   if (event.role === 'intent') {
     const model = event.modelSummary || {};
     return [
-      skillText,
       model.goal ? `移交：${compactAgentValue(model.goal, 120)}` : '',
       model.reason ? `依据：${compactAgentValue(model.reason, 140)}` : '',
       summary ? compactAgentValue(summary, 200) : '',
     ].filter(Boolean).join('\n') || '意图识别完成';
   }
   if (event.role === 'observer') {
-    const toolLines = calls.map(compactToolCall);
-    return [skillText, toolLines.length ? toolLines.join('\n') : '', summary ? `观察：${compactAgentValue(summary, 160)}` : '']
-      .filter(Boolean).join('\n') || '本轮没有工具结果';
+    return summary ? `观察：${compactAgentValue(summary, 260)}` : calls.length ? `本轮已完成 ${calls.length} 个工具步骤` : '本轮没有工具结果';
   }
   if (event.role === 'reflector') {
     const progress = event.acceptanceProgress || {};
@@ -823,7 +814,6 @@ function compactAgentText(event) {
           ? '验收规则接管'
           : '';
     return [
-      skillText,
       event.acceptanceGoal ? `验收标准：${compactAgentValue(event.acceptanceGoal, 140)}` : '',
       event.currentFocus ? `当前焦点：${compactAgentValue(event.currentFocus, 120)}` : '',
       progressText ? `验收进度：${progressText}${progress.acceptanceSatisfied ? '（已满足）' : '（未满足）'}` : '',
@@ -1163,17 +1153,15 @@ function agentTags(event) {
     return tags.join('') + skills;
   }
   if (event.role === 'planner') {
-    const tools = (event.calls || []).map((call) => `<span>${escapeHtml(call.tool || '工具')}</span>`).join('');
+    const toolCount = (event.calls || []).length;
+    const tools = toolCount ? `<span>工具计划 ${toolCount} 项</span>` : '';
     const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">计划已纠正</span>` : '';
     return skills + tools + repair;
   }
   if (event.role === 'observer') {
-    return skills + (event.calls || []).map((call) => {
-      const failed = call.ok === false;
-      const error = failed && call.error ? `：${valueText(call.error)}` : '';
-      const title = failed && call.error ? ` title="${escapeHtml(valueText(call.error))}"` : '';
-      return `<span class="${failed ? 'failed' : ''}"${title}>${escapeHtml(call.tool || call.id || '工具')} · ${call.skipped ? '跳过' : failed ? `失败${escapeHtml(error)}` : '完成'}</span>`;
-    }).join('');
+    const calls = event.calls || [];
+    const failed = calls.filter((call) => !call.skipped && call.ok === false).length;
+    return skills + (calls.length ? `<span class="${failed ? 'failed' : ''}">工具 ${calls.length} 项${failed ? ` · ${failed} 项失败` : ''}</span>` : '');
   }
   if (event.role === 'reflector') {
     return `${skills}<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
@@ -1316,21 +1304,76 @@ function formatToolCall(round, call) {
   return `${roundNumber}-${tool}(${formatToolArguments(call.arguments)})-${toolResultText(call)}`;
 }
 
+function agentActivityOpen(card, kind) {
+  return Boolean(card?._activityOpen?.[kind]);
+}
+
+function renderSkillActivity(card) {
+  const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
+  if (!reads.length) return '';
+  const running = Boolean(card._skillsRunning);
+  const failed = reads.filter((item) => item.ok === false).length;
+  const label = running
+    ? `正在读取 ${reads.length} 项技能`
+    : `已读取 ${reads.length} 项技能${failed ? `，${failed} 项失败` : ''}`;
+  const details = reads.map((item) => {
+    const source = item.source === 'dynamic' ? '按需读取' : '自动读取';
+    const status = item.ok === false ? '失败' : '完成';
+    const description = item.description ? `<small>${escapeHtml(item.description)}</small>` : '';
+    return `<div class="agent-activity-item${item.ok === false ? ' failed' : ''}"><span>${escapeHtml(item.title || item.skillId || '未命名技能')}</span><em>${source} · ${status}</em>${description}</div>`;
+  }).join('');
+  return `<details class="agent-activity agent-activity-skill${running ? ' running' : ''}" data-activity-kind="skills"${agentActivityOpen(card, 'skills') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+}
+
+function renderToolActivity(card) {
+  const logs = Array.isArray(card?._toolLogs) ? card._toolLogs : [];
+  if (!logs.length) return '';
+  const running = logs.some((item) => item.running);
+  const failed = logs.filter((item) => item.failed).length;
+  const label = running
+    ? `正在运行 ${logs.length} 个工具`
+    : `已运行 ${logs.length} 个工具${failed ? `，${failed} 个失败` : ''}`;
+  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}"><span>${escapeHtml(item.text)}</span></div>`).join('');
+  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">›_</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+}
+
+function bindAgentActivityState(card) {
+  card?.querySelectorAll('details.agent-activity').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      card._activityOpen = {...(card._activityOpen || {}), [details.dataset.activityKind]: details.open};
+    });
+  });
+}
+
+function setAgentProcessStream(card, text, {cursor = false} = {}) {
+  if (!card) return;
+  const activity = [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('');
+  const body = text ? `<div class="agent-stream-copy">${escapeHtml(text)}</div>` : '';
+  setAgentStreamText(card, `${activity}${body}`, {cursor, html: true});
+  bindAgentActivityState(card);
+}
+
 function updateObserverToolEvent(event) {
   const card = ensureAgentCard(event.round, 'observer');
   if (!card) return;
   const logs = card._toolLogs || [];
   const index = logs.findIndex((item) => item.id === event.id);
-  const item = {id: event.id, text: formatToolCall(event.round, event)};
+  const running = event.phase === 'running' || event.status === 'running';
+  const item = {
+    id: event.id,
+    text: formatToolCall(event.round, event),
+    running,
+    failed: !running && event.ok === false && !event.skipped,
+  };
   if (index >= 0) logs[index] = item; else logs.push(item);
   card._toolLogs = logs;
+  card._skillsRunning = false;
+  card._toolsRunning = logs.some((entry) => entry.running);
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
-  if (state) state.textContent = event.phase === 'running' ? '执行中' : roleRunningLabel('observer');
-  const skillLine = compactSkillReads({skillReads: card._skillReads || []});
-  setAgentStreamText(card, [skillLine, card._toolLogs.map((entry) => entry.text).join('\n')].filter(Boolean).join('\n'), {
-    cursor: event.phase === 'running' || event.status === 'running',
-  });
+  if (state) state.textContent = running ? '执行中' : roleRunningLabel('observer');
+  const streamText = card.dataset.streamText || '正在执行工具并整理结果…';
+  setAgentProcessStream(card, streamText, {cursor: running});
   scrollThoughtStreamToCard(card);
   updatePlanProgressFromTool(event);
 }
@@ -1391,13 +1434,17 @@ function appendThoughtEvent(event) {
     card.dataset.streamText = '';
     card.dataset.streamThinking = '';
     card.dataset.streamToken = '';
+    card.dataset.hasAgentDelta = '';
     if (event.role === 'observer') card._toolLogs = [];
     card._skillReads = normalizedSkillReads(event);
+    card._skillsRunning = card._skillReads.length > 0;
+    card._toolsRunning = false;
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: card._skillReads});
     const state = card.querySelector('.agent-thought-head em');
     if (state) state.textContent = roleRunningLabel(event.role);
-    setAgentStreamText(card, rolePendingText(event.role), {cursor: true});
+    card.dataset.streamText = rolePendingText(event.role);
+    setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
     scrollThoughtStreamToCard(card);
     if (event.role === 'intent') {
       setThinkingState('意图识别中', 'active');
@@ -1430,18 +1477,18 @@ function appendThoughtEvent(event) {
     };
     if (index >= 0) reads[index] = record; else reads.push(record);
     card._skillReads = reads;
+    card._skillsRunning = event.phase === 'running' || (card.classList.contains('active') && !card.dataset.hasAgentDelta && event.phase !== 'failed');
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
-    if (event.role === 'observer') {
-      const skillLine = compactSkillReads({skillReads: reads});
-      const toolLines = (card._toolLogs || []).map((entry) => entry.text).join('\n');
-      setAgentStreamText(card, [skillLine, toolLines].filter(Boolean).join('\n') || '正在审阅本轮结果…', {cursor: true});
-    }
+    const streamText = card.dataset.streamText || rolePendingText(event.role);
+    setAgentProcessStream(card, streamText, {cursor: card.classList.contains('active')});
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_delta') {
     const card = ensureAgentCard(event.round, event.role);
     if (!card || !event.delta) return;
     card.classList.add('active');
+    card._skillsRunning = false;
+    card.dataset.hasAgentDelta = '1';
     const kind = event.kind || 'thinking';
     if (kind === 'token') {
       card.dataset.streamToken = `${card.dataset.streamToken || ''}${event.delta}`.slice(-1600);
@@ -1455,7 +1502,7 @@ function appendThoughtEvent(event) {
       .join('\n\n')
       .slice(-2800);
     card.dataset.streamText = live;
-    setAgentStreamText(card, live || '…', {cursor: true});
+    setAgentProcessStream(card, live || '…', {cursor: true});
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_tool') {
     updateObserverToolEvent(event);
@@ -1467,10 +1514,20 @@ function appendThoughtEvent(event) {
     if (event.role === 'reflector') updatePlanReflection(event);
     const isPlanCard = event.role === 'planner' || event.planOnly;
     card._skillReads = normalizedSkillReads(event);
-    const summaryText = event.role === 'observer' && card._toolLogs?.length
-      ? [compactSkillReads(event), card._toolLogs.map((entry) => entry.text).join('\n')].filter(Boolean).join('\n')
-      : compactAgentText(event) || '';
-    const thinkingTrail = String(
+    card._skillsRunning = false;
+    card._toolsRunning = false;
+    if (event.role === 'observer' && !card._toolLogs?.length && Array.isArray(event.calls)) {
+      card._toolLogs = event.calls.map((call, index) => ({
+        id: call.id || `${call.tool || 'tool'}-${index + 1}`,
+        text: formatToolCall(event.round, call),
+        running: false,
+        failed: !call.skipped && call.ok === false,
+      }));
+    } else if (card._toolLogs?.length) {
+      card._toolLogs = card._toolLogs.map((item) => ({...item, running: false}));
+    }
+    const summaryText = compactAgentText(event) || '';
+    const thinkingTrail = event.role === 'reflector' ? '' : String(
       event.thinking
       || (event.modelSummary && event.modelSummary.thinking)
       || card.dataset.streamThinking
@@ -1481,7 +1538,7 @@ function appendThoughtEvent(event) {
     const finalText = thinkingTrail
       ? `思考过程：\n${compactAgentValue(thinkingTrail, 900)}\n\n结论：\n${conclusion}`
       : conclusion;
-    setAgentStreamText(card, finalText);
+    setAgentProcessStream(card, finalText);
     card.dataset.streamText = finalText;
     card.dataset.streamThinking = '';
     card.dataset.streamToken = '';
