@@ -741,6 +741,30 @@ function compactAgentValue(value, maxLength = 160) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
+function appendStreamDelta(previous, incoming, maxLength) {
+  const base = String(previous || '');
+  const delta = String(incoming || '');
+  if (!delta) return base;
+  let piece = delta;
+  if (base && delta.startsWith(base)) {
+    piece = delta.slice(base.length);
+  } else if (base && (base.includes(delta) || base.endsWith(delta))) {
+    piece = '';
+  } else if (base && delta.includes(base)) {
+    piece = delta.slice(delta.lastIndexOf(base) + base.length);
+  } else if (base) {
+    const limit = Math.min(base.length, delta.length);
+    for (let size = limit; size > 0; size -= 1) {
+      if (base.endsWith(delta.slice(0, size))) {
+        piece = delta.slice(size);
+        break;
+      }
+    }
+  }
+  if (!piece) return base;
+  return `${base}${piece}`.slice(-maxLength);
+}
+
 function normalizedSkillReads(event) {
   const reads = Array.isArray(event?.skillReads) ? event.skillReads : [];
   if (reads.length) return reads.filter((item) => item && item.skillId);
@@ -1602,9 +1626,9 @@ function appendThoughtEvent(event) {
     card.dataset.hasAgentDelta = '1';
     const kind = event.kind || 'thinking';
     if (kind === 'token') {
-      card.dataset.streamToken = `${card.dataset.streamToken || ''}${event.delta}`.slice(-1600);
+      card.dataset.streamToken = appendStreamDelta(card.dataset.streamToken || '', event.delta, 1600);
     } else {
-      card.dataset.streamThinking = `${card.dataset.streamThinking || ''}${event.delta}`.slice(-2400);
+      card.dataset.streamThinking = appendStreamDelta(card.dataset.streamThinking || '', event.delta, 2400);
     }
     const thinking = (card.dataset.streamThinking || '').trim();
     const token = (card.dataset.streamToken || '').trim();

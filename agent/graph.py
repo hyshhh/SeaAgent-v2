@@ -197,6 +197,28 @@ def _emit(handler: Callable[[dict[str, Any]], None] | None, event: dict[str, Any
         pass
 
 
+def _stream_delta_piece(previous: str, incoming: str) -> str:
+    """把模型流式输出统一裁成真正新增片段，避免累计/重叠片段反复展示。"""
+    previous = previous or ""
+    incoming = incoming or ""
+    if not incoming:
+        return ""
+    if not previous:
+        return incoming
+    if incoming.startswith(previous):
+        return incoming[len(previous):]
+    if incoming in previous or previous.endswith(incoming):
+        return ""
+    previous_pos = incoming.rfind(previous)
+    if previous_pos >= 0:
+        return incoming[previous_pos + len(previous):]
+    max_overlap = min(len(previous), len(incoming))
+    for size in range(max_overlap, 0, -1):
+        if previous.endswith(incoming[:size]):
+            return incoming[size:]
+    return incoming
+
+
 def _emit_skill_read_events(
     handler: Callable[[dict[str, Any]], None] | None,
     *,
@@ -1129,18 +1151,12 @@ def build_sea_agent_graph(
                         if response_meta.get(key):
                             thinking = f"{thinking}\n{response_meta.get(key)}".strip() if thinking else str(response_meta.get(key))
                     if thinking:
-                        piece = thinking
-                        if streamed_thinking and thinking.startswith(streamed_thinking):
-                            piece = thinking[len(streamed_thinking):]
-                        elif streamed_thinking and streamed_thinking.endswith(thinking):
-                            piece = ""
+                        piece = _stream_delta_piece(streamed_thinking, thinking)
                         if piece:
                             streamed_thinking += piece
                             _emit_delta(piece, kind="thinking")
                     if body and isinstance(message, AIMessageChunk):
-                        piece = body
-                        if streamed_text and body.startswith(streamed_text):
-                            piece = body[len(streamed_text):]
+                        piece = _stream_delta_piece(streamed_text, body)
                         if piece:
                             streamed_text += piece
                             _emit_delta(piece, kind="token")
