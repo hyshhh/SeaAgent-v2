@@ -197,6 +197,38 @@ def _emit(handler: Callable[[dict[str, Any]], None] | None, event: dict[str, Any
         pass
 
 
+def _emit_skill_read_events(
+    handler: Callable[[dict[str, Any]], None] | None,
+    *,
+    title: str,
+    role: str,
+    event_round: int,
+    records: list[dict[str, Any]],
+) -> None:
+    """按真实技能顺序发出 running/completed 事件，供前端展示当前读取项。"""
+    total = len(records)
+    for index, record in enumerate(records, start=1):
+        skill_id = str(record.get("skillId") or "").strip()
+        skill_title = str(record.get("title") or skill_id or "skill").strip()
+        common = {
+            "type": "agent_skill",
+            "agentTitle": title,
+            "title": title,
+            "message": skill_title,
+            "role": role,
+            "round": event_round,
+            "skillIndex": index,
+            "skillTotal": total,
+            "currentSkillId": skill_id,
+            "currentSkillTitle": skill_title,
+            **record,
+        }
+        running_event = {**common, "phase": "running", "ok": True}
+        _emit(handler, running_event)
+        done_phase = "completed" if record.get("ok") else "failed"
+        _emit(handler, {**common, "phase": done_phase})
+
+
 def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for key in (
@@ -1013,19 +1045,13 @@ def build_sea_agent_graph(
                 },
             )
         if role and emit_initial_skill_events:
-            for record in skill_reads:
-                _emit(
-                    event_handler,
-                    {
-                        "type": "agent_skill",
-                        "title": title,
-                        "message": record.get("title") or record.get("skillId"),
-                        "role": role,
-                        "round": event_round,
-                        "phase": "completed" if record.get("ok") else "failed",
-                        **record,
-                    },
-                )
+            _emit_skill_read_events(
+                event_handler,
+                title=title,
+                role=role,
+                event_round=event_round,
+                records=skill_reads,
+            )
 
         agent = create_agent(
             model,
@@ -1198,17 +1224,12 @@ def build_sea_agent_graph(
                                     for item in skill_reads
                                 ):
                                     skill_reads.append(record)
-                                _emit(
+                                _emit_skill_read_events(
                                     event_handler,
-                                    {
-                                        "type": "agent_skill",
-                                        "title": title,
-                                        "message": record.get("title") or skill_id,
-                                        "role": role,
-                                        "round": event_round,
-                                        "phase": "completed" if record.get("ok") else "failed",
-                                        **record,
-                                    },
+                                    title=title,
+                                    role=role,
+                                    event_round=event_round,
+                                    records=[record],
                                 )
                     continue
                 call_id = tool_call_id or f"{tname}-{len(tool_records)+1}"
@@ -1851,19 +1872,13 @@ def build_sea_agent_graph(
                 "skillReads": initial_observe_skill_reads,
             },
         )
-        for record in initial_observe_skill_reads:
-            _emit(
-                event_handler,
-                {
-                    "type": "agent_skill",
-                    "title": "观察执行智能体（ObserveAgent）",
-                    "message": record.get("title") or record.get("skillId"),
-                    "role": "observer",
-                    "round": round_number,
-                    "phase": "completed" if record.get("ok") else "failed",
-                    **record,
-                },
-            )
+        _emit_skill_read_events(
+            event_handler,
+            title="观察执行智能体（ObserveAgent）",
+            role="observer",
+            event_round=round_number,
+            records=initial_observe_skill_reads,
+        )
 
         def on_tool_event(event: dict[str, Any]) -> None:
             tool_name = str(event.get("tool") or "")
@@ -2491,16 +2506,13 @@ def build_sea_agent_graph(
                 "enabledSkills": reflect_skill_ids,
                 "skillReads": reflect_skill_reads,
             })
-            for record in reflect_skill_reads:
-                _emit(event_handler, {
-                    "type": "agent_skill",
-                    "title": "反思判定智能体（ReflectAgent）",
-                    "message": record.get("title") or record.get("skillId"),
-                    "role": "reflector",
-                    "round": loop_count,
-                    "phase": "completed" if record.get("ok") else "failed",
-                    **record,
-                })
+            _emit_skill_read_events(
+                event_handler,
+                title="反思判定智能体（ReflectAgent）",
+                role="reflector",
+                event_round=loop_count,
+                records=reflect_skill_reads,
+            )
             reflect_reason = str(pre_handoff.get("reason") or "验收规则已完成判定")
             out = {
                 "handoff": pre_handoff,

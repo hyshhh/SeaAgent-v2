@@ -1313,9 +1313,70 @@ function isSkillReadingActive(card) {
   return Boolean(card?._skillsRunning) || (until > Date.now());
 }
 
+function clearSkillReading(card) {
+  if (!card) return;
+  if (card._skillReadingTimer) {
+    window.clearTimeout(card._skillReadingTimer);
+    card._skillReadingTimer = null;
+  }
+  card._skillsRunning = false;
+  card.dataset.skillsRunningUntil = '0';
+}
+
+function scheduleSkillReadingClear(card) {
+  if (!card) return;
+  if (card._skillReadingTimer) window.clearTimeout(card._skillReadingTimer);
+  const until = Number(card.dataset.skillsRunningUntil || 0);
+  if (!Number.isFinite(until) || until <= 0) return;
+  const delay = Math.max(0, until - Date.now()) + 35;
+  card._skillReadingTimer = window.setTimeout(() => {
+    card._skillReadingTimer = null;
+    const activeUntil = Number(card.dataset.skillsRunningUntil || 0);
+    if (activeUntil > Date.now()) {
+      scheduleSkillReadingClear(card);
+      return;
+    }
+    card._skillsRunning = false;
+    card.dataset.skillsRunningUntil = '0';
+    if (!card._toolsRunning) {
+      setAgentProcessStream(card, card.dataset.streamText || '', {cursor: card.classList.contains('active')});
+    }
+  }, delay);
+}
+
 function markSkillReading(card, durationMs = 1400) {
   if (!card || !Array.isArray(card._skillReads) || !card._skillReads.length) return;
-  card.dataset.skillsRunningUntil = String(Math.max(Number(card.dataset.skillsRunningUntil || 0), Date.now() + durationMs));
+  const nextUntil = Date.now() + Math.max(120, Number(durationMs) || 0);
+  card.dataset.skillsRunningUntil = String(Math.max(Number(card.dataset.skillsRunningUntil || 0), nextUntil));
+  scheduleSkillReadingClear(card);
+}
+
+function currentSkillSnapshot(card, reads) {
+  const current = card?._currentSkill || {};
+  const fallbackTotal = Math.max(1, reads.length);
+  let index = Number(current.index || current.skillIndex || 0);
+  let total = Number(current.total || current.skillTotal || fallbackTotal);
+  let record = null;
+  const currentId = current.skillId || current.currentSkillId;
+  if (currentId) record = reads.find((item) => item.skillId === currentId) || null;
+  if (!record && Number.isFinite(index) && index > 0) record = reads[index - 1] || null;
+  if (!record) {
+    const runningIndex = reads.findIndex((item) => item.phase === 'running');
+    if (runningIndex >= 0) {
+      record = reads[runningIndex];
+      index = runningIndex + 1;
+    }
+  }
+  if (!record) {
+    record = reads[0] || {};
+    index = Number.isFinite(index) && index > 0 ? index : 1;
+  }
+  if (!Number.isFinite(index) || index <= 0) index = Math.max(1, reads.indexOf(record) + 1);
+  if (!Number.isFinite(total) || total <= 0) total = fallbackTotal;
+  total = Math.max(total, index);
+  const name = current.skillId || current.currentSkillId || record.skillId || current.title || current.currentSkillTitle || record.title || 'skill';
+  const title = current.title || current.currentSkillTitle || record.title || name;
+  return {index, total, name, title};
 }
 
 function renderSkillActivity(card) {
@@ -1323,28 +1384,33 @@ function renderSkillActivity(card) {
   if (!reads.length) return '';
   const running = isSkillReadingActive(card);
   const failed = reads.filter((item) => item.ok === false).length;
+  const current = currentSkillSnapshot(card, reads);
   const label = running
-    ? `Reading skills · ${reads.length}`
+    ? `Reading skill ${current.index}/${current.total} · ${current.name}`
     : `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
   const details = reads.map((item) => {
     const source = item.source === 'dynamic' ? 'on demand' : 'auto';
-    const status = item.ok === false ? 'failed' : 'done';
+    const status = item.phase === 'running' ? 'running' : item.ok === false ? 'failed' : 'done';
     const description = item.description ? `<small>${escapeHtml(item.description)}</small>` : '';
-    return `<div class="agent-activity-item${item.ok === false ? ' failed' : ''}"><code>${escapeHtml(item.title || item.skillId || 'skill')}</code><em>${source} · ${status}</em>${description}</div>`;
+    const itemClass = `agent-activity-item${item.ok === false ? ' failed' : ''}${item.phase === 'running' ? ' running' : ''}`;
+    return `<div class="${itemClass}"><code>${escapeHtml(item.skillId || item.title || 'skill')}</code><em>${source} · ${status}</em>${description}</div>`;
   }).join('');
-  return `<details class="agent-activity agent-activity-skill${running ? ' running' : ''}" data-activity-kind="skills"${agentActivityOpen(card, 'skills') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+  return `<details class="agent-activity agent-activity-skill${running ? ' running' : ''}" data-activity-kind="skills"${agentActivityOpen(card, 'skills') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml(current.title)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
 function renderToolActivity(card) {
   const logs = Array.isArray(card?._toolLogs) ? card._toolLogs : [];
   if (!logs.length) return '';
-  const running = logs.some((item) => item.running);
+  const runningIndex = logs.findIndex((item) => item.running);
+  const running = runningIndex >= 0;
   const failed = logs.filter((item) => item.failed).length;
+  const current = running ? logs[runningIndex] : null;
+  const total = Math.max(logs.length, Number(card?._toolTotal || 0) || 0, runningIndex + 1);
   const label = running
-    ? `Running ${logs.length} tools`
+    ? `Running tool ${runningIndex + 1}/${Math.max(1, total)} · ${(current && (current.tool || current.id)) || 'tool'}`
     : `Ran ${logs.length} tools${failed ? ` · ${failed} failed` : ''}`;
-  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
-  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">›_</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
+  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">›_</span><span title="${escapeHtml((current && (current.tool || current.id)) || label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
 function bindAgentActivityState(card) {
@@ -1368,18 +1434,26 @@ function updateObserverToolEvent(event) {
   const card = ensureAgentCard(event.round, 'observer');
   if (!card) return;
   const logs = card._toolLogs || [];
-  const index = logs.findIndex((item) => item.id === event.id);
+  const eventId = String(event.id || event.tool || `tool-${logs.length + 1}`);
+  const index = logs.findIndex((item) => item.id === eventId);
   const running = event.phase === 'running' || event.status === 'running';
+  const toolName = event.tool || event.message || eventId;
   const item = {
-    id: event.id,
-    text: formatToolCall(event.round, event),
+    id: eventId,
+    tool: toolName,
+    text: formatToolCall(event.round, {...event, id: eventId, tool: toolName}),
     running,
+    phase: event.phase || event.status || (running ? 'running' : 'completed'),
     failed: !running && event.ok === false && !event.skipped,
   };
   if (index >= 0) logs[index] = item; else logs.push(item);
+  const runningIndex = logs.findIndex((entry) => entry.running);
   card._toolLogs = logs;
+  card._currentTool = runningIndex >= 0
+    ? {id: logs[runningIndex].id, tool: logs[runningIndex].tool, index: runningIndex + 1, total: logs.length}
+    : null;
   card._skillsRunning = false;
-  card._toolsRunning = logs.some((entry) => entry.running);
+  card._toolsRunning = runningIndex >= 0;
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
   if (state) state.textContent = running ? '执行中' : roleRunningLabel('observer');
@@ -1446,8 +1520,16 @@ function appendThoughtEvent(event) {
     card.dataset.streamThinking = '';
     card.dataset.streamToken = '';
     card.dataset.hasAgentDelta = '';
-    if (event.role === 'observer') card._toolLogs = [];
+    clearSkillReading(card);
+    if (event.role === 'observer') {
+      card._toolLogs = [];
+      card._currentTool = null;
+      card._toolTotal = 0;
+    }
     card._skillReads = normalizedSkillReads(event);
+    card._currentSkill = card._skillReads.length
+      ? {skillId: card._skillReads[0].skillId, title: card._skillReads[0].title, index: 1, total: card._skillReads.length}
+      : null;
     card._skillsRunning = card._skillReads.length > 0;
     markSkillReading(card, 1600);
     card._toolsRunning = false;
@@ -1480,17 +1562,33 @@ function appendThoughtEvent(event) {
     const reads = card._skillReads || [];
     const key = `${event.skillId || ''}:${event.source || 'auto'}`;
     const index = reads.findIndex((item) => `${item.skillId || ''}:${item.source || 'auto'}` === key);
+    const eventIndex = Number(event.skillIndex || 0);
+    const eventTotal = Number(event.skillTotal || reads.length || 1);
     const record = {
-      skillId: event.skillId,
-      title: event.title || event.skillId,
+      skillId: event.skillId || event.currentSkillId,
+      title: event.currentSkillTitle || event.title || event.skillId,
       description: event.description || '',
       source: event.source || 'auto',
       ok: event.ok !== false,
+      phase: event.phase || 'completed',
+      skillIndex: eventIndex,
+      skillTotal: eventTotal,
     };
     if (index >= 0) reads[index] = record; else reads.push(record);
+    const resolvedIndex = Number.isFinite(eventIndex) && eventIndex > 0
+      ? eventIndex
+      : Math.max(1, reads.findIndex((item) => item.skillId === record.skillId && item.source === record.source) + 1);
     card._skillReads = reads;
+    card._currentSkill = {
+      skillId: record.skillId,
+      title: record.title,
+      index: resolvedIndex,
+      total: Math.max(Number.isFinite(eventTotal) && eventTotal > 0 ? eventTotal : reads.length, resolvedIndex),
+    };
     card._skillsRunning = event.phase === 'running';
-    if (card.classList.contains('active') && !card.dataset.hasAgentDelta && event.phase !== 'failed') markSkillReading(card, 1400);
+    if (card.classList.contains('active')) {
+      markSkillReading(card, event.phase === 'running' ? 1400 : 720);
+    }
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
     const streamText = card.dataset.streamText || rolePendingText(event.role);
@@ -1527,18 +1625,21 @@ function appendThoughtEvent(event) {
     if (event.role === 'reflector') updatePlanReflection(event);
     const isPlanCard = event.role === 'planner' || event.planOnly;
     card._skillReads = normalizedSkillReads(event);
-    card._skillsRunning = false;
-    card.dataset.skillsRunningUntil = '0';
+    clearSkillReading(card);
+    card._currentSkill = null;
     card._toolsRunning = false;
+    card._currentTool = null;
     if (event.role === 'observer' && !card._toolLogs?.length && Array.isArray(event.calls)) {
       card._toolLogs = event.calls.map((call, index) => ({
         id: call.id || `${call.tool || 'tool'}-${index + 1}`,
+        tool: call.tool || call.id || 'tool',
         text: formatToolCall(event.round, call),
         running: false,
+        phase: call.phase || call.status || 'completed',
         failed: !call.skipped && call.ok === false,
       }));
     } else if (card._toolLogs?.length) {
-      card._toolLogs = card._toolLogs.map((item) => ({...item, running: false}));
+      card._toolLogs = card._toolLogs.map((item) => ({...item, running: false, phase: item.phase || 'completed'}));
     }
     const summaryText = compactAgentText(event) || '';
     const thinkingTrail = event.role === 'reflector' ? '' : String(

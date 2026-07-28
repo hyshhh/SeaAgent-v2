@@ -2896,10 +2896,11 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-stream-text .agent-activity summary {
   min-height: 22px;
   padding: 0;
-  display: inline-grid;
-  grid-template-columns: 15px auto auto 8px;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto 8px;
+  align-items: center;
   gap: 6px;
-  width: auto;
+  width: 100%;
   max-width: 100%;
   color: #526274;
   font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
@@ -2922,6 +2923,12 @@ tbody tr:hover td { background: #f2f6f9; }
   width: 5px;
   height: 5px;
   border-color: #758596;
+}
+#tab-agent-qa .agent-stream-text .agent-activity summary > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #tab-agent-qa .agent-stream-text .agent-activity-body {
   margin: 3px 0 6px 21px;
@@ -2948,6 +2955,9 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-stream-text .agent-activity-item em {
   color: #7c8896;
   font-size: 10px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-item.running code {
+  color: #1f5f94;
 }
 #tab-agent-qa .agent-stream-text .agent-activity-cursor {
   width: 4px;
