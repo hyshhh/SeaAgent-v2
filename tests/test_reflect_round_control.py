@@ -254,10 +254,64 @@ def test_registry_out_synthesis_returns_only_mismatch_tracks():
     assert result["outOfRegistryCount"] == 1
     assert [item["trackId"] for item in result["tracks"]] == ["2"]
     assert [item["trackId"] for item in result["uncertainTracks"]] == ["3"]
+    assert [item["registryOutState"] for item in result["outOfRegistryTracks"]] == ["confirmed_out"]
+    assert [item["registryOutState"] for item in result["uncertainTracks"]] == ["gray_zone"]
+    assert result["matchCount"] == 2
+    assert result["classificationKind"] == "track"
+    assert result["classificationMode"] == "registry_out"
     assert result["inRegistryMatchCount"] == 1
     assert result["uncertainty"] == "uncertain"
+    assert "确认发现 1 条未在库轨迹" in result["conclusion"]
 
 
+
+
+def test_registry_out_synthesis_downgrades_low_score_to_gray_zone_when_registry_coverage_is_incomplete():
+    controller = AgentController.__new__(AgentController)
+    controller.meta = {
+        "operation": "list",
+        "targetScope": "both",
+        "targetKind": "all",
+        "registryRelation": "out",
+        "questionType": "registry_out_list",
+    }
+    controller.working_scope = {
+        "tracks": {"ok": True, "tracks": [{"trackId": "7"}, {"trackId": "8"}]},
+        "registry": {"ok": True, "registryItems": [{"registryId": "r1"}, {"registryId": "r2"}]},
+        "match": {
+            "ok": True,
+            "matchMode": "image_to_image",
+            "registryCoverageComplete": False,
+            "registryCoverageRatio": 0.5,
+            "scoredRegistryCount": 1,
+            "totalRegistryCount": 2,
+            "unscoredRegistryIds": ["r2"],
+            "matches": [
+                {"matchedTrackId": "7", "matchedRegistryId": "r1", "embeddingScore": 0.31, "scoreBand": "mismatch"},
+                {"matchedTrackId": "8", "matchedRegistryId": "r1", "embeddingScore": 0.63, "scoreBand": "uncertain"},
+            ],
+        },
+    }
+    controller.tool_records = [{"tool": "matchImage", "ok": True, "skipped": False}]
+    controller.tool_chain = ["getTrack", "getFrames", "listRegistry", "matchImage"]
+    controller.rounds = []
+    controller.display_limit = 3
+    controller.display_record = {"displayId": "display-test", "mode": "lazy"}
+    controller.display_groups = []
+    controller.session_id = "session-test"
+    controller.question = "有哪些未在库船出现在视频中？"
+    controller.event_handler = None
+    controller._pending_registry_items = []
+
+    result = controller._synthesize("sufficient", "部分库对照完成")
+
+    assert result["outOfRegistryTracks"] == []
+    assert [item["trackId"] for item in result["uncertainTracks"]] == ["7", "8"]
+    assert [item["registryOutState"] for item in result["uncertainTracks"]] == ["gray_zone", "gray_zone"]
+    assert result["uncertainTracks"][0]["coverageLimited"] is True
+    assert result["outOfRegistryCount"] == 0
+    assert result["matchCount"] == 2
+    assert result["uncertainty"] == "uncertain"
 
 
 def test_registry_out_synthesis_orders_uncertain_by_lowest_best_score_and_hides_full_registry():
@@ -301,8 +355,11 @@ def test_registry_out_synthesis_orders_uncertain_by_lowest_best_score_and_hides_
     result = controller._synthesize("sufficient", "全库对照完成")
 
     assert [item["trackId"] for item in result["uncertainTracks"]] == ["2", "3", "1"]
+    assert [item["registryOutState"] for item in result["uncertainTracks"]] == ["gray_zone", "gray_zone", "gray_zone"]
     assert [item["embeddingScore"] for item in result["matches"]] == [0.596, 0.655, 0.709]
     assert result["registryCoverageComplete"] is False
+    assert result["matchCount"] == 3
+    assert result["classificationMode"] == "registry_out"
     assert result["uncertainty"] == "uncertain"
     assert "registryItems" not in result
 

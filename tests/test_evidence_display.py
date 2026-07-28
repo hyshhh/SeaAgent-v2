@@ -91,6 +91,24 @@ class EvidenceDisplayTest(unittest.TestCase):
         self.assertEqual([item["trackId"] for item in controller.display_groups], ["2", "3", "1"])
         self.assertEqual([item["embeddingScore"] for item in controller.display_groups], [0.91, 0.73, 0.42])
 
+    def test_registry_out_state_is_forwarded_to_evidence_groups(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {}
+        controller.display_record = None
+        controller.display_groups = []
+
+        controller._display_tracks([
+            {"trackId": "17", "embeddingScore": 0.41, "scoreBand": "mismatch", "registryOutState": "confirmed_out"},
+            {"trackId": "19", "embeddingScore": 0.63, "scoreBand": "uncertain", "registryOutState": "gray_zone"},
+        ], include_clips=True, include_registry=False)
+
+        by_track = {item["trackId"]: item for item in controller.display_groups}
+        self.assertEqual(by_track["17"]["registryOutState"], "confirmed_out")
+        self.assertEqual(by_track["19"]["registryOutState"], "gray_zone")
+        self.assertEqual(by_track["17"]["scoreBand"], "mismatch")
+        self.assertEqual(by_track["19"]["scoreBand"], "uncertain")
+
     def test_track_clip_is_used_even_when_a_cached_segment_exists(self):
         controller = AgentController.__new__(AgentController)
         controller.tools = _DisplayTools()

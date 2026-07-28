@@ -338,6 +338,34 @@ class AgentController:
                     if item.get("matchedTrackId") is not None or item.get("trackId") is not None
                 }
                 unscored_tracks = [item for item in tracks if str(item.get("trackId")) not in scored_ids]
+                coverage = self._collect_image_match_summary()
+                coverage_complete = bool(coverage.get("registryCoverageComplete"))
+                if not coverage_complete:
+                    # 旧工具结果没有覆盖字段时保持兼容；新结果明确 False 时，低分轨迹只能降级为灰区。
+                    has_coverage_field = "registryCoverageComplete" in coverage
+                    if has_coverage_field and out_tracks:
+                        uncertain_tracks = [
+                            {**item, "coverageLimited": True}
+                            for item in out_tracks
+                        ] + uncertain_tracks
+                        out_tracks = []
+
+                # scoreBand 描述图像分数区间；registryOutState 描述“未在库”查询下的业务结论。
+                # mismatch 且完成全库比较才是确认未在库，uncertain 为灰区，未评分目标单独保留。
+                out_tracks = [
+                    {**item, "registryOutState": "confirmed_out"}
+                    for item in out_tracks
+                ]
+                uncertain_tracks = [
+                    {**item, "registryOutState": "gray_zone"}
+                    for item in uncertain_tracks
+                ]
+                unscored_tracks = [
+                    {**item, "registryOutState": "unscored"}
+                    for item in unscored_tracks
+                ]
+
+                # 必须在覆盖降级和状态归一化之后重建展示轨迹，确保结果区与证据区完全一致。
                 display_tracks = []
                 seen_display: set[str] = set()
                 for item in out_tracks + uncertain_tracks + unscored_tracks:
@@ -346,16 +374,9 @@ class AgentController:
                         continue
                     seen_display.add(key)
                     display_tracks.append(item)
-                coverage = self._collect_image_match_summary()
-                coverage_complete = bool(coverage.get("registryCoverageComplete"))
-                if not coverage_complete:
-                    # 旧工具结果没有覆盖字段时保持兼容；新结果明确 False 才强制降级。
-                    has_coverage_field = "registryCoverageComplete" in coverage
-                    if has_coverage_field and out_tracks:
-                        uncertain_tracks = out_tracks + uncertain_tracks
-                        out_tracks = []
+
                 if out_tracks:
-                    conclusion = f"发现 {len(out_tracks)} 条未在库候选轨迹"
+                    conclusion = f"确认发现 {len(out_tracks)} 条未在库轨迹"
                     if uncertain_tracks or unscored_tracks:
                         conclusion += f"，另有 {len(uncertain_tracks) + len(unscored_tracks)} 条待确认"
                     finish_state = "uncertain" if (uncertain_tracks or unscored_tracks) else "sufficient"
@@ -378,6 +399,10 @@ class AgentController:
                         "outOfRegistryCount": len(out_tracks),
                         "inRegistryMatchCount": len(confirmed),
                         "uncertainMatchCount": len(uncertain_tracks),
+                        "unscoredTrackCount": len(unscored_tracks),
+                        "matchCount": len(display_tracks),
+                        "classificationKind": "track",
+                        "classificationMode": "registry_out",
                         "rankingBasis": "每条轨迹对全部先验库项的最高匹配分，按分数从低到高排序",
                         "registryCoverageComplete": coverage.get("registryCoverageComplete"),
                         "registryCoverageRatio": coverage.get("registryCoverageRatio"),
@@ -1522,7 +1547,7 @@ class AgentController:
                 "shipSegmentIds": segment_ids,
                 "registryReferenceIds": reference_ids,
             }
-            for key in ("embeddingScore", "score", "matchScore", "scoreBand", "hullNumber"):
+            for key in ("embeddingScore", "score", "matchScore", "scoreBand", "hullNumber", "registryOutState", "coverageLimited"):
                 if track.get(key) is not None:
                     group[key] = track[key]
             self.display_groups.append(group)

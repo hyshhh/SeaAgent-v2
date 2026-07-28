@@ -4294,3 +4294,117 @@ tbody tr:hover td { background: #f2f6f9; }
     padding-right: 6px !important;
   }
 }
+
+
+/* 未在库查询证据：确认未在库与灰区复核必须分区展示，不能混入普通命中列表 */
+.evidence-registry-out-list {
+  display: block;
+  max-height: min(68vh, 820px);
+  overflow: auto;
+  padding: 8px;
+  background: #f3f6f8;
+}
+.registry-out-evidence-layout {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+.registry-out-evidence-section {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid #d0d9e1;
+  border-top: 3px solid #3f745d;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .035);
+}
+.registry-out-evidence-section.review { border-top-color: #9b772e; }
+.registry-out-evidence-section > header {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: min(100%, 980px);
+  min-height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #d7dfe6;
+  background: #f1f7f4;
+}
+.registry-out-evidence-section.review > header { background: #fbf7ed; }
+.registry-out-evidence-section > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.registry-out-evidence-section > header strong {
+  color: #244d3c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 11px;
+}
+.registry-out-evidence-section.review > header strong { color: #76591f; }
+.registry-out-evidence-section > header span {
+  color: #677787;
+  font-size: 8px;
+  line-height: 1.35;
+}
+.registry-out-evidence-section > header em {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: #426653;
+  border: 1px solid #c4d6cd;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 8px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.registry-out-evidence-section.review > header em {
+  color: #765d25;
+  border-color: #ddcfaa;
+}
+.registry-out-evidence-section .evidence-track-table {
+  border: 0;
+  border-radius: 0;
+}
+.registry-out-evidence-section .evidence-track-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.evidence-track-row.registry-out.confirmed_out { box-shadow: inset 3px 0 #4a7b64; }
+.evidence-track-row.registry-out.gray_zone { box-shadow: inset 3px 0 #a98235; }
+.evidence-track-row.registry-out.unscored { box-shadow: inset 3px 0 #7d8b99; }
+.evidence-track-badges .evidence-state.confirmed-out {
+  color: #2f684f;
+  border-color: #b9d1c5;
+  background: #edf6f1;
+  font-weight: 700;
+}
+.evidence-track-badges .evidence-state.unscored {
+  color: #5d6975;
+  border-color: #ccd4dc;
+  background: #f1f4f6;
+  font-weight: 700;
+}
+.registry-out-evidence-empty {
+  min-width: min(100%, 980px);
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: #748190;
+  background: #fafbfc;
+  font-size: 9px;
+}
+
+@media (max-width: 900px) {
+  .evidence-registry-out-list { max-height: none; }
+  .registry-out-evidence-section > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+}

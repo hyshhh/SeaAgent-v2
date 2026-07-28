@@ -346,9 +346,27 @@ function hydrateClassifiedItems(items, matches, kind) {
 function classifiedResultItems(result) {
   const matches = Array.isArray(result?.matches) ? result.matches : [];
   const explicitKind = String(result?.classificationKind || '').toLowerCase();
+  const classificationMode = String(result?.classificationMode || '').toLowerCase();
+  const registryOutMode = classificationMode === 'registry_out'
+    || (String(result?.registryRelation || '').toLowerCase() === 'out' && String(result?.operation || '').toLowerCase() === 'list');
+  if (registryOutMode) {
+    const confirmed = hydrateClassifiedItems(result?.outOfRegistryTracks, matches, 'track')
+      .map((item) => ({...item, registryOutState: 'confirmed_out'}));
+    const pending = hydrateClassifiedItems([
+      ...(Array.isArray(result?.uncertainTracks) ? result.uncertainTracks : []),
+      ...(Array.isArray(result?.unscoredTracks) ? result.unscoredTracks : []),
+    ], matches, 'track');
+    return {
+      kind: 'track',
+      mode: 'registry_out',
+      confirmed,
+      pending,
+    };
+  }
   if (explicitKind === 'track') {
     return {
       kind: 'track',
+      mode: classificationMode,
       confirmed: hydrateClassifiedItems(result?.confirmedTracks, matches, 'track'),
       pending: hydrateClassifiedItems(result?.uncertainTracks, matches, 'track'),
     };
@@ -384,12 +402,18 @@ function classifiedResultRow(item, kind) {
     return `<div class="classified-result-row"><strong>${escapeHtml(hull)}</strong><span>Registry ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}${description ? ` · ${escapeHtml(description)}` : ''}</span></div>`;
   }
   const trackId = item?.trackId || item?.matchedTrackId || 'Unknown Track';
-  const hull = item?.finalHullNumber || item?.hullNumber || 'No stable hull number';
+  const registryOutState = String(item?.registryOutState || '').toLowerCase();
+  const hull = registryOutState
+    ? 'Registry identity unconfirmed'
+    : item?.finalHullNumber || item?.hullNumber || 'No stable hull number';
   const start = Number(item?.startTime ?? item?.start_time);
   const end = Number(item?.endTime ?? item?.end_time);
   const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : 'Unknown time';
-  const registryId = item?.matchedRegistryId ? ` · Registry ${escapeHtml(String(item.matchedRegistryId))}` : '';
-  return `<div class="classified-result-row"><strong>Track ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}${registryId}</span></div>`;
+  const registryId = item?.matchedRegistryId
+    ? ` · ${registryOutState ? 'Nearest Registry' : 'Registry'} ${escapeHtml(String(item.matchedRegistryId))}`
+    : '';
+  const scoreLabel = registryOutState ? 'Best Registry Score' : 'Similarity';
+  return `<div class="classified-result-row"><strong>Track ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · ${scoreLabel} ${score.toFixed(3)}` : ''}${registryId}</span></div>`;
 }
 
 function matchThresholdValues(result) {
@@ -401,8 +425,16 @@ function matchThresholdValues(result) {
     : null;
 }
 
-function resultGroupSubtitle(result, group) {
+function resultGroupSubtitle(result, group, mode = '') {
   const thresholds = matchThresholdValues(result);
+  if (mode === 'registry_out') {
+    if (!thresholds) return group === 'confirmed'
+      ? 'Compared with the complete registry and confirmed absent'
+      : 'Gray-zone or unscored tracks requiring review';
+    return group === 'confirmed'
+      ? `Best registry score ≤ ${thresholds.exclusion.toFixed(3)}`
+      : `${thresholds.exclusion.toFixed(3)} < Best score < ${thresholds.confirmation.toFixed(3)}, or not scorable`;
+  }
   if (!thresholds) return group === 'confirmed'
     ? 'Above the confirmation threshold'
     : 'Gray-zone matches requiring review';
@@ -414,6 +446,11 @@ function resultGroupSubtitle(result, group) {
 function renderMatchThresholdMeta(result) {
   const thresholds = matchThresholdValues(result);
   if (!thresholds) return '';
+  const registryOutMode = String(result?.classificationMode || '').toLowerCase() === 'registry_out'
+    || (String(result?.registryRelation || '').toLowerCase() === 'out' && String(result?.operation || '').toLowerCase() === 'list');
+  if (registryOutMode) {
+    return `<span class="answer-threshold confirmed">Confirmed Absent: Best Score ≤ ${thresholds.exclusion.toFixed(3)}</span><span class="answer-threshold pending">Gray Zone: ${thresholds.exclusion.toFixed(3)} < Best Score < ${thresholds.confirmation.toFixed(3)}</span>`;
+  }
   return `<span class="answer-threshold confirmed">Confirmation: Score ≥ ${thresholds.confirmation.toFixed(3)}</span><span class="answer-threshold pending">Gray Zone: ${thresholds.exclusion.toFixed(3)} < Score < ${thresholds.confirmation.toFixed(3)}</span>`;
 }
 
@@ -422,11 +459,16 @@ function renderClassifiedResults(result) {
   if (!grouped) return '';
   const confirmedRows = grouped.confirmed.map((item) => classifiedResultRow(item, grouped.kind)).join('');
   const pendingRows = grouped.pending.map((item) => classifiedResultRow(item, grouped.kind)).join('');
+  const registryOutMode = grouped.mode === 'registry_out';
   const noun = grouped.kind === 'track' ? 'Tracks' : 'Results';
-  return `<section class="answer-classification">
+  const confirmedTitle = registryOutMode ? 'Confirmed Out-of-Registry' : `Confirmed ${noun}`;
+  const pendingTitle = registryOutMode ? 'Gray-Zone Review' : 'Pending Review';
+  const confirmedEmpty = registryOutMode ? 'No confirmed out-of-registry tracks' : 'No confirmed results';
+  const pendingEmpty = registryOutMode ? 'No gray-zone or unscored tracks' : 'No pending results';
+  return `<section class="answer-classification ${registryOutMode ? 'registry-out' : ''}">
     <div class="answer-result-groups">
-      <section class="answer-result-group confirmed"><header><div><strong>Confirmed ${noun}</strong><span>${escapeHtml(resultGroupSubtitle(result, 'confirmed'))}</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed results</div>'}</div></section>
-      <section class="answer-result-group pending"><header><div><strong>Pending Review</strong><span>${escapeHtml(resultGroupSubtitle(result, 'pending'))}</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending results</div>'}</div></section>
+      <section class="answer-result-group confirmed"><header><div><strong>${confirmedTitle}</strong><span>${escapeHtml(resultGroupSubtitle(result, 'confirmed', grouped.mode))}</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || `<div class="answer-result-empty">${confirmedEmpty}</div>`}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>${pendingTitle}</strong><span>${escapeHtml(resultGroupSubtitle(result, 'pending', grouped.mode))}</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || `<div class="answer-result-empty">${pendingEmpty}</div>`}</div></section>
     </div>
   </section>`;
 }
@@ -767,17 +809,28 @@ function evidenceTrackRow(group, index) {
     ? evidenceItem('keyframe', group.keyframeIds[0], trackId)
     : missingEvidence(trackId, 'keyframe');
   const database = group.registryReferenceIds?.[0]
-    ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
+    ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Nearest Registry Reference`})
     : missingEvidence(trackId, 'registry');
   const hull = String(group.hullNumber || '').trim();
   const scoreBand = resultScoreBand(group);
-  const stateBadge = scoreBand === 'match'
-    ? '<em class="evidence-state confirmed">Confirmed</em>'
-    : scoreBand === 'uncertain'
-      ? '<em class="evidence-state pending">Review</em>'
-      : '';
-  const badges = `${stateBadge}${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>Similarity ${score.toFixed(3)}</em>`}`;
-  return `<article class="evidence-track-row" role="row"><div class="evidence-track-meta" role="rowheader"><span>Track</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
+  const registryOutState = String(group?.registryOutState || '').toLowerCase();
+  const stateBadge = registryOutState === 'confirmed_out'
+    ? '<em class="evidence-state confirmed-out">Confirmed Out-of-Registry</em>'
+    : registryOutState === 'gray_zone'
+      ? '<em class="evidence-state pending">Gray Zone</em>'
+      : registryOutState === 'unscored'
+        ? '<em class="evidence-state unscored">Unscored</em>'
+        : scoreBand === 'match'
+          ? '<em class="evidence-state confirmed">Confirmed</em>'
+          : scoreBand === 'uncertain'
+            ? '<em class="evidence-state pending">Review</em>'
+            : '';
+  const identityBadge = registryOutState
+    ? '<em>Registry Identity Unconfirmed</em>'
+    : hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>';
+  const scoreLabel = registryOutState ? 'Best Registry Score' : 'Similarity';
+  const badges = `${stateBadge}${identityBadge}${score === null ? '' : `<em>${scoreLabel} ${score.toFixed(3)}</em>`}`;
+  return `<article class="evidence-track-row ${registryOutState ? `registry-out ${registryOutState}` : ''}" role="row"><div class="evidence-track-meta" role="rowheader"><span>Track</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
 }
 
 function representativeRegistryEvidence(registryItems) {
@@ -906,6 +959,92 @@ function renderDedupEvidence(container, resultCount, groups, emptyText, result =
   </div>`;
 }
 
+function registryOutTrackId(item) {
+  const value = item?.trackId ?? item?.matchedTrackId;
+  return value == null ? '' : String(value);
+}
+
+function registryOutEvidenceBuckets(result, groups) {
+  const groupByTrack = new Map();
+  (groups || []).forEach((group) => {
+    const id = registryOutTrackId(group);
+    if (id && !groupByTrack.has(id)) groupByTrack.set(id, group);
+  });
+  const used = new Set();
+  const collect = (items, state) => (Array.isArray(items) ? items : []).map((item) => {
+    const id = registryOutTrackId(item);
+    if (!id || used.has(id)) return null;
+    used.add(id);
+    return {
+      ...item,
+      ...(groupByTrack.get(id) || {}),
+      trackId: item?.trackId ?? groupByTrack.get(id)?.trackId ?? id,
+      registryOutState: state,
+    };
+  }).filter(Boolean);
+
+  const confirmed = collect(result?.outOfRegistryTracks, 'confirmed_out');
+  const grayZone = collect(result?.uncertainTracks, 'gray_zone');
+  const unscored = collect(result?.unscoredTracks, 'unscored');
+
+  // 兼容旧结果：只依据结构化分数区间与全库覆盖状态补充分组，不解析用户问题文本。
+  (groups || []).forEach((group) => {
+    const id = registryOutTrackId(group);
+    if (!id || used.has(id)) return;
+    const explicitState = String(group?.registryOutState || '').toLowerCase();
+    const scoreBand = resultScoreBand(group);
+    if (explicitState === 'confirmed_out' || (scoreBand === 'mismatch' && result?.registryCoverageComplete === true)) {
+      confirmed.push({...group, registryOutState: 'confirmed_out'});
+      used.add(id);
+    } else if (explicitState === 'gray_zone' || scoreBand === 'uncertain') {
+      grayZone.push({...group, registryOutState: 'gray_zone'});
+      used.add(id);
+    } else if (explicitState === 'unscored' || !scoreBand) {
+      unscored.push({...group, registryOutState: 'unscored'});
+      used.add(id);
+    }
+  });
+  return {confirmed, grayZone, unscored};
+}
+
+function registryOutEvidenceSection(kind, title, subtitle, rows, emptyText) {
+  const visible = limitEvidenceItems(rows);
+  return `<section class="registry-out-evidence-section ${kind}">
+    <header><div><strong>${title}</strong><span>${subtitle}</span></div><em>${visible.length === rows.length ? rows.length : `${visible.length}/${rows.length}`} tracks</em></header>
+    ${visible.length
+      ? `<div class="evidence-track-table" role="table" aria-label="${title}">${evidenceTrackTableHead()}<div class="evidence-track-table-body" role="rowgroup">${visible.map((group, index) => evidenceTrackRow(group, index)).join('')}</div></div>`
+      : `<div class="registry-out-evidence-empty">${emptyText}</div>`}
+  </section>`;
+}
+
+function renderRegistryOutEvidence(container, resultCount, groups, result) {
+  const buckets = registryOutEvidenceBuckets(result, groups);
+  const reviewRows = [...buckets.grayZone, ...buckets.unscored];
+  const total = buckets.confirmed.length + reviewRows.length;
+  if (resultCount) {
+    resultCount.textContent = `${buckets.confirmed.length} confirmed absent · ${buckets.grayZone.length} gray-zone · ${buckets.unscored.length} unscored`;
+  }
+  container.className = 'evidence-registry-out-list';
+  container.innerHTML = `<div class="registry-out-evidence-layout">
+    ${registryOutEvidenceSection(
+      'confirmed-out',
+      'Confirmed Out-of-Registry Evidence',
+      'Tracks below the exclusion threshold after complete registry comparison',
+      buckets.confirmed,
+      'No tracks are currently confirmed as out of registry.',
+    )}
+    ${registryOutEvidenceSection(
+      'review',
+      'Gray-Zone / Review Evidence',
+      'Gray-zone and unscored tracks remain visible but are not counted as confirmed absent',
+      reviewRows,
+      'No gray-zone or unscored tracks require review.',
+    )}
+  </div>`;
+  if (!total) container.querySelector('.registry-out-evidence-layout')?.classList.add('empty');
+  observeEvidenceVideos(container);
+}
+
 function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
   latestEvidencePayload = {evidence, displayGroups, emptyText, registryItems, result};
   const container = document.getElementById('evidenceGallery');
@@ -916,6 +1055,12 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
   const groups = sortEvidenceGroups(displayGroups || []);
   if (result?.operation === 'count' && result?.dedupSummary) {
     renderDedupEvidence(container, resultCount, groups, 'No trajectory merge relation is available.', result);
+    return;
+  }
+  const registryOutMode = String(result?.classificationMode || '').toLowerCase() === 'registry_out'
+    || (String(result?.registryRelation || '').toLowerCase() === 'out' && String(result?.operation || '').toLowerCase() === 'list');
+  if (registryOutMode) {
+    renderRegistryOutEvidence(container, resultCount, groups, result);
     return;
   }
   const registryOnly = result?.targetScope === 'registry';
