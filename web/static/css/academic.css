@@ -3208,3 +3208,86 @@ tbody tr:hover td { background: #f2f6f9; }
     grid-template-rows: auto minmax(260px, 1fr);
   }
 }
+
+
+/* 研究问答查询控件整合：预设问题收拢，输入与提交并排 */
+#tab-agent-qa .agent-query-mainline {
+  gap: 7px;
+}
+#tab-agent-qa .agent-preset-select {
+  width: 128px;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 24px 2px 8px;
+  color: #40566c;
+  border: 1px solid #c7d2dc;
+  border-radius: 3px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+}
+#tab-agent-qa .agent-preset-select:hover,
+#tab-agent-qa .agent-preset-select:focus {
+  color: #214f73;
+  border-color: #7897af;
+  box-shadow: 0 0 0 2px rgba(49, 95, 134, .08);
+}
+#tab-agent-qa .agent-question-box {
+  grid-template-columns: minmax(0, 1fr) 132px;
+  align-items: stretch;
+  gap: 7px;
+  padding: 5px 14px 6px;
+}
+#tab-agent-qa .agent-query-panel .agent-question-box textarea {
+  min-height: 58px;
+  max-height: 72px;
+}
+#tab-agent-qa .agent-question-submit {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 4px;
+}
+#tab-agent-qa .agent-question-submit .btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 9px;
+}
+#tab-agent-qa .agent-question-submit > span {
+  color: #718397;
+  font-size: 8.5px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+}
+@media (max-width: 1320px) and (min-width: 1121px) {
+  #tab-agent-qa .agent-query-mainline h2 { font-size: 14px; }
+  #tab-agent-qa .agent-preset-select { width: 110px; }
+}
+@media (max-width: 700px) {
+  #tab-agent-qa .agent-preset-select { width: 100%; }
+  #tab-agent-qa .agent-question-box {
+    grid-template-columns: 1fr;
+  }
+  #tab-agent-qa .agent-question-submit {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  #tab-agent-qa .agent-question-submit > span {
+    grid-column: 1;
+    grid-row: 1;
+    text-align: left;
+  }
+  #tab-agent-qa .agent-question-submit .btn {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 122px;
+  }
+}
