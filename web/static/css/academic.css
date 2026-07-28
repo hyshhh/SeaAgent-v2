@@ -2968,3 +2968,35 @@ tbody tr:hover td { background: #f2f6f9; }
   #tab-agent-qa .agent-collab-head { grid-template-columns: 1fr; gap: 4px; }
   #tab-agent-qa .agent-collab-title { align-items: flex-start; flex-direction: column; gap: 2px; }
 }
+
+/* Reading skills：流光状态，期间不展示草稿正文 */
+#tab-agent-qa .agent-stream-text .agent-activity.running summary {
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity.running summary::after {
+  content: "";
+  position: absolute;
+  inset: -2px -30%;
+  background: linear-gradient(105deg, transparent 0%, rgba(49, 95, 134, 0) 34%, rgba(49, 95, 134, .18) 48%, rgba(255, 255, 255, .52) 53%, rgba(49, 95, 134, .14) 60%, transparent 76%);
+  transform: translateX(-70%);
+  animation: agentReadingShine 1.15s linear infinite;
+  pointer-events: none;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-skill.running summary > span:nth-child(2) {
+  color: #244a6a;
+  font-weight: 650;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-skill.running .agent-activity-icon {
+  color: #1f5f94;
+  animation: agentReadingPulse .85s ease-in-out infinite alternate;
+}
+@keyframes agentReadingShine {
+  from { transform: translateX(-72%); }
+  to { transform: translateX(72%); }
+}
+@keyframes agentReadingPulse {
+  from { opacity: .45; }
+  to { opacity: 1; }
+}

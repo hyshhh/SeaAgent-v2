@@ -1308,13 +1308,23 @@ function agentActivityOpen(card, kind) {
   return Boolean(card?._activityOpen?.[kind]);
 }
 
+function isSkillReadingActive(card) {
+  const until = Number(card?.dataset?.skillsRunningUntil || 0);
+  return Boolean(card?._skillsRunning) || (until > Date.now());
+}
+
+function markSkillReading(card, durationMs = 1400) {
+  if (!card || !Array.isArray(card._skillReads) || !card._skillReads.length) return;
+  card.dataset.skillsRunningUntil = String(Math.max(Number(card.dataset.skillsRunningUntil || 0), Date.now() + durationMs));
+}
+
 function renderSkillActivity(card) {
   const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
   if (!reads.length) return '';
-  const running = Boolean(card._skillsRunning);
+  const running = isSkillReadingActive(card);
   const failed = reads.filter((item) => item.ok === false).length;
   const label = running
-    ? `Reading ${reads.length} skills`
+    ? `Reading skills · ${reads.length}`
     : `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
   const details = reads.map((item) => {
     const source = item.source === 'dynamic' ? 'on demand' : 'auto';
@@ -1347,9 +1357,10 @@ function bindAgentActivityState(card) {
 
 function setAgentProcessStream(card, text, {cursor = false} = {}) {
   if (!card) return;
+  const holdForSkillReading = isSkillReadingActive(card) && !card._toolsRunning;
   const activity = [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('');
-  const body = text ? `<div class="agent-stream-copy">${escapeHtml(text)}</div>` : '';
-  setAgentStreamText(card, `${activity}${body}`, {cursor, html: true});
+  const body = text && !holdForSkillReading ? `<div class="agent-stream-copy">${escapeHtml(text)}</div>` : '';
+  setAgentStreamText(card, `${activity}${body}`, {cursor: cursor && !holdForSkillReading, html: true});
   bindAgentActivityState(card);
 }
 
@@ -1438,6 +1449,7 @@ function appendThoughtEvent(event) {
     if (event.role === 'observer') card._toolLogs = [];
     card._skillReads = normalizedSkillReads(event);
     card._skillsRunning = card._skillReads.length > 0;
+    markSkillReading(card, 1600);
     card._toolsRunning = false;
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: card._skillReads});
@@ -1477,7 +1489,8 @@ function appendThoughtEvent(event) {
     };
     if (index >= 0) reads[index] = record; else reads.push(record);
     card._skillReads = reads;
-    card._skillsRunning = event.phase === 'running' || (card.classList.contains('active') && !card.dataset.hasAgentDelta && event.phase !== 'failed');
+    card._skillsRunning = event.phase === 'running';
+    if (card.classList.contains('active') && !card.dataset.hasAgentDelta && event.phase !== 'failed') markSkillReading(card, 1400);
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
     const streamText = card.dataset.streamText || rolePendingText(event.role);
@@ -1515,6 +1528,7 @@ function appendThoughtEvent(event) {
     const isPlanCard = event.role === 'planner' || event.planOnly;
     card._skillReads = normalizedSkillReads(event);
     card._skillsRunning = false;
+    card.dataset.skillsRunningUntil = '0';
     card._toolsRunning = false;
     if (event.role === 'observer' && !card._toolLogs?.length && Array.isArray(event.calls)) {
       card._toolLogs = event.calls.map((call, index) => ({
