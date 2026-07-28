@@ -753,14 +753,14 @@ function compactSkillReads(event) {
   const reads = normalizedSkillReads(event);
   if (!reads.length) return '';
   const failed = reads.filter((item) => item.ok === false).length;
-  return `已读取 ${reads.length} 项技能${failed ? `，${failed} 项失败` : ''}`;
+  return `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
 }
 
 function skillReadTags(event) {
   const reads = normalizedSkillReads(event);
   if (!reads.length) return '';
   const failed = reads.filter((item) => item.ok === false).length;
-  return `<span class="skill-read${failed ? ' failed' : ''}">技能 ${reads.length} 项${failed ? ` · ${failed} 项失败` : ''}</span>`;
+  return `<span class="skill-read${failed ? ' failed' : ''}">Skills ${reads.length}${failed ? ` · ${failed} failed` : ''}</span>`;
 }
 
 function compactToolCall(call) {
@@ -1042,10 +1042,10 @@ function roleRunningLabel(role) {
 
 function rolePendingText(role) {
   return ({
-    intent: '正在解析用户问题与验收目标…',
-    planner: '正在生成本轮工具规划…',
-    observer: '正在执行工具并整理结果…',
-    reflector: '正在对照验收目标检查证据…',
+    intent: 'Parsing the user question and acceptance target…',
+    planner: 'Drafting the tool plan for this round…',
+    observer: 'Running tools and collecting evidence…',
+    reflector: 'Checking evidence against the acceptance target…',
   })[role] || '处理中…';
 }
 
@@ -1128,10 +1128,10 @@ function resetThoughtStream() {
     intent.classList.add('active');
     const cardState = intent.querySelector('.agent-thought-head em');
     if (cardState) cardState.textContent = '识别中';
-    setAgentStreamText(intent, '正在解析问题并生成验收目标…', {cursor: true});
+    setAgentStreamText(intent, 'Parsing the question and acceptance target…', {cursor: true});
   }
   if (intentState) intentState.textContent = '识别中';
-  if (mode) mode.textContent = '闭环流程：规划 → 观察 → 验收；验收结果决定结束或进入下一轮。';
+  if (mode) mode.textContent = 'Plan → Observe → Verify · Reflect controls the next round';
   setThinkingState('正在推理', 'active');
 }
 
@@ -1154,14 +1154,14 @@ function agentTags(event) {
   }
   if (event.role === 'planner') {
     const toolCount = (event.calls || []).length;
-    const tools = toolCount ? `<span>工具计划 ${toolCount} 项</span>` : '';
+    const tools = toolCount ? `<span>Tool plan ${toolCount}</span>` : '';
     const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">计划已纠正</span>` : '';
     return skills + tools + repair;
   }
   if (event.role === 'observer') {
     const calls = event.calls || [];
     const failed = calls.filter((call) => !call.skipped && call.ok === false).length;
-    return skills + (calls.length ? `<span class="${failed ? 'failed' : ''}">工具 ${calls.length} 项${failed ? ` · ${failed} 项失败` : ''}</span>` : '');
+    return skills + (calls.length ? `<span class="${failed ? 'failed' : ''}">Tools ${calls.length}${failed ? ` · ${failed} failed` : ''}</span>` : '');
   }
   if (event.role === 'reflector') {
     return `${skills}<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
@@ -1176,7 +1176,7 @@ function appendSystemThought(event) {
   }
   if (event.type === 'status' && (event.planMode || /规划模式|PlanAgent|LangGraph|Controller/.test(`${event.title || ''}${event.message || ''}`))) {
     const mode = document.getElementById('agentPlanMode');
-    if (mode) mode.textContent = '闭环流程：规划 → 观察 → 验收；验收结果决定结束或进入下一轮。';
+    if (mode) mode.textContent = 'Plan → Observe → Verify · Reflect controls the next round';
     return;
   }
   if (event.type === 'status' && (/IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`) || event.role === 'intent')) {
@@ -1249,29 +1249,29 @@ function renderIntentAgentCard(event) {
 }
 
 function toolResultText(call) {
-  if (call.phase === 'running') return '执行中';
-  if (call.phase === 'skipped' || call.skipped) return `跳过：${compactAgentValue(call.skipReason || '条件不满足', 70)}`;
-  if (call.error || call.phase === 'failed' || call.ok === false) return `失败：${compactAgentValue(call.error || '工具执行失败', 70)}`;
+  if (call.phase === 'running') return 'running';
+  if (call.phase === 'skipped' || call.skipped) return `skipped: ${compactAgentValue(call.skipReason || 'condition not met', 70)}`;
+  if (call.error || call.phase === 'failed' || call.ok === false) return `failed: ${compactAgentValue(call.error || 'tool failed', 70)}`;
   const summary = call.summary && typeof call.summary === 'object' ? call.summary : call;
-  if (summary.trackCount != null) return `${summary.trackCount} 条轨迹`;
-  if (summary.keyframeCount != null) return `${summary.keyframeCount} 张关键帧`;
-  if (summary.matchCount != null) return `${summary.matchCount} 条匹配结果`;
-  if (summary.registryItemCount != null) return `${summary.registryItemCount} 个先验库项`;
-  if (summary.registryCount != null) return `${summary.registryCount} 个先验库项`;
-  if (summary.registryReferenceCount != null) return `${summary.registryReferenceCount} 张库参考图`;
-  if (summary.exactMatchHullCount != null) return `${summary.exactMatchHullCount} 组精确匹配`;
-  if (summary.totalTrackCount != null) return `${summary.returnedTrackCount ?? summary.totalTrackCount} / ${summary.totalTrackCount} 条轨迹`;
-  if (Array.isArray(summary.trackIds)) return `${summary.trackIds.length} 个轨迹编号`;
-  if (Array.isArray(summary.keyframeIds)) return `${summary.keyframeIds.length} 个关键帧编号`;
-  if (Array.isArray(summary.matchedHullNumbers)) return `${summary.matchedHullNumbers.length} 个命中舷号`;
-  if (summary.highThresholdShipCount != null) return `最低 ${summary.lowThresholdShipCount} 艘 · 确认口径 ${summary.highThresholdShipCount} 艘`;
-  if (summary.shipSegmentId) return `片段 ${summary.shipSegmentId}`;
-  if (Array.isArray(summary.registryReferenceIds)) return `${summary.registryReferenceIds.length} 张库参考图`;
-  if (summary.found === true) return '已找到结果';
-  if (summary.found === false) return '未找到结果';
+  if (summary.trackCount != null) return `${summary.trackCount} tracks`;
+  if (summary.keyframeCount != null) return `${summary.keyframeCount} keyframes`;
+  if (summary.matchCount != null) return `${summary.matchCount} matches`;
+  if (summary.registryItemCount != null) return `${summary.registryItemCount} registry items`;
+  if (summary.registryCount != null) return `${summary.registryCount} registry items`;
+  if (summary.registryReferenceCount != null) return `${summary.registryReferenceCount} references`;
+  if (summary.exactMatchHullCount != null) return `${summary.exactMatchHullCount} exact hull matches`;
+  if (summary.totalTrackCount != null) return `${summary.returnedTrackCount ?? summary.totalTrackCount} / ${summary.totalTrackCount} tracks`;
+  if (Array.isArray(summary.trackIds)) return `${summary.trackIds.length} track ids`;
+  if (Array.isArray(summary.keyframeIds)) return `${summary.keyframeIds.length} keyframe ids`;
+  if (Array.isArray(summary.matchedHullNumbers)) return `${summary.matchedHullNumbers.length} hull hits`;
+  if (summary.highThresholdShipCount != null) return `low ${summary.lowThresholdShipCount} · confirmed ${summary.highThresholdShipCount}`;
+  if (summary.shipSegmentId) return `segment ${summary.shipSegmentId}`;
+  if (Array.isArray(summary.registryReferenceIds)) return `${summary.registryReferenceIds.length} references`;
+  if (summary.found === true) return 'found';
+  if (summary.found === false) return 'not found';
   if (summary.decision) return String(summary.decision);
   if (call.summary != null && typeof call.summary !== 'object') return compactAgentValue(call.summary, 90);
-  return '执行完成';
+  return 'done';
 }
 
 function formatToolArgumentValue(value) {
@@ -1291,17 +1291,17 @@ function formatToolArgumentValue(value) {
 }
 
 function formatToolArguments(argumentsValue) {
-  if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return '无参数';
+  if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return 'no args';
   const entries = Object.entries(argumentsValue);
-  if (!entries.length) return '无参数';
+  if (!entries.length) return 'no args';
   return entries.map(([key, value]) => `${key}=${formatToolArgumentValue(value)}`).join(', ');
 }
 
 function formatToolCall(round, call) {
   const roundNumber = Math.max(1, Number(round || call.round || 1));
-  if (call.legacy) return `${roundNumber}-${call.legacy}-执行完成`;
+  if (call.legacy) return `${roundNumber}-${call.legacy}-done`;
   const tool = call.tool || 'tool';
-  return `${roundNumber}-${tool}(${formatToolArguments(call.arguments)})-${toolResultText(call)}`;
+  return `${roundNumber} · ${tool}(${formatToolArguments(call.arguments)}) · ${toolResultText(call)}`;
 }
 
 function agentActivityOpen(card, kind) {
@@ -1314,13 +1314,13 @@ function renderSkillActivity(card) {
   const running = Boolean(card._skillsRunning);
   const failed = reads.filter((item) => item.ok === false).length;
   const label = running
-    ? `正在读取 ${reads.length} 项技能`
-    : `已读取 ${reads.length} 项技能${failed ? `，${failed} 项失败` : ''}`;
+    ? `Reading ${reads.length} skills`
+    : `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
   const details = reads.map((item) => {
-    const source = item.source === 'dynamic' ? '按需读取' : '自动读取';
-    const status = item.ok === false ? '失败' : '完成';
+    const source = item.source === 'dynamic' ? 'on demand' : 'auto';
+    const status = item.ok === false ? 'failed' : 'done';
     const description = item.description ? `<small>${escapeHtml(item.description)}</small>` : '';
-    return `<div class="agent-activity-item${item.ok === false ? ' failed' : ''}"><span>${escapeHtml(item.title || item.skillId || '未命名技能')}</span><em>${source} · ${status}</em>${description}</div>`;
+    return `<div class="agent-activity-item${item.ok === false ? ' failed' : ''}"><code>${escapeHtml(item.title || item.skillId || 'skill')}</code><em>${source} · ${status}</em>${description}</div>`;
   }).join('');
   return `<details class="agent-activity agent-activity-skill${running ? ' running' : ''}" data-activity-kind="skills"${agentActivityOpen(card, 'skills') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
@@ -1331,9 +1331,9 @@ function renderToolActivity(card) {
   const running = logs.some((item) => item.running);
   const failed = logs.filter((item) => item.failed).length;
   const label = running
-    ? `正在运行 ${logs.length} 个工具`
-    : `已运行 ${logs.length} 个工具${failed ? `，${failed} 个失败` : ''}`;
-  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}"><span>${escapeHtml(item.text)}</span></div>`).join('');
+    ? `Running ${logs.length} tools`
+    : `Ran ${logs.length} tools${failed ? ` · ${failed} failed` : ''}`;
+  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
   return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">›_</span><span>${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
@@ -1372,7 +1372,7 @@ function updateObserverToolEvent(event) {
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
   if (state) state.textContent = running ? '执行中' : roleRunningLabel('observer');
-  const streamText = card.dataset.streamText || '正在执行工具并整理结果…';
+  const streamText = card.dataset.streamText || 'Running tools and collecting evidence…';
   setAgentProcessStream(card, streamText, {cursor: running});
   scrollThoughtStreamToCard(card);
   updatePlanProgressFromTool(event);

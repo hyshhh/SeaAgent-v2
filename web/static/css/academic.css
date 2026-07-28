@@ -2795,3 +2795,176 @@ tbody tr:hover td { background: #f2f6f9; }
   overflow-wrap: anywhere;
 }
 .agent-stream-text .agent-activity + .agent-stream-copy { margin-top: 3px; }
+
+/* 研究问答协作面板精修：四项标注修复 */
+#tab-agent-qa .agent-query-grid {
+  grid-template-columns: minmax(620px, .98fr) minmax(700px, 1.08fr);
+  gap: 6px;
+}
+#tab-agent-qa .agent-query-panel,
+#tab-agent-qa .agent-thinking-panel {
+  height: clamp(650px, calc(100vh - 132px), 840px);
+}
+#tab-agent-qa .agent-thinking-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+#tab-agent-qa .agent-collab-head {
+  min-height: 44px;
+  padding: 8px 12px 8px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+#tab-agent-qa .agent-collab-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+#tab-agent-qa .agent-collab-title h2 {
+  margin: 0;
+  white-space: nowrap;
+  font-size: 18px;
+}
+#tab-agent-qa .agent-collab-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #6a7787;
+  font-size: 11px;
+  line-height: 1.4;
+}
+#tab-agent-qa .agent-collab-head .thinking-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#tab-agent-qa .fixed-agent-stream {
+  padding: 5px 8px 8px;
+}
+#tab-agent-qa .agent-fixed-stack {
+  gap: 7px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-card {
+  padding: 11px 13px;
+  gap: 7px;
+  border-radius: 4px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-head {
+  align-items: center;
+  gap: 8px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-stage {
+  gap: 8px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-stage > b {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-head strong {
+  font-size: 15px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-head span {
+  font-size: 10px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-head em,
+#tab-agent-qa .agent-fixed-stack .agent-card-round {
+  font-size: 9px !important;
+}
+#tab-agent-qa .agent-fixed-stack .agent-card-state {
+  gap: 5px;
+}
+#tab-agent-qa .agent-fixed-stack .agent-stream-text {
+  padding: 8px 9px;
+  font-size: 13px;
+  line-height: 1.58;
+  scrollbar-gutter: auto;
+}
+#tab-agent-qa .agent-fixed-stack .agent-thought-tags {
+  display: none;
+}
+#tab-agent-qa .agent-stream-text .agent-activity {
+  margin: 0 0 5px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #566577;
+  overflow: visible;
+}
+#tab-agent-qa .agent-stream-text .agent-activity summary {
+  min-height: 22px;
+  padding: 0;
+  display: inline-grid;
+  grid-template-columns: 15px auto auto 8px;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  color: #526274;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
+  font-size: 11px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity summary:hover {
+  background: transparent;
+  color: #244a6a;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-icon {
+  width: 15px;
+  height: 15px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #315f86;
+  font-size: 11px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity summary > b {
+  width: 5px;
+  height: 5px;
+  border-color: #758596;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-body {
+  margin: 3px 0 6px 21px;
+  padding: 3px 0 2px 10px;
+  border-top: 0;
+  border-left: 1px solid #d9e2ea;
+  background: transparent;
+  gap: 1px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 2px 0;
+  border-bottom: 0;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-item code {
+  color: #31445a;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-item em {
+  color: #7c8896;
+  font-size: 10px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-cursor {
+  width: 4px;
+  height: 12px;
+  background: #315f86;
+}
+#tab-agent-qa .agent-stream-text .agent-stream-copy {
+  margin-top: 1px;
+}
+@media (max-width: 1480px) {
+  #tab-agent-qa .agent-query-grid {
+    grid-template-columns: minmax(540px, .98fr) minmax(640px, 1.04fr);
+    gap: 6px;
+  }
+}
+@media (max-width: 1120px) {
+  #tab-agent-qa .agent-query-grid { grid-template-columns: 1fr; }
+  #tab-agent-qa .agent-collab-head { grid-template-columns: 1fr; gap: 4px; }
+  #tab-agent-qa .agent-collab-title { align-items: flex-start; flex-direction: column; gap: 2px; }
+}

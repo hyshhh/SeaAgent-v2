@@ -171,11 +171,10 @@
       </section>
 
       <section class="panel agent-thinking-panel">
-        <div class="panel-head">
-          <div><span class="eyebrow">实时协同状态</span><h2>三智能体协作</h2></div>
+        <div class="panel-head agent-collab-head">
+          <div class="agent-collab-title"><h2>Three-Agent Collaboration</h2><span id="agentPlanMode">Plan → Observe → Verify · Reflect controls the next round</span></div>
           <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
         </div>
-        <div class="thought-notice"><span id="agentPlanMode">闭环流程：规划 → 观察 → 验收；验收结果决定结束或进入下一轮。</span></div>
         <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
           <div class="agent-fixed-stack">
             <article class="agent-thought-card planner" data-role="planner" data-round="0">
@@ -362,7 +361,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=17"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=48"></script>
+<script src="/static/js/agent.js?v=49"></script>
 <script src="/static/js/settings.js?v=9"></script>
 </body>
 </html>
