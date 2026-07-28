@@ -308,12 +308,9 @@
           <label>去重高阈值<input data-setting="pipeline.retrieval.dedup_high" type="number"><small>跨轨迹相似度达到该值时合并。</small></label>
           <label>去重低阈值<input data-setting="pipeline.retrieval.dedup_low" type="number"><small>低于该值时不合并。</small></label>
           <label>问答最大轮数<input data-setting="pipeline.agent.max_rounds" type="number"><small>LangGraph 四 Agent 闭环的最大执行轮数。</small></label>
-          <label class="settings-toggle">模型思考模式
-            <select data-setting="llm.enable_thinking">
-              <option value="false">关闭（推荐）</option>
-              <option value="true">开启</option>
-            </select>
-            <small>默认关闭 Qwen3 思考链，避免前端刷长推理；仅调试时可开启。</small>
+          <label class="settings-toggle">模型内部思考
+            <input type="text" value="已强制关闭" disabled>
+            <small>系统仅展示结构化计划、工具调用与最终结论，内部推理不会输出到前端。</small>
           </label>
         </div>
       </section>
@@ -362,7 +359,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=17"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=56"></script>
+<script src="/static/js/agent.js?v=58"></script>
 <script src="/static/js/settings.js?v=9"></script>
 </body>
 </html>

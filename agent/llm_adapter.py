@@ -8,6 +8,12 @@ from langchain_openai import ChatOpenAI
 from services import AgentLLMService
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def build_chat_model(llm: AgentLLMService | None = None, config: dict[str, Any] | None = None) -> ChatOpenAI:
     """用 app.yaml 的 llm 配置构造 ChatOpenAI。"""
     if llm is not None:
@@ -15,7 +21,8 @@ def build_chat_model(llm: AgentLLMService | None = None, config: dict[str, Any] 
     else:
         from config import load_config
         settings = (config or load_config())["llm"]
-    thinking = bool(settings.get("enable_thinking", False))
+    # SeaAgent 前端只展示结构化计划和工具结果，内部思考链系统级强制关闭。
+    thinking = False
     return ChatOpenAI(
         model=str(settings.get("model") or "gpt-4o-mini"),
         api_key=str(settings.get("api_key") or "EMPTY"),

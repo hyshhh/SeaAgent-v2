@@ -64,12 +64,8 @@ class AgentLLMService:
         self.prompts = self.config.get("prompts", {})
 
     def _thinking_enabled(self) -> bool:
-        """默认关闭思考模式；配置可为 bool 或 true/false 字符串。"""
-        settings = self.config.get("llm", self.settings) if isinstance(self.config, dict) else self.settings
-        value = (settings or {}).get("enable_thinking", False)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
+        """系统级强制关闭模型思考链，避免内部推理进入流式正文。"""
+        return False
 
     def _base_payload(self, messages: list[dict[str, Any]], stream: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -89,11 +85,13 @@ class AgentLLMService:
     def _strip_thinking(text: str) -> str:
         """去掉模型误输出的思考标签，只保留最终正文。"""
         content = str(text or "")
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.IGNORECASE | re.DOTALL)
-        content = re.sub(r"<thinking>.*?</thinking>", "", content, flags=re.IGNORECASE | re.DOTALL)
-        # 残留未闭合标签时截断思考段
-        content = re.sub(r"<think>.*$", "", content, flags=re.IGNORECASE | re.DOTALL)
-        content = re.sub(r"<thinking>.*$", "", content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r"<(think|thinking)>.*?</\1>", "", content, flags=re.IGNORECASE | re.DOTALL)
+        # 只有闭合标签时，其前方是泄漏的推理；保留标签之后可能存在的最终正文。
+        orphan_close = re.search(r"</(?:think|thinking)>", content, flags=re.IGNORECASE)
+        if orphan_close:
+            content = content[orphan_close.end():]
+        # 残留未闭合起始标签时截断思考段。
+        content = re.sub(r"<(?:think|thinking)>.*$", "", content, flags=re.IGNORECASE | re.DOTALL)
         return content.strip()
 
     def _prompt(self, key: str) -> str:

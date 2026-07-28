@@ -1684,26 +1684,8 @@ function appendThoughtEvent(event) {
     setAgentProcessStream(card, streamText, {cursor: card.classList.contains('active')});
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_delta') {
-    const card = ensureAgentCard(event.round, event.role);
-    if (!card || !event.delta) return;
-    card.classList.add('active');
-    card._skillsRunning = false;
-    card.dataset.hasAgentDelta = '1';
-    const kind = event.kind || 'thinking';
-    if (kind === 'token') {
-      card.dataset.streamToken = appendStreamDelta(card.dataset.streamToken || '', event.delta, 1600);
-    } else {
-      card.dataset.streamThinking = appendStreamDelta(card.dataset.streamThinking || '', event.delta, 2400);
-    }
-    const thinking = (card.dataset.streamThinking || '').trim();
-    const token = (card.dataset.streamToken || '').trim();
-    const live = [thinking ? `Thinking:\n${thinking}` : '', token ? `Draft:\n${token}` : '']
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-2800);
-    card.dataset.streamText = live;
-    setAgentProcessStream(card, live || '…', {cursor: true});
-    scrollThoughtStreamToCard(card);
+    // 模型原始增量可能混入内部推理；界面只展示结构化计划、技能、工具和结论。
+    return;
   } else if (event.type === 'agent_tool') {
     updateObserverToolEvent(event);
   } else if (event.type === 'agent_end') {
@@ -1731,17 +1713,9 @@ function appendThoughtEvent(event) {
       card._toolLogs = card._toolLogs.map((item) => ({...item, running: false, phase: item.phase || 'completed'}));
     }
     const summaryText = compactAgentText(event) || '';
-    const thinkingTrail = event.role === 'reflector' ? '' : String(
-      event.thinking
-      || (event.modelSummary && event.modelSummary.thinking)
-      || card.dataset.streamThinking
-      || ''
-    ).trim();
-    // 结论优先用结构化摘要；fallback 仅作补充说明，避免盖掉真实计划
+    // 结论只使用结构化摘要，禁止展示模型内部推理或草稿。
     const conclusion = summaryText || event.message || event.fallback || 'No displayable information for this round';
-    const finalText = thinkingTrail
-      ? `Reasoning Trail:\n${compactAgentValue(thinkingTrail, 900)}\n\nConclusion:\n${conclusion}`
-      : conclusion;
+    const finalText = conclusion;
     setAgentProcessStream(card, finalText);
     card.dataset.streamText = finalText;
     card.dataset.streamThinking = '';

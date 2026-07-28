@@ -1,3 +1,4 @@
+from services.vlm_service import AgentLLMService
 from agent.graph import _build_acceptance_progress, _find_tool_contract_failures, _prepare_plan_calls
 from agent.plan_executor import PlanExecutor
 
@@ -89,3 +90,8 @@ def test_failed_tools_do_not_satisfy_description_acceptance_progress():
     requirements = {item["key"]: item["completed"] for item in progress["requirements"]}
     assert requirements == {"tracks": False, "frames": False, "text_match": False}
     assert progress["acceptanceSatisfied"] is False
+
+
+def test_vlm_strip_thinking_removes_orphan_closing_tag_prefix():
+    assert AgentLLMService._strip_thinking('内部草稿</think>最终答案') == '最终答案'
+    assert AgentLLMService._strip_thinking('内部草稿</think>') == ''

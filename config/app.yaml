@@ -9,7 +9,7 @@ llm:
   api_key: "abc123"
   base_url: "http://localhost:7890/v1"
   temperature: 0.0
-  # Qwen3 思考模式：默认关闭；需要前端展示思考时可改为 true
+  # Qwen3 思考链由系统强制关闭；保留该字段仅兼容旧配置
   enable_thinking: false
   timeout_seconds: 90
   # Reflect 仅生成一次简短验收移交；双重上限避免持续输出绕过读取超时

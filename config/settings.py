@@ -79,12 +79,6 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.evidence.clip_crf": {"type": "int", "min": 18, "max": 40, "step": 1},
     "pipeline.evidence.poster_quality": {"type": "int", "min": 40, "max": 95, "step": 1},
     "pipeline.agent.max_rounds": {"type": "int", "min": 1, "max": 10, "step": 1},
-    "llm.enable_thinking": {
-        "type": "enum",
-        "choices": ["false", "true"],
-        "label": "模型思考模式",
-        "help": "默认 false 关闭 Qwen3 思考链；true 时允许模型输出长链推理。",
-    },
 }
 
 
@@ -192,11 +186,6 @@ def public_settings(config: dict[str, Any]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for path in SETTING_SPECS:
         value = _get(config, path)
-        if path == "llm.enable_thinking":
-            if isinstance(value, bool):
-                value = "true" if value else "false"
-            else:
-                value = "true" if str(value).strip().lower() in {"1", "true", "yes", "on"} else "false"
         _set(values, path, value)
     for path in PROMPT_SETTING_SPECS:
         _set(values, path, _get(config, path) or "")

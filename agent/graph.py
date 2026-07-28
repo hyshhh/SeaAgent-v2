@@ -138,12 +138,28 @@ def _content_parts(content: Any) -> tuple[str, str]:
         return "", ""
     if isinstance(content, str):
         text = content.strip()
-        # 兼容 <think>…</think> 与纯正文
-        think_bits = re.findall(r"<think>(.*?)</think>", text, flags=re.S | re.I)
-        if think_bits:
-            cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I).strip()
-            return cleaned, "\n".join(bit.strip() for bit in think_bits if bit.strip())
-        return text, ""
+        # 兼容完整标签以及模型偶发遗漏起始标签、只返回 </think> 的情况。
+        tag_pattern = r"<(think|thinking)>.*?</\1>"
+        think_bits = [
+            match.group(0).split(">", 1)[-1].rsplit("<", 1)[0].strip()
+            for match in re.finditer(tag_pattern, text, flags=re.S | re.I)
+        ]
+        cleaned = re.sub(tag_pattern, "", text, flags=re.S | re.I).strip()
+        orphan_close = re.search(r"</(?:think|thinking)>", cleaned, flags=re.I)
+        if orphan_close:
+            # 闭合标签之前属于泄漏的推理草稿，之后才可能是可见正文。
+            leaked = cleaned[:orphan_close.start()].strip()
+            cleaned = cleaned[orphan_close.end():].strip()
+            if leaked:
+                think_bits.append(leaked)
+        # 未闭合起始标签后的内容全部视为推理，不进入可见正文。
+        orphan_open = re.search(r"<(?:think|thinking)>", cleaned, flags=re.I)
+        if orphan_open:
+            leaked = cleaned[orphan_open.end():].strip()
+            cleaned = cleaned[:orphan_open.start()].strip()
+            if leaked:
+                think_bits.append(leaked)
+        return cleaned, "\n".join(bit for bit in think_bits if bit).strip()
     if isinstance(content, list):
         texts: list[str] = []
         thinks: list[str] = []
@@ -905,6 +921,8 @@ def build_sea_agent_graph(
     # Reflect 只需生成一个简短移交工具调用。服务端词元硬上限可阻止模型在
     # 持续返回数据时绕过 HTTP 读取超时而无限生成。
     llm_settings = getattr(llm, "settings", {}) or {}
+    # 系统只展示结构化计划、工具与结论，禁止流出模型内部思考。
+    thinking_enabled = False
     reflect_max_output_tokens = max(64, min(512, int(llm_settings.get("reflect_max_output_tokens") or 256)))
     reflect_timeout_seconds = max(5.0, min(60.0, float(llm_settings.get("reflect_timeout_seconds") or 20)))
     reflect_model = _bounded_model(model, reflect_max_output_tokens)
@@ -1119,7 +1137,9 @@ def build_sea_agent_graph(
         stream_started_at = time.monotonic()
 
         def _emit_delta(delta: str, *, kind: str = "thinking") -> None:
-            if not delta or not role or not emit_live_deltas:
+            # 内部 Agent 的原始增量可能包含模型草稿。关闭思考模式时绝不向前端发送，
+            # 只保留结构化 plan/tool/end 事件，避免 Draft 或 think 标签泄漏。
+            if not delta or not role or not emit_live_deltas or not thinking_enabled:
                 return
             _emit(
                 event_handler,
@@ -1324,12 +1344,12 @@ def build_sea_agent_graph(
                 "message": text[:300] if text else f"{title} 完成",
                 "role": role,
                 "round": event_round,
-                "thinking": thinking[:2000] if thinking else "",
+                "thinking": thinking[:2000] if thinking_enabled and thinking else "",
                 "enabledSkills": [item.get("skillId") for item in skill_reads if item.get("ok")],
                 "skillReads": skill_reads,
                 "modelSummary": {
                     "summary": text[:500] if text else "",
-                    "thinking": thinking[:800] if thinking else "",
+                    "thinking": thinking[:800] if thinking_enabled and thinking else "",
                     "goal": (handoff or {}).get("goal") or (handoff or {}).get("planHint") or "",
                     "reason": (handoff or {}).get("reason") or invoke_error or "",
                     "answerHint": (handoff or {}).get("answerHint") or "",
