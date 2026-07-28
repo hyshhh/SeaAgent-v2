@@ -3685,3 +3685,156 @@ tbody tr:hover td { background: #f2f6f9; }
     min-height: 540px;
   }
 }
+
+/* 研究问答英文标识与三段式结果导航 */
+.brand-mark span {
+  transform: none;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: .06em;
+}
+.tab-nav .tab-btn,
+#tab-agent-qa .agent-query-mainline h2,
+#tab-agent-qa .agent-preset-select,
+#tab-agent-qa .agent-query-actions,
+#tab-agent-qa .agent-question-submit,
+#tab-agent-qa .agent-result-head,
+#tab-agent-qa .agent-result-disclosure > summary,
+#tab-agent-qa .agent-thought-head,
+#tab-agent-qa .thinking-state,
+#tab-agent-qa .evidence-toolbar {
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+}
+#tab-agent-qa .agent-query-mainline h2,
+#tab-agent-qa .agent-collab-title h2,
+#tab-agent-qa .evidence-toolbar-title h3,
+#tab-agent-qa .agent-result-head span {
+  color: #18324a;
+  font-family: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-weight: 720;
+  letter-spacing: -.012em;
+}
+#tab-agent-qa .agent-query-mainline h2 { font-size: 15px; }
+#tab-agent-qa .agent-result-head span {
+  font-size: 14px;
+  letter-spacing: .015em;
+}
+#tab-agent-qa .agent-result-head em,
+#tab-agent-qa .agent-collab-title > span {
+  color: #718093;
+}
+#tab-agent-qa .agent-result-disclosure > summary {
+  grid-template-columns: 17px 46px minmax(0, 1fr) 8px;
+  color: #44576a;
+  font-size: 10px;
+}
+#tab-agent-qa .agent-result-disclosure > summary > strong {
+  color: #29445d;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+#tab-agent-qa .agent-result-disclosure > summary > em {
+  color: #778596;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 9px;
+}
+#tab-agent-qa .agent-init-disclosure .agent-result-index { color: #2e638e; }
+#tab-agent-qa .agent-plan-disclosure .agent-result-index { color: #526d87; }
+#tab-agent-qa .agent-tool-disclosure .agent-result-index { color: #3d725d; }
+#tab-agent-qa .agent-init-disclosure .agent-result-disclosure-body {
+  max-height: 152px;
+  padding-top: 4px;
+}
+#tab-agent-qa .agent-plan-disclosure .agent-result-disclosure-body {
+  max-height: 248px;
+}
+#tab-agent-qa .agent-result-intent .intent-result-card {
+  border-left-color: #2e638e;
+  background: #f8fafc;
+}
+#tab-agent-qa .agent-stage strong {
+  color: #243f58;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-weight: 720;
+  letter-spacing: -.005em;
+}
+#tab-agent-qa .agent-stage span,
+#tab-agent-qa .agent-card-round,
+#tab-agent-qa .agent-card-state em {
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  letter-spacing: .015em;
+}
+#tab-agent-qa .agent-card-round {
+  color: #587085;
+  border-color: #cbd7e0;
+  background: #f4f7f9;
+}
+#tab-agent-qa .agent-card-state em {
+  color: #53697d;
+  background: #edf2f5;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-icon {
+  color: #2e638e;
+  font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-tool .agent-activity-icon {
+  color: #3d725d;
+}
+#tab-agent-qa .agent-stream-text .agent-activity summary > span:nth-child(2) {
+  color: #40566b;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 10px;
+}
+#tab-agent-qa .evidence-toolbar-title .eyebrow {
+  color: #55738e;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: .085em;
+  text-transform: uppercase;
+}
+#tab-agent-qa .evidence-toolbar-title h3 {
+  font-size: 15px;
+}
+#tab-agent-qa .evidence-display-inline label {
+  color: #52677a;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .02em;
+}
+#tab-agent-qa .evidence-result-count,
+#tab-agent-qa .agent-query-actions .round-limit,
+#tab-agent-qa .thinking-state strong {
+  color: #50677c;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-weight: 650;
+}
+
+/* Init / Plan / Tools 标识强化 */
+#tab-agent-qa .agent-result-disclosure > summary {
+  font-size: 11px;
+}
+#tab-agent-qa .agent-result-disclosure > summary > strong {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .025em;
+  text-transform: none;
+}
+#tab-agent-qa .agent-result-disclosure > summary > em {
+  color: #68798b;
+  font-size: 10px;
+}
+#tab-agent-qa .agent-init-disclosure > summary > strong { color: #285f8b; }
+#tab-agent-qa .agent-plan-disclosure > summary > strong { color: #455f78; }
+#tab-agent-qa .agent-tool-disclosure > summary > strong { color: #356b56; }
+#tab-agent-qa .agent-activity summary > span:nth-child(2) {
+  font-size: 10.5px;
+  font-weight: 550;
+}

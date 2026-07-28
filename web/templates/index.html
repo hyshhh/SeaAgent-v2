@@ -5,21 +5,21 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=16">
+<link rel="stylesheet" href="/static/css/academic.css?v=18">
 </head>
 <body class="academic-theme">
 <header class="app-header">
-  <div class="brand-mark" aria-hidden="true"><span>研</span></div>
+  <div class="brand-mark" aria-hidden="true"><span>SA</span></div>
   <div class="header-copy"><h1>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</h1></div>
-  <div class="system-badge"><span></span><strong>运行就绪</strong></div>
+  <div class="system-badge"><span></span><strong>System Ready</strong></div>
 </header>
-<nav class="tab-nav" aria-label="系统功能导航">
-  <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">海域监控</button>
-  <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">轨迹记忆</button>
-  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">研究问答</button>
-  <button class="tab-btn" data-tab="database" onclick="switchTab('database')">先验库管理</button>
-  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">实时摄像头</button>
-  <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">系统设置</button>
+<nav class="tab-nav" aria-label="System navigation">
+  <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">Maritime Monitoring</button>
+  <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">Trajectory Memory</button>
+  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">Research QA</button>
+  <button class="tab-btn" data-tab="database" onclick="switchTab('database')">Registry</button>
+  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">Live Camera</button>
+  <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">Settings</button>
 </nav>
 <main class="page-shell">
 <section class="tab-content active" id="tab-monitoring">
@@ -127,42 +127,46 @@
     <div class="agent-query-grid">
       <section class="panel agent-query-panel">
         <div class="panel-head agent-query-head">
-          <div class="agent-query-mainline"><h2>向当前监控记忆提问</h2><label class="agent-topk-control"><input id="agentTopKEnabled" type="checkbox" checked><span>启用 TopK</span><input id="agentTopKValue" type="number" min="1" max="20" value="3" aria-label="TopK 返回数量"></label><select class="agent-preset-select" aria-label="快捷问题" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">快捷问题</option><option value="舷号 0857 有没有在视频中出现？">舷号查询</option><option value="数据库中有没有黄色的无人艇？">数据库查询</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">未在库船</option><option value="查找一下15:30到15:40有哪些在库船出现？">在库船</option><option value="从15:30到15:40一共出现多少艘船？">数量统计</option><option value="监控中什么时间出现过一艘黄色无人艇？">黄色无人艇</option></select></div>
-          <div class="panel-actions agent-query-actions"><span class="round-limit" id="agentRoundLimit">最多三轮</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">刷新</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">清除记忆</button></div>
+          <div class="agent-query-mainline"><h2>Research Query</h2><label class="agent-topk-control"><input id="agentTopKEnabled" type="checkbox" checked><span>Enable TopK</span><input id="agentTopKValue" type="number" min="1" max="20" value="3" aria-label="TopK result limit"></label><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Preset Questions</option><option value="舷号 0857 有没有在视频中出现？">Hull Number Query</option><option value="数据库中有没有黄色的无人艇？">Registry Query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-Registry Vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-Registry Vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel Count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance Query</option></select></div>
+          <div class="panel-actions agent-query-actions"><span class="round-limit" id="agentRoundLimit">Up to 3 rounds</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">Refresh</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">Clear Memory</button></div>
         </div>
         <div class="question-box agent-question-box">
           <textarea id="agentQuestion" rows="2" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
-          <div class="question-actions agent-question-submit"><button class="btn primary" id="btnAskAgent" onclick="askAgent()">执行闭环推理</button><span>控制键 + 回车</span></div>
+          <div class="question-actions agent-question-submit"><button class="btn primary" id="btnAskAgent" onclick="askAgent()">Run Closed-Loop Reasoning</button><span>Ctrl + Enter</span></div>
         </div>
 
         <section id="agentResultPanel" class="agent-response-panel agent-result-panel" data-state="idle">
-          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">意图与计划将在此动态更新</em></div><b id="agentIntentState">等待识别</b></div>
+          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Init and plan updates appear here in real time</em></div><b id="agentIntentState">Waiting</b></div>
           <div id="agentProcessView" class="agent-process-view agent-result-process">
-            <details id="agentPlanDisclosure" class="agent-result-disclosure agent-plan-disclosure" open>
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Plan</strong><em id="agentPlanRound">等待计划</em><b aria-hidden="true"></b></summary>
+            <details id="agentInitDisclosure" class="agent-result-disclosure agent-init-disclosure" open>
+              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Init</strong><em id="agentInitSummary">Waiting for intent</em><b aria-hidden="true"></b></summary>
               <div class="agent-result-disclosure-body">
                 <section class="agent-process-intent agent-result-intent">
-                  <div class="agent-section-heading"><div><span>意图识别结果</span></div></div>
                   <article id="agentIntentResult" class="agent-thought-card intent intent-result-card" data-role="intent" data-round="0">
-                    <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>意图识别</strong><span>实时解析</span></div></div><div class="agent-card-state"><span class="agent-card-round">全局</span><em>等待</em></div></div>
-                    <div class="agent-stream-text"><span class="agent-stream-placeholder">等待意图识别…</span></div>
+                    <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>InitAgent</strong><span>Intent Parsing</span></div></div><div class="agent-card-state"><span class="agent-card-round">Global</span><em>Waiting</em></div></div>
+                    <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for intent parsing…</span></div>
                     <div class="agent-thought-tags"></div>
                   </article>
                 </section>
+              </div>
+            </details>
+            <details id="agentPlanDisclosure" class="agent-result-disclosure agent-plan-disclosure" open>
+              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Plan</strong><em id="agentPlanRound">Waiting for plan</em><b aria-hidden="true"></b></summary>
+              <div class="agent-result-disclosure-body">
                 <section class="agent-process-plan agent-result-plan">
                   <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
-                  <div id="agentPlanProgress" class="agent-plan-list"><div class="agent-plan-empty">计划生成后将在此动态显示步骤。</div></div>
-                  <div id="agentPlanDecision" class="agent-plan-decision">等待验收智能体检查当前计划。</div>
+                  <div id="agentPlanProgress" class="agent-plan-list"><div class="agent-plan-empty">Plan steps will update here.</div></div>
+                  <div id="agentPlanDecision" class="agent-plan-decision">Waiting for ReflectAgent verification.</div>
                 </section>
               </div>
             </details>
           </div>
           <div id="agentFinalView" class="agent-final-view agent-result-final" hidden>
             <details id="agentToolDisclosure" class="agent-result-disclosure agent-tool-disclosure">
-              <summary><span class="agent-result-index" aria-hidden="true">›_</span><strong>Tools</strong><em id="agentToolSummary">等待完成</em><b aria-hidden="true"></b></summary>
-              <div id="agentResultTools" class="agent-result-tool-body"><div class="agent-result-empty">工具调用完成后可在此查看。</div></div>
+              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Tools</strong><em id="agentToolSummary">Waiting for completion</em><b aria-hidden="true"></b></summary>
+              <div id="agentResultTools" class="agent-result-tool-body"><div class="agent-result-empty">Tool records will appear here after execution.</div></div>
             </details>
-            <div id="agentAnswer" class="agent-answer empty-state">推理完成后将在此展示最终结果。</div>
+            <div id="agentAnswer" class="agent-answer empty-state">The final result will appear here after reasoning.</div>
           </div>
         </section>
       </section>
@@ -170,23 +174,23 @@
       <section class="panel agent-thinking-panel">
         <div class="panel-head agent-collab-head">
           <div class="agent-collab-title"><h2>Three-Agent Collaboration</h2><span id="agentPlanMode">Plan → Observe → Verify · Reflect controls the next round</span></div>
-          <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">等待提问</strong></div>
+          <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">Waiting</strong></div>
         </div>
         <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
           <div class="agent-fixed-stack">
             <article class="agent-thought-card planner" data-role="planner" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>规划</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待规划…</span></div>
+              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>Planning</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for planning…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
             <article class="agent-thought-card observer" data-role="observer" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>观察</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待执行…</span></div>
+              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>Observation</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for tool execution…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
             <article class="agent-thought-card reflector" data-role="reflector" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>验收决策</span></div></div><div class="agent-card-state"><span class="agent-card-round">等待轮次</span><em>等待</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">等待验收…</span></div>
+              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>Verification</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
+              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for verification…</span></div>
               <div class="agent-thought-tags"></div>
             </article>
           </div>
@@ -195,13 +199,13 @@
     </div>
     <section class="panel evidence-panel evidence-panel-wide">
       <div class="panel-head evidence-panel-head evidence-toolbar">
-        <div class="evidence-toolbar-title"><span class="eyebrow">实验结果与证据</span><h3>多模态证据记录</h3></div>
+        <div class="evidence-toolbar-title"><span class="eyebrow">Experimental Evidence</span><h3>Multimodal Evidence Records</h3></div>
         <div id="evidenceDisplaySettings" class="evidence-display-settings evidence-display-inline">
-          <label title="按原视频证据分辨率缩放并单独缓存">视频倍率<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
-          <label title="关键帧和先验库参考图按所选倍率生成预览图">图片倍率<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
-          <label title="输入 0 表示显示全部结果">显示条数<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">全部</output></label>
+          <label title="Scale and cache video evidence previews">Video Scale<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
+          <label title="Scale keyframe and registry reference previews">Image Scale<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
+          <label title="Enter 0 to display all results">Max Items<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">All</output></label>
         </div>
-        <span id="evidenceResultCount" class="round-limit evidence-result-count">等待查询</span>
+        <span id="evidenceResultCount" class="round-limit evidence-result-count">Waiting for query</span>
       </div>
       <div id="evidenceGallery" class="evidence-track-list"><div class="evidence-track-empty">No evidence available</div></div>
     </section>
@@ -358,7 +362,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=17"></script>
   <script src="/static/js/memory.js?v=5"></script>
-<script src="/static/js/agent.js?v=54"></script>
+<script src="/static/js/agent.js?v=56"></script>
 <script src="/static/js/settings.js?v=9"></script>
 </body>
 </html>

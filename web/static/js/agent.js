@@ -12,51 +12,51 @@ function valueText(value) {
 }
 
 function stateLabel(state) {
-  return ({sufficient: '证据充分', replan: '继续规划', conflict: '证据冲突', uncertain: '无法确认'})[state] || valueText(state);
+  return ({sufficient: 'Evidence Sufficient', replan: 'Replan', conflict: 'Evidence Conflict', uncertain: 'Uncertain'})[state] || valueText(state);
 }
 
 
 function scopeLabel(scope) {
-  return ({track_memory: '视频轨迹记忆', registry: '先验库', both: '跨记忆对照'})[scope] || valueText(scope);
+  return ({track_memory: 'Trajectory Memory', registry: 'Registry', both: 'Cross-Memory Comparison'})[scope] || valueText(scope);
 }
 
 function targetKindLabel(kind) {
-  return ({hull: '舷号目标', description: '外观描述目标', all: '全部目标'})[kind] || valueText(kind);
+  return ({hull: 'Hull Number Target', description: 'Appearance Target', all: 'All Targets'})[kind] || valueText(kind);
 }
 
 function operationLabel(op) {
-  return ({existence: '存在判断', list: '列表查询', time: '时间定位', count: '数量统计', explain: '证据解释'})[op] || valueText(op);
+  return ({existence: 'Existence Check', list: 'List Query', time: 'Time Localization', count: 'Count Query', explain: 'Evidence Explanation'})[op] || valueText(op);
 }
 
 function relationLabel(rel) {
-  return ({any: '不限库关系', in: '在库', out: '未在库'})[rel] || valueText(rel);
+  return ({any: 'Any Registry Relation', in: 'In Registry', out: 'Out of Registry'})[rel] || valueText(rel);
 }
 
 function intentSourceLabel(source) {
   return ({
-    model: '规则表+模型',
-    heuristic: '规则兜底',
+    model: 'Rule Table + Model',
+    heuristic: 'Heuristic Fallback',
     langgraph_react: 'LangGraph/ReAct',
-    langgraph_fallback: 'LangGraph 兜底',
+    langgraph_fallback: 'LangGraph Fallback',
   })[source] || valueText(source);
 }
 
 function questionTypeLabel(type) {
   return ({
-    hull: '舷号查询',
-    registry_hull: '先验库舷号查询',
-    description: '描述目标查询',
-    registry_description: '先验库描述查询',
-    cross_reference: '跨记忆对应查询',
-    track_list: '轨迹列表查询',
-    registry_list: '先验库列表查询',
-    relation_description: '描述+库关系查询',
-    out_of_registry: '未在库船查询',
-    in_registry: '在库船查询',
-    count: '数量统计',
-    description_count: '描述数量统计',
-    registry_count: '先验库数量统计',
-    registry_description_count: '先验库描述数量统计'
+    hull: 'Hull Number Query',
+    registry_hull: 'Registry Hull Query',
+    description: 'Appearance Query',
+    registry_description: 'Registry Appearance Query',
+    cross_reference: 'Cross-Memory Query',
+    track_list: 'Trajectory List Query',
+    registry_list: 'Registry List Query',
+    relation_description: 'Appearance and Registry Query',
+    out_of_registry: 'Out-of-Registry Query',
+    in_registry: 'In-Registry Query',
+    count: 'Count Query',
+    description_count: 'Appearance Count Query',
+    registry_count: 'Registry Count Query',
+    registry_description_count: 'Registry Appearance Count Query'
   })[type] || valueText(type);
 }
 
@@ -119,7 +119,7 @@ function updateEvidenceDisplayLabels() {
   const maximumLabel = document.getElementById('evidenceMaxItemsValue');
   if (videoLabel && video) videoLabel.textContent = `${Math.round(Number(video.value) * 100)}%`;
   if (imageLabel && image) imageLabel.textContent = `${Math.round(Number(image.value) * 100)}%`;
-  if (maximumLabel && maximum) maximumLabel.textContent = Number(maximum.value) > 0 ? `${maximum.value} 条` : '全部';
+  if (maximumLabel && maximum) maximumLabel.textContent = Number(maximum.value) > 0 ? `${maximum.value} items` : 'All';
 }
 
 function renderLatestEvidence() {
@@ -192,14 +192,14 @@ function limitEvidenceItems(items) {
 }
 
 function evidenceCountText(shown, total, unit) {
-  return shown === total ? `${total} ${unit}` : `显示 ${shown} / ${total} ${unit}`;
+  return shown === total ? `${total} ${unit}` : `Showing ${shown} / ${total} ${unit}`;
 }
 
 async function loadAgentMemorySummary(showNotice = false) {
   const refreshButton = document.getElementById('agentMemoryRefreshButton');
   if (refreshButton) {
     refreshButton.disabled = true;
-    refreshButton.textContent = '刷新中…';
+    refreshButton.textContent = 'Refreshing…';
   }
   try {
     const summary = await apiFetch('/api/agent/memory-summary');
@@ -207,15 +207,15 @@ async function loadAgentMemorySummary(showNotice = false) {
     const limit = document.getElementById('agentRoundLimit');
     if (limit) {
       const maxRounds = summary.maxRounds || 3;
-      limit.textContent = `最多 ${maxRounds} 轮`;
+      limit.textContent = `Up to ${maxRounds} rounds`;
     }
-    if (showNotice && typeof showToast === 'function') showToast('记忆状态已刷新');
+    if (showNotice && typeof showToast === 'function') showToast('Memory status refreshed');
   } catch (error) {
-    if (showNotice && typeof showToast === 'function') showToast(`记忆状态刷新失败：${error.message || '服务不可用'}`, 'error');
+    if (showNotice && typeof showToast === 'function') showToast(`Memory refresh failed: ${error.message || 'service unavailable'}`, 'error');
   } finally {
     if (refreshButton) {
       refreshButton.disabled = false;
-      refreshButton.textContent = '刷新';
+      refreshButton.textContent = 'Refresh';
     }
   }
 }
@@ -223,29 +223,29 @@ async function loadAgentMemorySummary(showNotice = false) {
 async function clearAgentMemory() {
   const askButton = document.getElementById('btnAskAgent');
   const clearButton = document.getElementById('agentMemoryClearButton');
-  if (askButton?.disabled) return showToast('当前正在推理，请等待本轮完成后再清除', 'error');
-  if (!window.confirm('确定清除全部问答会话、推理轮次和问答证据吗？轨迹记忆与先验库不会删除。')) return;
+  if (askButton?.disabled) return showToast('Reasoning is in progress. Wait for the current run to finish before clearing memory.', 'error');
+  if (!window.confirm('Clear all QA sessions, reasoning rounds, and QA evidence? Trajectory memory and registry data will be retained.')) return;
   try {
     if (clearButton) {
       clearButton.disabled = true;
-      clearButton.textContent = '清除中…';
+      clearButton.textContent = 'Clearing…';
     }
     const result = await apiFetch('/api/agent/memory', {method: 'DELETE'});
     resetThoughtStream();
     const answer = document.getElementById('agentAnswer');
     if (answer) {
       answer.className = 'agent-answer empty-state';
-      answer.textContent = '问答记忆已清除，可以开始新的查询。';
+      answer.textContent = 'Query memory cleared. You can start a new query.';
     }
     renderEvidence(null, null, 'No evidence available');
     await loadAgentMemorySummary(false);
-    showToast(result.message || '问答记忆已清除');
+    showToast(result.message || 'QA memory cleared');
   } catch (error) {
-    showToast(`问答记忆清除失败：${error.message || '服务不可用'}`, 'error');
+    showToast(`Failed to clear QA memory: ${error.message || 'service unavailable'}`, 'error');
   } finally {
     if (clearButton) {
       clearButton.disabled = false;
-      clearButton.textContent = '清除问答记忆';
+      clearButton.textContent = 'Clear Memory';
     }
   }
 }
@@ -268,16 +268,16 @@ function renderTracks(tracks, questionType = '') {
   // topk/display_limit 只限制“单点检索展示”；范围枚举类问题有多少命中展示多少
   const visible = rangeList ? tracks : tracks.slice(0, 3);
   const rows = visible.map((track) => {
-    const hull = track.finalHullNumber || track.hullNumber || '无稳定舷号';
+    const hull = track.finalHullNumber || track.hullNumber || 'No stable hull number';
     const start = Number(track.startTime ?? track.start_time);
     const end = Number(track.endTime ?? track.end_time);
-    const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : '时间未知';
+    const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : 'Unknown time';
     const score = Number(track.embeddingScore);
-    return `<div class="track-summary"><strong>${escapeHtml(track.trackId || '未知轨迹')}</strong><span>${escapeHtml(hull)} · ${time}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
+    return `<div class="track-summary"><strong>${escapeHtml(track.trackId || 'Unknown Track')}</strong><span>${escapeHtml(hull)} · ${time}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}</span></div>`;
   }).join('');
   const more = (!rangeList && tracks.length > 3)
-    ? `<div class="track-summary-more">仅展示前 3 条单点匹配，其余 ${tracks.length - 3} 条见证据区</div>`
-    : (rangeList ? `<div class="track-summary-more">范围匹配共 ${tracks.length} 条</div>` : '');
+    ? `<div class="track-summary-more">Showing the top 3 point matches; ${tracks.length - 3} more are available in Evidence.</div>`
+    : (rangeList ? `<div class="track-summary-more">${tracks.length} range matches</div>` : '');
   return `<div class="answer-tracks ${rangeList ? 'range-list' : ''}">${rows}${more}</div>`;
 }
 
@@ -286,12 +286,12 @@ function renderRegistryHits(result) {
   const items = result?.registryItems || result?.registryMatches || [];
   if (!items.length) return '';
   const rows = items.slice(0, 5).map((item, index) => {
-    const hull = item.hullNumber || item.hull || '未知舷号';
-    const registryId = item.registryId || item.matchedRegistryId || '未知库项';
+    const hull = item.hullNumber || item.hull || 'Unknown Hull';
+    const registryId = item.registryId || item.matchedRegistryId || 'Unknown Registry Item';
     const score = Number(item.embeddingScore);
     const band = item.scoreBand || item.verifyDecision || '';
     const desc = item.description || '';
-    return `<div class="track-summary"><strong>${escapeHtml(hull)}</strong><span>库项 ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}${band ? ` · ${escapeHtml(band)}` : ''}${desc ? ` · ${escapeHtml(desc)}` : ''}</span></div>`;
+    return `<div class="track-summary"><strong>${escapeHtml(hull)}</strong><span>Registry ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}${band ? ` · ${escapeHtml(band)}` : ''}${desc ? ` · ${escapeHtml(desc)}` : ''}</span></div>`;
   }).join('');
   return `<div class="answer-tracks">${rows}</div>`;
 }
@@ -342,17 +342,17 @@ function classifiedResultItems(result) {
 function classifiedResultRow(item, kind) {
   const score = Number(item?.embeddingScore ?? item?.score);
   if (kind === 'registry') {
-    const hull = item?.hullNumber || item?.hull || '未知舷号';
-    const registryId = item?.registryId || item?.matchedRegistryId || '未知库项';
+    const hull = item?.hullNumber || item?.hull || 'Unknown Hull';
+    const registryId = item?.registryId || item?.matchedRegistryId || 'Unknown Registry Item';
     const description = item?.description || '';
-    return `<div class="classified-result-row"><strong>${escapeHtml(hull)}</strong><span>库项 ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}${description ? ` · ${escapeHtml(description)}` : ''}</span></div>`;
+    return `<div class="classified-result-row"><strong>${escapeHtml(hull)}</strong><span>Registry ${escapeHtml(String(registryId))}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}${description ? ` · ${escapeHtml(description)}` : ''}</span></div>`;
   }
-  const trackId = item?.trackId || item?.matchedTrackId || '未知轨迹';
-  const hull = item?.finalHullNumber || item?.hullNumber || '无稳定舷号';
+  const trackId = item?.trackId || item?.matchedTrackId || 'Unknown Track';
+  const hull = item?.finalHullNumber || item?.hullNumber || 'No stable hull number';
   const start = Number(item?.startTime ?? item?.start_time);
   const end = Number(item?.endTime ?? item?.end_time);
-  const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : '时间未知';
-  return `<div class="classified-result-row"><strong>轨迹 ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · 相似度 ${score.toFixed(3)}` : ''}</span></div>`;
+  const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : 'Unknown time';
+  return `<div class="classified-result-row"><strong>Track ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}</span></div>`;
 }
 
 function renderClassifiedResults(result) {
@@ -362,8 +362,8 @@ function renderClassifiedResults(result) {
   const pendingRows = grouped.pending.map((item) => classifiedResultRow(item, grouped.kind)).join('');
   return `<section class="answer-classification">
     <div class="answer-result-groups">
-      <section class="answer-result-group confirmed"><header><div><strong>确定结果</strong><span>达到确认阈值</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">暂无确定结果</div>'}</div></section>
-      <section class="answer-result-group pending"><header><div><strong>待确认</strong><span>灰区匹配，建议人工复核</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">暂无待确认结果</div>'}</div></section>
+      <section class="answer-result-group confirmed"><header><div><strong>Confirmed Results</strong><span>Above the confirmation threshold</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed results</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>Pending Review</strong><span>Gray-zone matches requiring review</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending results</div>'}</div></section>
     </div>
   </section>`;
 }
@@ -375,15 +375,15 @@ function dedupTrackIds(group) {
 function dedupResultRow(group, kind) {
   const trackIds = dedupTrackIds(group);
   const score = Number(group?.minimumScore);
-  const title = trackIds.length ? `轨迹 ${trackIds.join(' + ')}` : '轨迹组';
+  const title = trackIds.length ? `Tracks ${trackIds.join(' + ')}` : 'Track Group';
   let detail = kind === 'confirmed'
-    ? '高阈值确认属于同一艘船'
-    : '低阈值候选合并，计入最低统计口径';
+    ? 'Confirmed as the same vessel above the high threshold'
+    : 'Candidate merge above the low threshold; included in the minimum-count estimate';
   if (kind === 'pending' && Array.isArray(group?.currentGroups) && group.currentGroups.length) {
     const current = group.currentGroups.map((item) => `[${(item || []).join(' + ')}]`).join(' ↔ ');
-    detail += ` · 当前分组 ${current}`;
+    detail += ` · Current groups ${current}`;
   }
-  if (Number.isFinite(score)) detail += ` · 最低组内相似度 ${score.toFixed(3)}`;
+  if (Number.isFinite(score)) detail += ` · Minimum within-group similarity ${score.toFixed(3)}`;
   return `<div class="classified-result-row dedup-result-row"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
 }
 
@@ -396,8 +396,8 @@ function renderDedupResults(result) {
   const pendingRows = pending.map((item) => dedupResultRow(item, 'pending')).join('');
   return `<section class="answer-classification dedup-classification">
     <div class="answer-result-groups">
-      <section class="answer-result-group confirmed"><header><div><strong>确认合并的轨迹</strong><span>高阈值通过，同组轨迹确定归为一艘船</span></div><em>${confirmed.length} 组</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">暂无需要确认合并的重复轨迹</div>'}</div></section>
-      <section class="answer-result-group pending"><header><div><strong>待确认合并的轨迹</strong><span>影响最低船数，需要结合关键帧复核</span></div><em>${pending.length} 组</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">暂无待确认合并关系</div>'}</div></section>
+      <section class="answer-result-group confirmed"><header><div><strong>Confirmed Merge Groups</strong><span>High-threshold groups representing the same vessel</span></div><em>${confirmed.length} groups</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed duplicate trajectories</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>Pending Merge Groups</strong><span>Requires keyframe review before minimum-count confirmation</span></div><em>${pending.length} groups</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending merge groups</div>'}</div></section>
     </div>
   </section>`;
 }
@@ -409,9 +409,15 @@ function setAgentResultState(label, state = 'running') {
   if (badge) badge.textContent = label;
 }
 
+function setAgentInitSummary(label) {
+  const summary = document.getElementById('agentInitSummary');
+  if (summary) summary.textContent = label;
+}
+
 function showAgentProcessView() {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
+  const initDisclosure = document.getElementById('agentInitDisclosure');
   const planDisclosure = document.getElementById('agentPlanDisclosure');
   const toolDisclosure = document.getElementById('agentToolDisclosure');
   const toolSummary = document.getElementById('agentToolSummary');
@@ -419,17 +425,20 @@ function showAgentProcessView() {
   const hint = document.getElementById('agentResultHint');
   if (processView) processView.hidden = false;
   if (finalView) finalView.hidden = true;
+  if (initDisclosure) initDisclosure.open = true;
   if (planDisclosure) planDisclosure.open = true;
   if (toolDisclosure) toolDisclosure.open = false;
-  if (toolSummary) toolSummary.textContent = '等待完成';
-  if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">工具调用完成后可在此查看。</div>';
-  if (hint) hint.textContent = '正在同步意图识别与执行计划';
-  setAgentResultState('识别中', 'running');
+  setAgentInitSummary('Initializing');
+  if (toolSummary) toolSummary.textContent = 'Waiting for completion';
+  if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">Tool records will appear here after execution.</div>';
+  if (hint) hint.textContent = 'Init and plan updates appear here in real time';
+  setAgentResultState('Initializing', 'running');
 }
 
 function showAgentFinalView(state = 'completed') {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
+  const initDisclosure = document.getElementById('agentInitDisclosure');
   const planDisclosure = document.getElementById('agentPlanDisclosure');
   const toolDisclosure = document.getElementById('agentToolDisclosure');
   const round = document.getElementById('agentPlanRound');
@@ -440,43 +449,46 @@ function showAgentFinalView(state = 'completed') {
   const completed = agentPlanItems.filter((item) => ['completed', 'skipped'].includes(item.status)).length;
   if (processView) processView.hidden = false;
   if (finalView) finalView.hidden = false;
+  if (initDisclosure) initDisclosure.open = false;
   if (planDisclosure) planDisclosure.open = false;
   if (toolDisclosure) toolDisclosure.open = false;
   if (round) round.textContent = total
-    ? `${completed}/${total} 步 · ${state === 'failed' ? '已中断' : '已结束'}`
-    : state === 'failed' ? '计划已中断' : '计划已结束';
-  if (hint) hint.textContent = state === 'failed' ? '过程已折叠，可展开检查失败位置' : '计划与工具已折叠，可按需展开查看';
+    ? `${completed}/${total} steps · ${state === 'failed' ? 'Interrupted' : 'Completed'}`
+    : state === 'failed' ? 'Plan interrupted' : 'Plan completed';
+  if (hint) hint.textContent = state === 'failed'
+    ? 'Init, plan, and tools are collapsed; expand them to inspect the failure.'
+    : 'Init, plan, and tools are collapsed for a concise final result.';
   if (state === 'failed') {
-    if (toolSummary) toolSummary.textContent = '调用未完成';
-    if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">执行中断，未生成完整工具调用汇总。</div>';
+    if (toolSummary) toolSummary.textContent = 'Incomplete calls';
+    if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">Execution stopped before a complete tool summary was generated.</div>';
   }
-  setAgentResultState(state === 'failed' ? '执行失败' : '已完成', state);
+  setAgentResultState(state === 'failed' ? 'Failed' : 'Completed', state);
 }
 
 function renderAgentAnswer(result) {
   showAgentFinalView('completed');
-  const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
+  const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : 'All monitoring time';
   const records = Array.isArray(result.toolRecords) && result.toolRecords.length
     ? result.toolRecords
     : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
   const chain = records.map((item) => `<div class="answer-tool-item"><code>${escapeHtml(formatToolCall(item.round, item))}</code></div>`).join('');
   const toolSummary = document.getElementById('agentToolSummary');
   const toolBody = document.getElementById('agentResultTools');
-  if (toolSummary) toolSummary.textContent = records.length ? `${records.length} 条调用记录` : '无调用记录';
-  if (toolBody) toolBody.innerHTML = chain || '<div class="agent-result-empty">本次推理未产生工具调用记录。</div>';
+  if (toolSummary) toolSummary.textContent = records.length ? `${records.length} call records` : 'No call records';
+  if (toolBody) toolBody.innerHTML = chain || '<div class="agent-result-empty">No tool calls were produced.</div>';
   const dedupResults = renderDedupResults(result);
   const classified = renderClassifiedResults(result);
   const fallbackResults = `${renderRegistryHits(result)}${renderTracks(result.tracks, result.questionType)}`;
   const rawCount = Number(result.count);
   const rawMatchCount = Number(result.matchCount);
   const hitCount = Number.isFinite(rawCount) ? rawCount : Number.isFinite(rawMatchCount) ? rawMatchCount : Number((result.tracks || []).length);
-  const hitLabel = result?.dedupSummary ? '最低船数' : '命中数量';
+  const hitLabel = result?.dedupSummary ? 'Minimum Vessel Count' : 'Matches';
   document.getElementById('agentAnswer').className = 'agent-answer';
   document.getElementById('agentAnswer').innerHTML = `
     <div class="answer-overview">
-      <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
-      <p>${escapeHtml(result.answerText || '未生成回答')}</p>
-      <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>${hitLabel}：${hitCount}</span></div>
+      <div class="answer-head"><strong>${escapeHtml(result.conclusion || 'Query Completed')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
+      <p>${escapeHtml(result.answerText || 'No answer generated')}</p>
+      <div class="answer-meta"><span>Query Type: ${escapeHtml(questionTypeLabel(result.questionType))}</span><span>Scope: ${escapeHtml(scope)}</span><span>${hitLabel}: ${hitCount}</span></div>
     </div>
     <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>`;
 }
@@ -607,7 +619,7 @@ function evidenceTrackCell(label, item) {
 }
 
 function evidenceTrackTableHead() {
-  return '<div class="evidence-track-table-head" role="row"><span role="columnheader">轨迹信息</span><span role="columnheader">Clip</span><span role="columnheader">Keyframe</span><span role="columnheader">Registry</span></div>';
+  return '<div class="evidence-track-table-head" role="row"><span role="columnheader">Track Evidence</span><span role="columnheader">Clip</span><span role="columnheader">Keyframe</span><span role="columnheader">Registry</span></div>';
 }
 
 function evidenceTrackRow(group, index) {
@@ -627,8 +639,8 @@ function evidenceTrackRow(group, index) {
     ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
     : missingEvidence(trackId, 'registry');
   const hull = String(group.hullNumber || '').trim();
-  const badges = `${hull ? `<em>舷号 ${escapeHtml(hull)}</em>` : '<em>舷号未知</em>'}${score === null ? '' : `<em>相似度 ${score.toFixed(3)}</em>`}`;
-  return `<article class="evidence-track-row" role="row"><div class="evidence-track-meta" role="rowheader"><span>轨迹</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
+  const badges = `${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>Similarity ${score.toFixed(3)}</em>`}`;
+  return `<article class="evidence-track-row" role="row"><div class="evidence-track-meta" role="rowheader"><span>Track</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
 }
 
 function representativeRegistryEvidence(registryItems) {
@@ -682,17 +694,17 @@ function dedupEvidenceGroup(group, index) {
   const cards = members.map((member) => {
     const trackId = String(member?.trackId ?? '-');
     const item = member?.keyframeId
-      ? evidenceItem('keyframe', member.keyframeId, trackId, {label: `轨迹 ${trackId} · 合并判定关键帧`})
+      ? evidenceItem('keyframe', member.keyframeId, trackId, {label: `Track ${trackId} · Merge Decision Keyframe`})
       : missingEvidence(trackId, 'keyframe');
     return evidenceCard(item);
   }).join('');
   const current = pending && Array.isArray(group?.currentGroups) && group.currentGroups.length
-    ? `<span>当前分组：${escapeHtml(group.currentGroups.map((item) => `[${(item || []).join(' + ')}]`).join(' ↔ '))}</span>`
+    ? `<span>Current Groups: ${escapeHtml(group.currentGroups.map((item) => `[${(item || []).join(' + ')}]`).join(' ↔ '))}</span>`
     : '';
-  const scoreText = Number.isFinite(score) ? `<em>最低组内相似度 ${score.toFixed(3)}</em>` : '';
+  const scoreText = Number.isFinite(score) ? `<em>Minimum Similarity ${score.toFixed(3)}</em>` : '';
   return `<article class="dedup-evidence-group ${pending ? 'pending' : 'confirmed'}">
-    <header><div><span>${pending ? '待确认合并组' : '确认合并组'} ${index + 1}</span><strong>轨迹 ${escapeHtml(trackIds.join(' + ') || '-')}</strong>${current}</div>${scoreText}</header>
-    <div class="dedup-evidence-members">${cards || '<div class="evidence-track-empty">该组暂无可展示关键帧</div>'}</div>
+    <header><div><span>${pending ? 'Pending Merge Group' : 'Confirmed Merge Group'} ${index + 1}</span><strong>Tracks ${escapeHtml(trackIds.join(' + ') || '-')}</strong>${current}</div>${scoreText}</header>
+    <div class="dedup-evidence-members">${cards || '<div class="evidence-track-empty">No keyframes available for this group</div>'}</div>
   </article>`;
 }
 
@@ -702,16 +714,16 @@ function renderDedupEvidence(container, resultCount, groups, emptyText) {
   const confirmed = limitEvidenceItems(confirmedAll);
   const pending = limitEvidenceItems(pendingAll);
   if (resultCount) {
-    resultCount.textContent = `${confirmedAll.length} 组确认合并 · ${pendingAll.length} 组待确认`;
+    resultCount.textContent = `${confirmedAll.length} confirmed groups · ${pendingAll.length} pending groups`;
   }
   const section = (kind, title, subtitle, rows, total) => `<section class="dedup-evidence-section ${kind}">
-    <header><div><strong>${title}</strong><span>${subtitle}</span></div><em>${rows.length === total ? total : `${rows.length}/${total}`} 组</em></header>
+    <header><div><strong>${title}</strong><span>${subtitle}</span></div><em>${rows.length === total ? total : `${rows.length}/${total}`} groups</em></header>
     <div class="dedup-evidence-section-body">${rows.length ? rows.map(dedupEvidenceGroup).join('') : `<div class="dedup-evidence-empty">${escapeHtml(emptyText)}</div>`}</div>
   </section>`;
   container.className = 'evidence-dedup-list';
   container.innerHTML = `<div class="dedup-evidence-sections">
-    ${section('confirmed', '确认合并证据', '关键帧达到高阈值，确定归并为同一艘船', confirmed, confirmedAll.length)}
-    ${section('pending', '待确认合并证据', '灰区关键帧决定最低船数，需要人工复核', pending, pendingAll.length)}
+    ${section('confirmed', 'Confirmed Merge Evidence', 'Keyframes exceed the high threshold and represent the same vessel', confirmed, confirmedAll.length)}
+    ${section('pending', 'Pending Merge Evidence', 'Gray-zone keyframes require manual review', pending, pendingAll.length)}
   </div>`;
 }
 
@@ -724,7 +736,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
   visibleEvidenceVideos.clear();
   const groups = sortEvidenceGroups(displayGroups || []);
   if (result?.operation === 'count' && result?.dedupSummary) {
-    renderDedupEvidence(container, resultCount, groups, '暂无该类轨迹合并关系');
+    renderDedupEvidence(container, resultCount, groups, 'No trajectory merge relation is available.');
     return;
   }
   const registryOnly = result?.targetScope === 'registry';
@@ -734,7 +746,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
       database = [...new Set(evidence?.registryReferenceIds || [])].map((id) => evidenceItem('registry', id));
     }
     const visibleDatabase = limitEvidenceItems(database);
-    if (resultCount) resultCount.textContent = evidenceCountText(visibleDatabase.length, database.length, '个库项');
+    if (resultCount) resultCount.textContent = evidenceCountText(visibleDatabase.length, database.length, 'registry items');
     container.className = 'evidence-columns registry-only';
     container.innerHTML = evidenceColumn('Database Evidence', 'Registry Reference Images', visibleDatabase, emptyText);
     return;
@@ -756,10 +768,10 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
 
   const totalRows = rows.length;
   rows = limitEvidenceItems(rows);
-  if (resultCount) resultCount.textContent = totalRows ? evidenceCountText(rows.length, totalRows, '条结果轨迹') : '无匹配轨迹';
+  if (resultCount) resultCount.textContent = totalRows ? evidenceCountText(rows.length, totalRows, 'result tracks') : 'No matching tracks';
   container.className = 'evidence-track-list';
   container.innerHTML = rows.length
-    ? `<div class="evidence-track-table" role="table" aria-label="多模态轨迹证据">${evidenceTrackTableHead()}<div class="evidence-track-table-body" role="rowgroup">${rows.map((group, index) => evidenceTrackRow(group, index)).join('')}</div></div>`
+    ? `<div class="evidence-track-table" role="table" aria-label="Multimodal trajectory evidence">${evidenceTrackTableHead()}<div class="evidence-track-table-body" role="rowgroup">${rows.map((group, index) => evidenceTrackRow(group, index)).join('')}</div></div>`
     : `<div class="evidence-track-empty">${escapeHtml(emptyText)}</div>`;
   observeEvidenceVideos(container);
 }
@@ -822,17 +834,17 @@ function skillReadTags(event) {
 }
 
 function compactToolCall(call) {
-  const tool = call.tool || call.id || '工具';
-  const status = call.skipped ? '跳过' : call.ok === false ? '失败' : '完成';
+  const tool = call.tool || call.id || 'tool';
+  const status = call.skipped ? 'skipped' : call.ok === false ? 'failed' : 'completed';
   const details = [];
-  if (Number.isFinite(Number(call.trackCount))) details.push(`${call.trackCount}条轨迹`);
-  if (Number.isFinite(Number(call.keyframeCount))) details.push(`${call.keyframeCount}张关键帧`);
-  if (Number.isFinite(Number(call.matchCount))) details.push(`${call.matchCount}条匹配`);
-  if (Number.isFinite(Number(call.registryCount))) details.push(`${call.registryCount}个库项`);
+  if (Number.isFinite(Number(call.trackCount))) details.push(`${call.trackCount} tracks`);
+  if (Number.isFinite(Number(call.keyframeCount))) details.push(`${call.keyframeCount} keyframes`);
+  if (Number.isFinite(Number(call.matchCount))) details.push(`${call.matchCount} matches`);
+  if (Number.isFinite(Number(call.registryCount))) details.push(`${call.registryCount} registry items`);
   if (call.decision) details.push(String(call.decision));
-  if (call.hasMore) details.push('还有下一页');
+  if (call.hasMore) details.push('more pages');
   if (call.error) details.push(compactAgentValue(call.error, 70));
-  return `${tool} · ${status}${details.length ? ` · ${details.join('，')}` : ''}`;
+  return `${tool} · ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`;
 }
 
 function compactAgentText(event) {
@@ -841,23 +853,23 @@ function compactAgentText(event) {
   if (event.role === 'planner') {
     const model = event.modelSummary || {};
     const lines = [];
-    if (model.goal) lines.push(`目标：${compactAgentValue(model.goal, 100)}`);
-    if (calls.length) lines.push(`计划：${calls.map((call) => call.tool || '工具').join(' → ')}`);
-    if (model.reason) lines.push(`依据：${compactAgentValue(model.reason, 140)}`);
-    if (event.planRepair) lines.push('校验：上一版计划无效，已重新规划');
-    if (event.fallback) lines.push(`说明：${compactAgentValue(event.fallback, 120)}`);
-    return lines.join('\n') || '本轮未生成可执行计划';
+    if (model.goal) lines.push(`Goal: ${compactAgentValue(model.goal, 100)}`);
+    if (calls.length) lines.push(`Plan: ${calls.map((call) => call.tool || 'tool').join(' → ')}`);
+    if (model.reason) lines.push(`Reason: ${compactAgentValue(model.reason, 140)}`);
+    if (event.planRepair) lines.push('Validation: previous plan was invalid and has been repaired');
+    if (event.fallback) lines.push(`Note: ${compactAgentValue(event.fallback, 120)}`);
+    return lines.join('\n') || 'No executable plan was generated for this round';
   }
   if (event.role === 'intent') {
     const model = event.modelSummary || {};
     return [
-      model.goal ? `移交：${compactAgentValue(model.goal, 120)}` : '',
-      model.reason ? `依据：${compactAgentValue(model.reason, 140)}` : '',
+      model.goal ? `Handoff: ${compactAgentValue(model.goal, 120)}` : '',
+      model.reason ? `Reason: ${compactAgentValue(model.reason, 140)}` : '',
       summary ? compactAgentValue(summary, 200) : '',
-    ].filter(Boolean).join('\n') || '意图识别完成';
+    ].filter(Boolean).join('\n') || 'Intent parsing completed';
   }
   if (event.role === 'observer') {
-    return summary ? `观察：${compactAgentValue(summary, 260)}` : calls.length ? `本轮已完成 ${calls.length} 个工具步骤` : '本轮没有工具结果';
+    return summary ? `Observation: ${compactAgentValue(summary, 260)}` : calls.length ? `Completed ${calls.length} tool steps in this round` : 'No tool results in this round';
   }
   if (event.role === 'reflector') {
     const progress = event.acceptanceProgress || {};
@@ -865,21 +877,21 @@ function compactAgentText(event) {
     const completedCount = requirements.filter((item) => item && item.completed).length;
     const progressText = requirements.length ? `${completedCount}/${requirements.length}` : '';
     const sourceLabel = event.decisionSource === 'model'
-      ? '模型判定'
+      ? 'Model Decision'
       : event.decisionSource === 'acceptance_guard'
-        ? '验收规则纠偏'
+        ? 'Acceptance Guard Correction'
         : event.decisionSource === 'deterministic_fallback'
-          ? '验收规则接管'
+          ? 'Deterministic Acceptance Guard'
           : '';
     return [
-      event.acceptanceGoal ? `验收标准：${compactAgentValue(event.acceptanceGoal, 140)}` : '',
-      event.currentFocus ? `当前焦点：${compactAgentValue(event.currentFocus, 120)}` : '',
-      progressText ? `验收进度：${progressText}${progress.acceptanceSatisfied ? '（已满足）' : '（未满足）'}` : '',
-      `权威判断：${stateLabel(event.state)}${sourceLabel ? ` · ${sourceLabel}` : ''}`,
-      event.evidenceGap ? `关键缺口：${compactAgentValue(event.evidenceGap, 130)}` : '',
-      event.nextAction ? `下一轮动作：${compactAgentValue(event.nextAction, 150)}` : '',
-      event.nextRound ? `流转：进入第 ${event.nextRound} 轮 PlanAgent` : '',
-      summary ? `判定依据：${compactAgentValue(summary, 180)}` : '',
+      event.acceptanceGoal ? `Acceptance: ${compactAgentValue(event.acceptanceGoal, 140)}` : '',
+      event.currentFocus ? `Focus: ${compactAgentValue(event.currentFocus, 120)}` : '',
+      progressText ? `Progress: ${progressText}${progress.acceptanceSatisfied ? ' (Satisfied)' : ' (Unmet)'}` : '',
+      `Decision: ${stateLabel(event.state)}${sourceLabel ? ` · ${sourceLabel}` : ''}`,
+      event.evidenceGap ? `Evidence Gap: ${compactAgentValue(event.evidenceGap, 130)}` : '',
+      event.nextAction ? `Next Action: ${compactAgentValue(event.nextAction, 150)}` : '',
+      event.nextRound ? `Transition: Round ${event.nextRound} → PlanAgent` : '',
+      summary ? `Rationale: ${compactAgentValue(summary, 180)}` : '',
     ].filter(Boolean).join('\n');
   }
   return summary;
@@ -897,21 +909,21 @@ let agentPlanLocked = false;
 let activeAgentRound = 0;
 
 const toolActionLabels = {
-  getTrack: '读取目标轨迹',
-  getFrames: '读取正式关键帧',
-  getClip: '生成目标船片段',
-  getRegistry: '读取指定先验库项',
-  matchHull: '精确匹配舷号',
-  listRegistry: '读取完整先验库',
-  matchText: '执行描述特征匹配',
-  matchImage: '执行图像特征匹配',
-  verifyTarget: '核验灰区视觉证据',
-  showEvidence: '整理并展示证据',
-  dedupTracks: '执行跨轨迹去重',
+  getTrack: 'Read Target Track',
+  getFrames: 'Read Keyframes',
+  getClip: 'Generate Vessel Clip',
+  getRegistry: 'Read Registry Item',
+  matchHull: 'Match Hull Number',
+  listRegistry: 'List Registry',
+  matchText: 'Match Text Features',
+  matchImage: 'Match Image Features',
+  verifyTarget: 'Verify Gray-Zone Evidence',
+  showEvidence: 'Organize Evidence',
+  dedupTracks: 'Deduplicate Trajectories',
 };
 
 function planStatusLabel(status) {
-  return ({pending: '等待', running: '执行中', completed: '完成', failed: '失败', skipped: '跳过'})[status] || '等待';
+  return ({pending: 'Pending', running: 'Running', completed: 'Completed', failed: 'Failed', skipped: 'Skipped'})[status] || 'Pending';
 }
 
 function initializePlanBlueprint(blueprint) {
@@ -922,22 +934,22 @@ function initializePlanBlueprint(blueprint) {
       key: String(step.stepId || `plan-step-${index + 1}`),
       stepId: String(step.stepId || `plan-step-${index + 1}`),
       id: '',
-      title: String(step.title || toolActionLabels[tools[0]] || '执行计划步骤'),
+      title: String(step.title || toolActionLabels[tools[0]] || 'Execute Plan Step'),
       tools,
       tool: tools[0] || '',
       round: 0,
       status: 'pending',
       optional: Boolean(step.optional),
-      detail: step.optional ? '条件步骤，证据进入灰区时执行' : '等待执行',
+      detail: step.optional ? 'Conditional step for gray-zone evidence' : 'Pending execution',
     };
   });
   agentPlanLocked = true;
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
-  if (round) round.textContent = `完整计划 · ${agentPlanItems.length} 步`;
+  if (round) round.textContent = `Full plan · ${agentPlanItems.length} steps`;
   if (decision) {
     decision.className = 'agent-plan-decision active';
-    decision.textContent = '完整计划已生成，后续各轮只更新原步骤状态。';
+    decision.textContent = 'Full plan generated; later rounds update existing step states.';
   }
   renderPlanProgress();
 }
@@ -952,18 +964,18 @@ function renderPlanProgress() {
   const round = document.getElementById('agentPlanRound');
   if (meter) meter.style.width = total ? `${Math.round((completed / total) * 100)}%` : '0%';
   if (!total) {
-    container.innerHTML = '<div class="agent-plan-empty">计划生成后将在此动态显示步骤。</div>';
+    container.innerHTML = '<div class="agent-plan-empty">Plan steps will update here.</div>';
     return;
   }
   if (round) {
-    const progress = `${completed}/${total} 步`;
-    round.textContent = hasFailed ? `${progress} · 存在失败` : hasRunning ? `${progress} · 执行中` : completed === total ? `${progress} · 已完成` : `${progress} · 待执行`;
+    const progress = `${completed}/${total} steps`;
+    round.textContent = hasFailed ? `${progress} · Failed` : hasRunning ? `${progress} · Running` : completed === total ? `${progress} · Completed` : `${progress} · Pending`;
   }
   const visibleItems = agentPlanItems;
   container.innerHTML = visibleItems.map((item, index) => {
     const symbol = item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : item.status === 'skipped' ? '—' : '';
-    const action = item.title || toolActionLabels[item.tool] || '执行工具步骤';
-    const detail = item.detail ? `<small>${escapeHtml(compactAgentValue(item.detail, 90))}</small>` : `<small>第 ${item.round} 轮计划</small>`;
+    const action = item.title || toolActionLabels[item.tool] || 'Execute Tool Step';
+    const detail = item.detail ? `<small>${escapeHtml(compactAgentValue(item.detail, 90))}</small>` : `<small>Round ${item.round}</small>`;
     return `
       <div class="agent-plan-step ${escapeHtml(item.status)}" data-plan-key="${escapeHtml(item.key)}">
         <span class="agent-plan-icon">${escapeHtml(symbol)}</span>
@@ -978,12 +990,13 @@ function renderPlanProgress() {
 function resetPlanProgress() {
   agentPlanItems = [];
   agentPlanLocked = false;
+  setAgentInitSummary('Waiting for intent');
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
-  if (round) round.textContent = '等待计划';
+  if (round) round.textContent = 'Waiting for plan';
   if (decision) {
     decision.className = 'agent-plan-decision';
-    decision.textContent = '等待验收智能体检查当前计划。';
+    decision.textContent = 'Waiting for ReflectAgent verification.';
   }
   renderPlanProgress();
 }
@@ -994,7 +1007,7 @@ function syncPlanProgress(event) {
   const calls = Array.isArray(event.calls) ? event.calls : [];
   calls.forEach((call, index) => {
     const stepId = String(call.planStepId || '');
-    const tool = String(call.tool || call.id || '工具');
+    const tool = String(call.tool || call.id || 'tool');
     let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
     if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
     if (!item && !agentPlanLocked) {
@@ -1002,13 +1015,13 @@ function syncPlanProgress(event) {
         key: stepId || `fallback-step-${index + 1}`,
         stepId: stepId || `fallback-step-${index + 1}`,
         id: '',
-        title: toolActionLabels[tool] || '执行工具步骤',
+        title: toolActionLabels[tool] || 'Execute Tool Step',
         tools: [tool],
         tool,
         round: 0,
         status: 'pending',
         optional: false,
-        detail: '等待执行',
+        detail: 'Pending execution',
       };
       agentPlanItems.push(item);
     }
@@ -1016,14 +1029,14 @@ function syncPlanProgress(event) {
     item.id = String(call.id || item.id || '');
     item.round = roundNumber;
     item.status = 'pending';
-    item.detail = `第 ${roundNumber} 轮等待执行`;
+    item.detail = `Round ${roundNumber} · Pending`;
   });
   const round = document.getElementById('agentPlanRound');
   const decision = document.getElementById('agentPlanDecision');
-  if (round) round.textContent = `完整计划 · 第 ${roundNumber} 轮`;
+  if (round) round.textContent = `Full plan · Round ${roundNumber}`;
   if (decision) {
     decision.className = 'agent-plan-decision active';
-    decision.textContent = calls.length ? `ObserveAgent 正在执行第 ${roundNumber} 轮计划。` : '本轮没有可执行步骤，等待 ReflectAgent 判断。';
+    decision.textContent = calls.length ? `ObserveAgent is executing round ${roundNumber}.` : 'No executable step in this round; waiting for ReflectAgent.';
   }
   renderPlanProgress();
 }
@@ -1032,7 +1045,7 @@ function updatePlanProgressFromTool(event) {
   const roundNumber = Number(event.round || activeAgentRound || 1);
   const id = String(event.id || '');
   const stepId = String(event.planStepId || '');
-  const tool = String(event.tool || event.id || '工具');
+  const tool = String(event.tool || event.id || 'tool');
   let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
   if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
   if (!item && !agentPlanLocked) {
@@ -1040,7 +1053,7 @@ function updatePlanProgressFromTool(event) {
       key: stepId || `fallback-step-${agentPlanItems.length + 1}`,
       stepId: stepId || `fallback-step-${agentPlanItems.length + 1}`,
       id,
-      title: toolActionLabels[tool] || '执行工具步骤',
+      title: toolActionLabels[tool] || 'Execute Tool Step',
       tools: [tool],
       tool,
       round: roundNumber,
@@ -1057,7 +1070,7 @@ function updatePlanProgressFromTool(event) {
   else if (event.phase === 'failed' || event.ok === false) item.status = 'failed';
   else if (event.phase === 'skipped' || event.skipped) item.status = 'skipped';
   else item.status = 'running';
-  item.detail = event.error || event.summary || `第 ${roundNumber} 轮${planStatusLabel(item.status)}`;
+  item.detail = event.error || event.summary || `Round ${roundNumber} · ${planStatusLabel(item.status)}`;
   renderPlanProgress();
 }
 function updatePlanFromObservation(event) {
@@ -1078,35 +1091,35 @@ function updatePlanReflection(event) {
   if (state === 'sufficient') {
     agentPlanItems.forEach((item) => { if (!['failed', 'skipped'].includes(item.status)) item.status = item.optional && item.status === 'pending' ? 'skipped' : 'completed'; });
     renderPlanProgress();
-    decision.textContent = `第 ${event.round || activeAgentRound} 轮验收通过，正在生成最终回答。`;
-    setAgentResultState('生成结果', 'running');
+    decision.textContent = `Round ${event.round || activeAgentRound} verified; generating the final answer.`;
+    setAgentResultState('Synthesizing', 'running');
   } else if (state === 'replan') {
-    decision.textContent = `继续规划：${compactAgentValue(event.nextAction || event.evidenceGap || '需要补充证据', 150)}`;
-    setAgentResultState('等待下一轮规划', 'running');
+    decision.textContent = `Replan: ${compactAgentValue(event.nextAction || event.evidenceGap || 'additional evidence is required', 150)}`;
+    setAgentResultState('Waiting for Replan', 'running');
   } else if (state === 'conflict') {
-    decision.textContent = `证据冲突：${compactAgentValue(event.evidenceGap || event.nextAction || '需要重新检查证据', 150)}`;
-    setAgentResultState('证据冲突', 'running');
+    decision.textContent = `Evidence Conflict: ${compactAgentValue(event.evidenceGap || event.nextAction || 'evidence must be rechecked', 150)}`;
+    setAgentResultState('Evidence Conflict', 'running');
   } else {
-    decision.textContent = `当前无法确认：${compactAgentValue(event.evidenceGap || event.nextAction || '证据不足', 150)}`;
-    setAgentResultState('证据不足', 'running');
+    decision.textContent = `Uncertain: ${compactAgentValue(event.evidenceGap || event.nextAction || 'insufficient evidence', 150)}`;
+    setAgentResultState('Insufficient Evidence', 'running');
   }
 }
 
 function rolePlaceholder(role, forRound = false) {
-  if (role === 'intent') return forRound ? '等待意图识别…' : '等待意图识别…';
-  if (role === 'planner') return forRound ? '等待本轮规划…' : '等待规划…';
-  if (role === 'observer') return forRound ? '等待本轮执行…' : '等待执行…';
-  if (role === 'reflector') return forRound ? '等待本轮验收…' : '等待验收…';
-  return '等待中…';
+  if (role === 'intent') return 'Waiting for intent parsing…';
+  if (role === 'planner') return forRound ? 'Waiting for this round plan…' : 'Waiting for planning…';
+  if (role === 'observer') return forRound ? 'Waiting for this round execution…' : 'Waiting for tool execution…';
+  if (role === 'reflector') return forRound ? 'Waiting for this round verification…' : 'Waiting for verification…';
+  return 'Waiting…';
 }
 
 function roleRunningLabel(role) {
   return ({
-    intent: '识别中',
-    planner: '规划中',
-    observer: '执行中',
-    reflector: '验收中',
-  })[role] || '运行中';
+    intent: 'Initializing',
+    planner: 'Planning',
+    observer: 'Running',
+    reflector: 'Verifying',
+  })[role] || 'Running';
 }
 
 function rolePendingText(role) {
@@ -1115,7 +1128,7 @@ function rolePendingText(role) {
     planner: 'Drafting the tool plan for this round…',
     observer: 'Running tools and collecting evidence…',
     reflector: 'Checking evidence against the acceptance target…',
-  })[role] || '处理中…';
+  })[role] || 'Processing…';
 }
 
 function scrollThoughtStreamToCard(card) {
@@ -1155,8 +1168,8 @@ function resetAgentCards() {
     const round = card.querySelector('.agent-card-round');
     const state = card.querySelector('.agent-thought-head em');
     const tags = card.querySelector('.agent-thought-tags');
-    if (round) round.textContent = role === 'intent' ? '全局' : '等待轮次';
-    if (state) state.textContent = '等待';
+    if (round) round.textContent = role === 'intent' ? 'Global' : 'Waiting for round';
+    if (state) state.textContent = 'Waiting';
     setAgentStreamText(card, '', {html: true});
     const content = card.querySelector('.agent-stream-text');
     if (content) content.innerHTML = `<span class="agent-stream-placeholder">${escapeHtml(rolePlaceholder(role))}</span>`;
@@ -1178,8 +1191,8 @@ function prepareAgentRound(roundNumber) {
     const round = card.querySelector('.agent-card-round');
     const state = card.querySelector('.agent-thought-head em');
     const tags = card.querySelector('.agent-thought-tags');
-    if (round) round.textContent = `第 ${normalizedRound} 轮`;
-    if (state) state.textContent = '等待';
+    if (round) round.textContent = `Round ${normalizedRound}`;
+    if (state) state.textContent = 'Waiting';
     const content = card.querySelector('.agent-stream-text');
     if (content) content.innerHTML = `<span class="agent-stream-placeholder">${escapeHtml(rolePlaceholder(role, true))}</span>`;
     if (tags) tags.innerHTML = '';
@@ -1195,12 +1208,13 @@ function resetThoughtStream() {
   if (intent) {
     intent.classList.add('active');
     const cardState = intent.querySelector('.agent-thought-head em');
-    if (cardState) cardState.textContent = '识别中';
-    setAgentStreamText(intent, '正在解析问题与验收目标…', {cursor: true});
+    if (cardState) cardState.textContent = 'Initializing';
+    setAgentStreamText(intent, 'Parsing the question and acceptance target…', {cursor: true});
+    setAgentInitSummary('Parsing intent');
   }
-  setAgentResultState('识别中', 'running');
+  setAgentResultState('Initializing', 'running');
   if (mode) mode.textContent = 'Plan → Observe → Verify · Reflect controls the next round';
-  setThinkingState('正在推理', 'active');
+  setThinkingState('Reasoning', 'active');
 }
 
 function ensureAgentCard(roundNumber, role) {
@@ -1216,14 +1230,14 @@ function agentTags(event) {
     if (event.targetKind) tags.push(`<span>${escapeHtml(targetKindLabel(event.targetKind))}</span>`);
     if (event.operation) tags.push(`<span>${escapeHtml(operationLabel(event.operation))}</span>`);
     if (event.intentSource) tags.push(`<span>${escapeHtml(intentSourceLabel(event.intentSource))}</span>`);
-    if (event.hullNumber) tags.push(`<span>舷号 ${escapeHtml(event.hullNumber)}</span>`);
+    if (event.hullNumber) tags.push(`<span>Hull ${escapeHtml(event.hullNumber)}</span>`);
     if (event.description) tags.push(`<span>${escapeHtml(compactAgentValue(event.description, 24))}</span>`);
     return tags.join('') + skills;
   }
   if (event.role === 'planner') {
     const toolCount = (event.calls || []).length;
     const tools = toolCount ? `<span>Tool plan ${toolCount}</span>` : '';
-    const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">计划已纠正</span>` : '';
+    const repair = event.planRepair ? `<span class="failed" title="${escapeHtml(event.planRepair)}">Plan Repaired</span>` : '';
     return skills + tools + repair;
   }
   if (event.role === 'observer') {
@@ -1232,7 +1246,7 @@ function agentTags(event) {
     return skills + (calls.length ? `<span class="${failed ? 'failed' : ''}">Tools ${calls.length}${failed ? ` · ${failed} failed` : ''}</span>` : '');
   }
   if (event.role === 'reflector') {
-    return `${skills}<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>缺口：${escapeHtml(event.evidenceGap)}</span>` : ''}`;
+    return `${skills}<span>${escapeHtml(stateLabel(event.state))}</span>${event.evidenceGap ? `<span>Gap: ${escapeHtml(event.evidenceGap)}</span>` : ''}`;
   }
   return '';
 }
@@ -1249,15 +1263,16 @@ function appendSystemThought(event) {
   }
   if (event.type === 'status' && (/IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`) || event.role === 'intent')) {
     const card = ensureAgentCard(0, 'intent');
-    setAgentResultState('识别中', 'running');
+    setAgentResultState('Initializing', 'running');
     if (card) {
       card.classList.add('active');
       card.classList.remove('failed');
       const head = card.querySelector('.agent-thought-head em');
-      if (head) head.textContent = '识别中';
-      setAgentStreamText(card, event.message || '正在解析用户意图…', {cursor: true});
+      if (head) head.textContent = 'Initializing';
+      setAgentStreamText(card, event.message || 'Parsing user intent…', {cursor: true});
+      setAgentInitSummary('Parsing intent');
     }
-    setThinkingState('意图识别中', 'active');
+    setThinkingState('Initializing', 'active');
     return;
   }
   if (event.type === 'status' && event.role) {
@@ -1265,7 +1280,7 @@ function appendSystemThought(event) {
     if (card && event.message) {
       if (!card.classList.contains('active')) card.classList.add('active');
       const head = card.querySelector('.agent-thought-head em');
-      if (head && head.textContent === '等待') head.textContent = roleRunningLabel(event.role);
+      if (head && head.textContent === 'Waiting') head.textContent = roleRunningLabel(event.role);
       // 仅在仍是占位或空内容时写入状态，避免覆盖思考/工具日志
       const content = card.querySelector('.agent-stream-text');
       const isPlaceholder = content?.querySelector('.agent-stream-placeholder');
@@ -1277,15 +1292,15 @@ function appendSystemThought(event) {
   }
   if (event.type === 'synthesis') {
     const decision = document.getElementById('agentPlanDecision');
-    if (decision) decision.textContent = `${stateLabel(event.state)}，候选轨迹 ${Number(event.trackCount || 0)} 条。`;
-    setAgentResultState('生成结果', 'running');
-    setThinkingState('生成最终回答', 'active');
+    if (decision) decision.textContent = `${stateLabel(event.state)} · ${Number(event.trackCount || 0)} candidate tracks.`;
+    setAgentResultState('Synthesizing', 'running');
+    setThinkingState('Synthesizing Result', 'active');
   }
 }
 
 function renderIntentAgentCard(event) {
   const card = ensureAgentCard(0, 'intent');
-  const timeScope = event.timeParseError ? `解析失败：${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
+  const timeScope = event.timeParseError ? `Parse Error: ${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : 'All monitoring time';
   const targetItems = Array.isArray(event.targetItems) ? event.targetItems.filter((item) => item && item.label) : [];
   const targetText = targetItems.length > 1
     ? targetItems.map((item) => item.label).join('、')
@@ -1295,24 +1310,25 @@ function renderIntentAgentCard(event) {
   const focus = event.nextAgentFocus || '根据当前验收缺口规划第一轮工具调用';
   if (card) {
     const summary = [
-      `目标：${targetText || '—'}`,
-      `路径：${route}`,
-      `时间：${timeScope}`,
-      `验收标准：${acceptance}`,
-      `当前焦点：${focus}`,
+      `Target: ${targetText || '—'}`,
+      `Route: ${route}`,
+      `Time: ${timeScope}`,
+      `Acceptance: ${acceptance}`,
+      `Focus: ${focus}`,
     ].join('\n');
     card.classList.remove('active');
     card.classList.toggle('failed', Boolean(event.timeParseError));
     card.dataset.streamText = summary;
     const head = card.querySelector('.agent-thought-head em');
-    if (head) head.textContent = event.timeParseError ? '需确认' : '完成';
+    if (head) head.textContent = event.timeParseError ? 'Needs Review' : 'Completed';
+    setAgentInitSummary(event.timeParseError ? 'Needs review' : `Initialized · ${questionTypeLabel(event.questionType)}`);
     setAgentStreamText(card, summary);
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = agentTags({role: 'intent', ...event});
   }
-  setAgentResultState(event.timeParseError ? '需确认' : '规划中', 'running');
+  setAgentResultState(event.timeParseError ? 'Needs Review' : 'Planning', 'running');
   initializePlanBlueprint(event.planBlueprint);
-  setThinkingState('规划中', 'active');
+  setThinkingState('Planning', 'active');
 }
 
 function toolResultText(call) {
@@ -1477,7 +1493,7 @@ function renderToolActivity(card) {
     ? `Running tool ${runningIndex + 1}/${Math.max(1, total)} · ${(current && (current.tool || current.id)) || 'tool'}`
     : `Ran ${logs.length} tools${failed ? ` · ${failed} failed` : ''}`;
   const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
-  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">›_</span><span title="${escapeHtml((current && (current.tool || current.id)) || label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml((current && (current.tool || current.id)) || label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
 function bindAgentActivityState(card) {
@@ -1523,7 +1539,7 @@ function updateObserverToolEvent(event) {
   card._toolsRunning = runningIndex >= 0;
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
-  if (state) state.textContent = running ? '执行中' : roleRunningLabel('observer');
+  if (state) state.textContent = running ? 'Running' : roleRunningLabel('observer');
   const streamText = card.dataset.streamText || 'Running tools and collecting evidence…';
   setAgentProcessStream(card, streamText, {cursor: running});
   scrollThoughtStreamToCard(card);
@@ -1531,15 +1547,15 @@ function updateObserverToolEvent(event) {
 }
 
 function compactAgentErrorMessage(raw) {
-  const text = String(raw || '未知错误').replace(/\s+/g, ' ').trim();
+  const text = String(raw || 'Unknown error').replace(/\s+/g, ' ').trim();
   if (/GRAPH_RECURSION_LIMIT|Recursion limit/i.test(text)) {
-    return '规划步骤过多已自动收敛，请重试或简化问题';
+    return 'The plan exceeded the recursion limit and was stopped. Retry or simplify the question.';
   }
   if (/allowed-local-media-path|Cannot load local files/i.test(text)) {
-    return '视觉模型拒绝本地媒体路径，请确认服务端已用 data URL 传图';
+    return 'The vision model rejected a local media path. Verify that the server sends images as data URLs.';
   }
   if (/chat\/completions|Internal Server Error|HTTPStatusError/i.test(text)) {
-    return '视觉/语言模型服务暂时不可用，请稍后重试';
+    return 'The vision or language model service is temporarily unavailable. Try again later.';
   }
   return text.length > 180 ? `${text.slice(0, 180)}…` : text;
 }
@@ -1547,35 +1563,35 @@ function compactAgentErrorMessage(raw) {
 function appendThoughtEvent(event) {
   // 推理期间保持计划展开；最终结果生成后自动折叠计划与工具。
   if (event.type === 'complete') {
-    setAgentResultState('整理结果', 'running');
-    setThinkingState('推理完成', 'completed');
+    setAgentResultState('Finalizing', 'running');
+    setThinkingState('Reasoning Completed', 'completed');
     const decision = document.getElementById('agentPlanDecision');
     if (decision && !decision.classList.contains('sufficient')) {
       decision.className = 'agent-plan-decision sufficient';
-      decision.textContent = '闭环推理完成，最终回答与证据已生成。';
+      decision.textContent = 'Closed-loop reasoning completed; final answer and evidence are ready.';
     }
     document.querySelectorAll('.agent-thought-card.active').forEach((card) => {
       card.classList.remove('active');
       const state = card.querySelector('.agent-thought-head em');
-      if (state && ['识别中', '规划中', '执行中', '验收中', '运行中'].includes(state.textContent)) {
-        state.textContent = '完成';
+      if (state && ['Initializing', 'Planning', 'Running', 'Verifying'].includes(state.textContent)) {
+        state.textContent = 'Completed';
       }
     });
     return;
   }
   if (event.type === 'error') {
-    setAgentResultState('执行失败', 'failed');
-    setThinkingState('推理失败', 'failed');
+    setAgentResultState('Failed', 'failed');
+    setThinkingState('Reasoning Failed', 'failed');
     const decision = document.getElementById('agentPlanDecision');
     if (decision) {
       decision.className = 'agent-plan-decision conflict';
-      decision.textContent = `执行失败：${compactAgentErrorMessage(event.message)}`;
+      decision.textContent = `Execution Failed: ${compactAgentErrorMessage(event.message)}`;
     }
     document.querySelectorAll('.agent-thought-card.active').forEach((card) => {
       card.classList.remove('active');
       card.classList.add('failed');
       const state = card.querySelector('.agent-thought-head em');
-      if (state) state.textContent = '中断';
+      if (state) state.textContent = 'Interrupted';
     });
     return;
   }
@@ -1610,24 +1626,24 @@ function appendThoughtEvent(event) {
     setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
     scrollThoughtStreamToCard(card);
     if (event.role === 'intent') {
-      setAgentResultState('识别中', 'running');
-      setThinkingState('意图识别中', 'active');
+      setAgentResultState('Initializing', 'running');
+      setThinkingState('Initializing', 'active');
     } else if (event.role === 'planner') {
-      setAgentResultState(`第 ${event.round || 1} 轮规划中`, 'running');
-      setThinkingState(`第 ${event.round || 1} 轮规划中`, 'active');
+      setAgentResultState(`Round ${event.round || 1} · Planning`, 'running');
+      setThinkingState(`Round ${event.round || 1} · Planning`, 'active');
       const round = document.getElementById('agentPlanRound');
       const decision = document.getElementById('agentPlanDecision');
-      if (round) round.textContent = `第 ${event.round || 1} 轮规划中`;
+      if (round) round.textContent = `Round ${event.round || 1} · Planning`;
       if (decision) {
         decision.className = 'agent-plan-decision active';
-        decision.textContent = '正在根据当前验收缺口生成计划。';
+        decision.textContent = 'Generating a plan from the current acceptance gap.';
       }
     } else if (event.role === 'observer') {
-      setAgentResultState(`第 ${event.round || 1} 轮执行中`, 'running');
-      setThinkingState(`第 ${event.round || 1} 轮执行中`, 'active');
+      setAgentResultState(`Round ${event.round || 1} · Running`, 'running');
+      setThinkingState(`Round ${event.round || 1} · Running`, 'active');
     } else if (event.role === 'reflector') {
-      setAgentResultState(`第 ${event.round || 1} 轮验收中`, 'running');
-      setThinkingState(`第 ${event.round || 1} 轮验收中`, 'active');
+      setAgentResultState(`Round ${event.round || 1} · Verifying`, 'running');
+      setThinkingState(`Round ${event.round || 1} · Verifying`, 'active');
     }
   } else if (event.type === 'agent_skill') {
     const card = ensureAgentCard(event.round, event.role);
@@ -1681,7 +1697,7 @@ function appendThoughtEvent(event) {
     }
     const thinking = (card.dataset.streamThinking || '').trim();
     const token = (card.dataset.streamToken || '').trim();
-    const live = [thinking ? `思考：\n${thinking}` : '', token ? `草稿：\n${token}` : '']
+    const live = [thinking ? `Thinking:\n${thinking}` : '', token ? `Draft:\n${token}` : '']
       .filter(Boolean)
       .join('\n\n')
       .slice(-2800);
@@ -1722,9 +1738,9 @@ function appendThoughtEvent(event) {
       || ''
     ).trim();
     // 结论优先用结构化摘要；fallback 仅作补充说明，避免盖掉真实计划
-    const conclusion = summaryText || event.message || event.fallback || '本轮没有可展示信息';
+    const conclusion = summaryText || event.message || event.fallback || 'No displayable information for this round';
     const finalText = thinkingTrail
-      ? `思考过程：\n${compactAgentValue(thinkingTrail, 900)}\n\n结论：\n${conclusion}`
+      ? `Reasoning Trail:\n${compactAgentValue(thinkingTrail, 900)}\n\nConclusion:\n${conclusion}`
       : conclusion;
     setAgentProcessStream(card, finalText);
     card.dataset.streamText = finalText;
@@ -1740,15 +1756,15 @@ function appendThoughtEvent(event) {
       && !hasHardFail;
     const markFailed = isPlanCard ? false : Boolean((!isPlanCard && event.fallback) || hasHardFail);
     card.classList.toggle('failed', markFailed);
-    let statusLabel = '完成';
-    if (isPlanCard && event.planRepair) statusLabel = '已修正';
-    else if (isPlanCard && event.fallback && String(event.fallback).includes('安全回退')) statusLabel = '安全回退';
-    else if (isPlanCard && event.fallback) statusLabel = '已用默认计划';
-    else if (!isPlanCard && event.fallback) statusLabel = '摘要失败';
-    else if (hasHardFail) statusLabel = '部分失败';
-    else if (onlySkipped) statusLabel = '部分跳过';
+    let statusLabel = 'Completed';
+    if (isPlanCard && event.planRepair) statusLabel = 'Repaired';
+    else if (isPlanCard && event.fallback && String(event.fallback).includes('安全回退')) statusLabel = 'Safe Fallback';
+    else if (isPlanCard && event.fallback) statusLabel = 'Default Plan';
+    else if (!isPlanCard && event.fallback) statusLabel = 'Summary Failed';
+    else if (hasHardFail) statusLabel = 'Partially Failed';
+    else if (onlySkipped) statusLabel = 'Partially Skipped';
     else if (event.role === 'reflector') statusLabel = stateLabel(event.state);
-    else if (event.role === 'intent') statusLabel = '完成';
+    else if (event.role === 'intent') statusLabel = 'Completed';
     const state = card.querySelector('.agent-thought-head em');
     if (state) state.textContent = statusLabel;
     const tags = card.querySelector('.agent-thought-tags');
@@ -1767,9 +1783,9 @@ async function streamAgentQuery(question, topK = null) {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `请求失败：${response.status}`);
+    throw new Error(body.detail || `Request failed: ${response.status}`);
   }
-  if (!response.body) throw new Error('当前浏览器不支持流式响应');
+  if (!response.body) throw new Error('This browser does not support streaming responses');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1790,7 +1806,7 @@ async function streamAgentQuery(question, topK = null) {
       }
       appendThoughtEvent(event);
       if (event.type === 'complete') result = event.result;
-      if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+      if (event.type === 'error') throw new Error(event.message || 'Closed-loop reasoning failed');
     }
     if (done) break;
   }
@@ -1804,10 +1820,10 @@ async function streamAgentQuery(question, topK = null) {
     if (event) {
       appendThoughtEvent(event);
       if (event.type === 'complete') result = event.result;
-      if (event.type === 'error') throw new Error(event.message || '闭环推理失败');
+      if (event.type === 'error') throw new Error(event.message || 'Closed-loop reasoning failed');
     }
   }
-  if (!result) throw new Error('未收到最终回答');
+  if (!result) throw new Error('No final answer was received');
   return result;
 }
 
@@ -1815,36 +1831,36 @@ async function askAgent() {
   const question = document.getElementById('agentQuestion').value.trim();
   const button = document.getElementById('btnAskAgent');
   const clearButton = document.getElementById('agentMemoryClearButton');
-  if (!question) return showToast('请输入问题', 'error');
+  if (!question) return showToast('Enter a question', 'error');
   try {
     button.disabled = true;
     if (clearButton) clearButton.disabled = true;
-    button.textContent = '推理中…';
+    button.textContent = 'Reasoning…';
     // 只展示过程流，最终回答区延后到 complete
     resetThoughtStream();
     const answer = document.getElementById('agentAnswer');
     if (answer) {
       answer.className = 'agent-answer empty-state';
-      answer.textContent = '推理完成后在此展示最终回答…';
+      answer.textContent = 'The final answer will appear here after reasoning.';
     }
-    renderEvidence(null, null, '推理中，证据将在完成后展示…');
+    renderEvidence(null, null, 'Reasoning in progress. Evidence will appear when complete.');
     const result = await streamAgentQuery(question, selectedTopK());
     // 过程流结束后再切换最终结果
     renderAgentAnswer(result);
     renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
     showAgentFinalView('failed');
-    setThinkingState('推理失败', 'failed');
+    setThinkingState('Reasoning Failed', 'failed');
     const answer = document.getElementById('agentAnswer');
     if (answer) {
       answer.className = 'agent-answer empty-state';
-      answer.textContent = `执行失败：${compactAgentErrorMessage(error.message)}`;
+      answer.textContent = `Execution Failed: ${compactAgentErrorMessage(error.message)}`;
     }
     renderEvidence(null, null);
     showToast(compactAgentErrorMessage(error.message), 'error');
   } finally {
     button.disabled = false;
-    button.textContent = '执行闭环推理';
+    button.textContent = 'Run Closed-Loop Reasoning';
     if (clearButton) clearButton.disabled = false;
     await loadAgentMemorySummary(false);
   }
