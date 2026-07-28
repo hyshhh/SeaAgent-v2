@@ -3838,3 +3838,158 @@ tbody tr:hover td { background: #f2f6f9; }
   font-size: 10.5px;
   font-weight: 550;
 }
+/* 智能体身份与运行状态标识精修 */
+#tab-agent-qa .agent-thought-head,
+#tab-agent-qa .agent-stage {
+  min-width: 0;
+}
+#tab-agent-qa .agent-stage > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+#tab-agent-qa .agent-stage > div > strong {
+  flex: 0 0 auto;
+  line-height: 1.2;
+}
+#tab-agent-qa .agent-stage > div > span {
+  position: relative;
+  min-width: 0;
+  padding-left: 9px;
+  color: #748394;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-stage > div > span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 11px;
+  background: #d3dce4;
+  transform: translateY(-50%);
+}
+#tab-agent-qa .agent-fixed-stack .agent-stage > b,
+#tab-agent-qa .agent-result-intent .agent-stage > b {
+  color: #315b7d;
+  border: 1px solid #c5d5e1;
+  border-radius: 4px;
+  background: #edf3f7;
+  box-shadow: none;
+  font-weight: 750;
+  letter-spacing: .035em;
+}
+#tab-agent-qa .agent-thought-card.observer .agent-stage > b {
+  color: #386653;
+  border-color: #c5d9cf;
+  background: #edf5f1;
+}
+#tab-agent-qa .agent-thought-card.reflector .agent-stage > b {
+  color: #775d24;
+  border-color: #ded1ad;
+  background: #f7f2e7;
+}
+#tab-agent-qa .agent-thought-card.intent .agent-stage > b {
+  color: #4d6385;
+  border-color: #cbd5e3;
+  background: #f0f3f8;
+}
+#tab-agent-qa .agent-card-state {
+  flex: 0 0 auto;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#tab-agent-qa .agent-card-round {
+  position: relative;
+  min-height: 20px;
+  padding: 0 9px 0 0 !important;
+  display: inline-flex;
+  align-items: center;
+  color: #66798b !important;
+  border: 0 !important;
+  border-right: 1px solid #d6dfe6 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 9.5px !important;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .02em;
+}
+#tab-agent-qa .agent-card-state > em {
+  min-height: 20px;
+  padding: 2px 8px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #53697b !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #edf2f5 !important;
+  box-shadow: none !important;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 9.5px !important;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: .015em;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-card-state > em::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: #66839a;
+  box-shadow: 0 0 0 2px rgba(102, 131, 154, .1);
+}
+#tab-agent-qa .agent-thought-card.observer .agent-card-state > em::before {
+  background: #56806b;
+  box-shadow: 0 0 0 2px rgba(86, 128, 107, .1);
+}
+#tab-agent-qa .agent-thought-card.reflector .agent-card-state > em::before {
+  background: #9a782f;
+  box-shadow: 0 0 0 2px rgba(154, 120, 47, .1);
+}
+#tab-agent-qa .agent-thought-card.intent .agent-card-state > em::before {
+  background: #667c9d;
+  box-shadow: 0 0 0 2px rgba(102, 124, 157, .1);
+}
+#tab-agent-qa .agent-thought-card.active .agent-card-state > em {
+  color: #315d7d !important;
+  background: #e9f1f6 !important;
+}
+#tab-agent-qa .agent-thought-card.failed .agent-card-state > em {
+  color: #884751 !important;
+  background: #f8ecee !important;
+}
+@media (max-width: 700px) {
+  #tab-agent-qa .agent-stage > div {
+    gap: 6px;
+  }
+  #tab-agent-qa .agent-stage > div > span {
+    padding-left: 7px;
+    letter-spacing: .045em;
+  }
+  #tab-agent-qa .agent-card-state {
+    gap: 5px !important;
+  }
+  #tab-agent-qa .agent-card-round {
+    padding-right: 6px !important;
+  }
+}
