@@ -316,24 +316,60 @@ function bestMatchByResultId(matches, kind) {
   return best;
 }
 
+function hydrateClassifiedItems(items, matches, kind) {
+  const bestMatches = bestMatchByResultId(matches, kind);
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const id = kind === 'registry'
+      ? item?.registryId || item?.matchedRegistryId
+      : item?.trackId || item?.matchedTrackId;
+    const match = bestMatches.get(String(id ?? ''));
+    return match
+      ? {
+          ...item,
+          embeddingScore: match.embeddingScore ?? item?.embeddingScore,
+          scoreBand: match.scoreBand || item?.scoreBand,
+          matchedRegistryId: match.matchedRegistryId ?? item?.matchedRegistryId,
+        }
+      : item;
+  }).filter((item) => {
+    const id = kind === 'registry'
+      ? item?.registryId || item?.matchedRegistryId
+      : item?.trackId || item?.matchedTrackId;
+    const key = String(id ?? '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function classifiedResultItems(result) {
   const matches = Array.isArray(result?.matches) ? result.matches : [];
-  const registryBest = bestMatchByResultId(matches, 'registry');
-  const trackBest = bestMatchByResultId(matches, 'track');
-  const registryItems = (Array.isArray(result?.registryItems) ? result.registryItems : []).map((item) => {
-    const match = registryBest.get(String(item?.registryId || item?.matchedRegistryId || ''));
-    return match ? {...item, embeddingScore: match.embeddingScore, scoreBand: match.scoreBand || item.scoreBand} : item;
-  });
-  const tracks = (Array.isArray(result?.tracks) ? result.tracks : []).map((item) => {
-    const match = trackBest.get(String(item?.trackId || item?.matchedTrackId || ''));
-    return match ? {...item, embeddingScore: match.embeddingScore, scoreBand: match.scoreBand || item.scoreBand} : item;
-  });
+  const explicitKind = String(result?.classificationKind || '').toLowerCase();
+  if (explicitKind === 'track') {
+    return {
+      kind: 'track',
+      confirmed: hydrateClassifiedItems(result?.confirmedTracks, matches, 'track'),
+      pending: hydrateClassifiedItems(result?.uncertainTracks, matches, 'track'),
+    };
+  }
+  if (explicitKind === 'registry') {
+    return {
+      kind: 'registry',
+      confirmed: hydrateClassifiedItems(result?.confirmedRegistryItems, matches, 'registry'),
+      pending: hydrateClassifiedItems(result?.uncertainRegistryItems, matches, 'registry'),
+    };
+  }
+
+  const registryItems = hydrateClassifiedItems(result?.registryItems, matches, 'registry');
+  const tracks = hydrateClassifiedItems(result?.tracks, matches, 'track');
   const registryClassifiable = registryItems.some((item) => ['match', 'uncertain'].includes(resultScoreBand(item)));
   const trackClassifiable = tracks.some((item) => ['match', 'uncertain'].includes(resultScoreBand(item)));
-  const items = registryClassifiable ? registryItems : trackClassifiable ? tracks : [];
+  const preferTracks = trackClassifiable && String(result?.targetScope || '').toLowerCase() !== 'registry';
+  const items = preferTracks ? tracks : registryClassifiable ? registryItems : trackClassifiable ? tracks : [];
   if (!items.length) return null;
   return {
-    kind: registryClassifiable ? 'registry' : 'track',
+    kind: preferTracks || !registryClassifiable ? 'track' : 'registry',
     confirmed: items.filter((item) => resultScoreBand(item) === 'match'),
     pending: items.filter((item) => resultScoreBand(item) === 'uncertain'),
   };
@@ -352,7 +388,33 @@ function classifiedResultRow(item, kind) {
   const start = Number(item?.startTime ?? item?.start_time);
   const end = Number(item?.endTime ?? item?.end_time);
   const time = Number.isFinite(start) && Number.isFinite(end) ? `${formatMonitorTime(start)}—${formatMonitorTime(end)}` : 'Unknown time';
-  return `<div class="classified-result-row"><strong>Track ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}</span></div>`;
+  const registryId = item?.matchedRegistryId ? ` · Registry ${escapeHtml(String(item.matchedRegistryId))}` : '';
+  return `<div class="classified-result-row"><strong>Track ${escapeHtml(String(trackId))}</strong><span>${escapeHtml(hull)} · ${escapeHtml(time)}${Number.isFinite(score) ? ` · Similarity ${score.toFixed(3)}` : ''}${registryId}</span></div>`;
+}
+
+function matchThresholdValues(result) {
+  const thresholds = result?.matchThresholds;
+  const confirmation = Number(thresholds?.confirmation);
+  const exclusion = Number(thresholds?.exclusion);
+  return Number.isFinite(confirmation) && Number.isFinite(exclusion)
+    ? {confirmation, exclusion}
+    : null;
+}
+
+function resultGroupSubtitle(result, group) {
+  const thresholds = matchThresholdValues(result);
+  if (!thresholds) return group === 'confirmed'
+    ? 'Above the confirmation threshold'
+    : 'Gray-zone matches requiring review';
+  return group === 'confirmed'
+    ? `Score ≥ ${thresholds.confirmation.toFixed(3)}`
+    : `${thresholds.exclusion.toFixed(3)} < Score < ${thresholds.confirmation.toFixed(3)}`;
+}
+
+function renderMatchThresholdMeta(result) {
+  const thresholds = matchThresholdValues(result);
+  if (!thresholds) return '';
+  return `<span class="answer-threshold confirmed">Confirmation: Score ≥ ${thresholds.confirmation.toFixed(3)}</span><span class="answer-threshold pending">Gray Zone: ${thresholds.exclusion.toFixed(3)} < Score < ${thresholds.confirmation.toFixed(3)}</span>`;
 }
 
 function renderClassifiedResults(result) {
@@ -360,10 +422,11 @@ function renderClassifiedResults(result) {
   if (!grouped) return '';
   const confirmedRows = grouped.confirmed.map((item) => classifiedResultRow(item, grouped.kind)).join('');
   const pendingRows = grouped.pending.map((item) => classifiedResultRow(item, grouped.kind)).join('');
+  const noun = grouped.kind === 'track' ? 'Tracks' : 'Results';
   return `<section class="answer-classification">
     <div class="answer-result-groups">
-      <section class="answer-result-group confirmed"><header><div><strong>Confirmed Results</strong><span>Above the confirmation threshold</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed results</div>'}</div></section>
-      <section class="answer-result-group pending"><header><div><strong>Pending Review</strong><span>Gray-zone matches requiring review</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending results</div>'}</div></section>
+      <section class="answer-result-group confirmed"><header><div><strong>Confirmed ${noun}</strong><span>${escapeHtml(resultGroupSubtitle(result, 'confirmed'))}</span></div><em>${grouped.confirmed.length}</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed results</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>Pending Review</strong><span>${escapeHtml(resultGroupSubtitle(result, 'pending'))}</span></div><em>${grouped.pending.length}</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending results</div>'}</div></section>
     </div>
   </section>`;
 }
@@ -488,7 +551,7 @@ function renderAgentAnswer(result) {
     <div class="answer-overview">
       <div class="answer-head"><strong>${escapeHtml(result.conclusion || 'Query Completed')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
       <p>${escapeHtml(result.answerText || 'No answer generated')}</p>
-      <div class="answer-meta"><span>Query Type: ${escapeHtml(questionTypeLabel(result.questionType))}</span><span>Scope: ${escapeHtml(scope)}</span><span>${hitLabel}: ${hitCount}</span></div>
+      <div class="answer-meta"><span>Query Type: ${escapeHtml(questionTypeLabel(result.questionType))}</span><span>Scope: ${escapeHtml(scope)}</span><span>${hitLabel}: ${hitCount}</span>${renderMatchThresholdMeta(result)}</div>
     </div>
     <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>`;
 }
@@ -639,7 +702,13 @@ function evidenceTrackRow(group, index) {
     ? evidenceItem('registry', group.registryReferenceIds[0], trackId, {label: `Track ${trackId} · Database Reference`})
     : missingEvidence(trackId, 'registry');
   const hull = String(group.hullNumber || '').trim();
-  const badges = `${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>Similarity ${score.toFixed(3)}</em>`}`;
+  const scoreBand = resultScoreBand(group);
+  const stateBadge = scoreBand === 'match'
+    ? '<em class="evidence-state confirmed">Confirmed</em>'
+    : scoreBand === 'uncertain'
+      ? '<em class="evidence-state pending">Review</em>'
+      : '';
+  const badges = `${stateBadge}${hull ? `<em>Hull ${escapeHtml(hull)}</em>` : '<em>Hull Unknown</em>'}${score === null ? '' : `<em>Similarity ${score.toFixed(3)}</em>`}`;
   return `<article class="evidence-track-row" role="row"><div class="evidence-track-meta" role="rowheader"><span>Track</span><strong>${escapeHtml(trackId)}</strong><div class="evidence-track-badges">${badges}</div></div>${evidenceTrackCell('Clip', clip)}${evidenceTrackCell('Keyframe', keyframe)}${evidenceTrackCell('Registry', database)}</article>`;
 }
 

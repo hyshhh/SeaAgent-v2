@@ -379,7 +379,16 @@ class ToolService:
                 matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]) - float(matches[1]["embeddingScore"]), 6)
             elif matches:
                 matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]), 6)
-            return {"ok": True, "matchMode": "text_to_registry", "matches": matches[:topK] if topK else matches}
+            selected_matches = matches[:topK] if topK else matches
+            return {
+                "ok": True,
+                "matchMode": "text_to_registry",
+                "matches": selected_matches,
+                "confirmedMatches": [item for item in selected_matches if item.get("scoreBand") == "match"],
+                "uncertainMatches": [item for item in selected_matches if item.get("scoreBand") == "uncertain"],
+                "mismatchCount": sum(1 for item in selected_matches if item.get("scoreBand") == "mismatch"),
+                "matchThresholds": self._match_thresholds("text"),
+            }
         images = [item for item in galleryImages if item.get("isEmbedded") and item.get("keyframeVectorId") is not None]
         if not images:
             return {"ok": True, "matchMode": "text_to_image", "matches": [], "missingKeyframeIds": []}
@@ -431,6 +440,7 @@ class ToolService:
             "uncertainMatches": uncertain,
             "missingKeyframeIds": missing,
             "scoredTrackCount": len(grouped),
+            "matchThresholds": self._match_thresholds("text"),
             "hint": hint,
         }
 
@@ -467,6 +477,7 @@ class ToolService:
                 "totalRegistryCount": len(declared_registry_ids), "visualRegistryCount": 0,
                 "scoredRegistryCount": 0, "registryCoverageRatio": 0.0,
                 "pairCoverageRatio": 0.0, "registryCoverageComplete": False,
+                "matchThresholds": self._match_thresholds("image"),
                 "hint": "queryImages 或 galleryImages 为空",
             }
 
@@ -492,7 +503,7 @@ class ToolService:
             return {
                 "ok": False, "error": "one_keyframe_side_and_one_registry_side_required",
                 "matchMode": "image_to_image", "matches": [], "bestMatchesAscending": [],
-                "visualAttempted": True,
+                "visualAttempted": True, "matchThresholds": self._match_thresholds("image"),
                 "hint": f"query: kf={len(query_keyframes)} ref={len(query_references)}; gallery: kf={len(gallery_keyframes)} ref={len(gallery_references)}",
             }
         keyframes = query_keyframes if query_is_track else gallery_keyframes
@@ -622,7 +633,8 @@ class ToolService:
             "registryCoverageRatio": round(coverage_ratio, 6), "pairCoverageRatio": round(pair_coverage_ratio, 6),
             "registryCoverageComplete": registry_coverage_complete, "unscoredTrackIds": unscored_track_ids,
             "unscoredRegistryIds": unscored_registry_ids, "unrepresentedRegistryIds": unrepresented_registry_ids,
-            "fullyComparedTrackIds": fully_compared, "visualAttempted": True, "hint": hint,
+            "fullyComparedTrackIds": fully_compared, "visualAttempted": True,
+            "matchThresholds": self._match_thresholds("image"), "hint": hint,
         }
 
     def verifyTarget(self, description: str | None = None, registryReferenceIds: list[str] | None = None, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None) -> dict[str, Any]:
@@ -1033,9 +1045,26 @@ class ToolService:
                 pass
         return vectors, recovered
 
+    def _match_thresholds(self, mode: str) -> dict[str, Any]:
+        """返回本轮匹配实际使用的确认、排除与灰区边界。"""
+        confirmation = float(self.settings[f"{mode}_match"])
+        exclusion = float(self.settings[f"{mode}_exclude"])
+        return {
+            "mode": mode,
+            "confirmation": confirmation,
+            "exclusion": exclusion,
+            "grayZone": {
+                "lower": exclusion,
+                "upper": confirmation,
+                "lowerInclusive": False,
+                "upperInclusive": False,
+            },
+        }
+
     def _band(self, score: float, mode: str) -> str:
-        match = float(self.settings[f"{mode}_match"])
-        exclude = float(self.settings[f"{mode}_exclude"])
+        thresholds = self._match_thresholds(mode)
+        match = float(thresholds["confirmation"])
+        exclude = float(thresholds["exclusion"])
         return "match" if score >= match else "mismatch" if score <= exclude else "uncertain"
 
     @staticmethod

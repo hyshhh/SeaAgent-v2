@@ -314,7 +314,7 @@ class AgentController:
             confirmed = [m for m in ranked if str(m.get("scoreBand") or "") == "match"]
             uncertain = [m for m in ranked if str(m.get("scoreBand") or "") == "uncertain"]
             mismatch = [m for m in ranked if str(m.get("scoreBand") or "") == "mismatch"]
-            supported = confirmed or uncertain  # 展示优先确认，否则灰区
+            supported = confirmed + uncertain  # 同时保留确认与灰区，分栏展示
 
             if is_registry_out_list:
                 # 每条轨迹的“最高库匹配分”越低，越可能未在库；所有类别统一按低分优先。
@@ -387,26 +387,46 @@ class AgentController:
                     },
                     display={"tracks": display_tracks, "includeClips": bool(display_tracks), "includeRegistry": False},
                 )
-            # 展示轨迹必须按匹配分排序，禁止用 getTrack 全量列表的 1,2,3 顺序盖住
-            hit_tracks = self._tracks_ranked_by_matches(supported, tracks)
+            # 视频侧结果按轨迹分组：确认轨迹与灰区轨迹必须同时保留，且不受展示 top-k 截断。
+            confirmed_tracks = self._tracks_ranked_by_matches(confirmed, tracks)
+            confirmed_track_ids = {str(item.get("trackId")) for item in confirmed_tracks if item.get("trackId") is not None}
+            uncertain_tracks = [
+                item for item in self._tracks_ranked_by_matches(uncertain, tracks)
+                if str(item.get("trackId")) not in confirmed_track_ids
+            ]
+            display_tracks = confirmed_tracks + uncertain_tracks
+            hit_tracks = display_tracks
+            match_thresholds = self._collect_match_thresholds()
+            threshold_note = self._match_threshold_note(match_thresholds)
+
             if supported and not (is_registry_in_list and bogus_description):
-                # 纯数据库描述匹配：区分确认与灰区，只展示命中/疑似库项，不把整库当结果。
+                # 纯数据库描述匹配：确认库项与灰区库项同样分开返回。
                 if target_scope == "registry" and not hit_tracks:
-                    matched_items = self._registry_items_from_matches(supported)
-                    matched_count = len(matched_items) or len(supported)
+                    confirmed_items = self._registry_items_from_matches(confirmed)
+                    uncertain_items = self._registry_items_from_matches(uncertain)
+                    confirmed_registry_ids = {
+                        str(item.get("registryId")) for item in confirmed_items if item.get("registryId") is not None
+                    }
+                    uncertain_items = [
+                        item for item in uncertain_items
+                        if str(item.get("registryId")) not in confirmed_registry_ids
+                    ]
+                    matched_items = confirmed_items + uncertain_items
+                    matched_count = len(matched_items)
                     label = description or "目标"
-                    if confirmed:
+                    if confirmed_items:
                         conclusion = (
                             f"数据库中确认存在「{label}」"
                             if operation == "existence"
                             else f"数据库中找到 {matched_count} 个匹配库项"
                         )
                         finish_state = "conflict" if state == "conflict" else "sufficient"
-                        hint = answer_hint or f"数据库描述匹配得到 {len(confirmed)} 条确认命中"
+                        base_hint = answer_hint or f"数据库描述匹配得到 {len(confirmed_items)} 个确认库项"
                     else:
                         conclusion = f"数据库中发现 {matched_count} 个疑似「{label}」库项，尚未达到确认阈值"
                         finish_state = "uncertain"
-                        hint = answer_hint or f"数据库描述匹配仅得到 {len(uncertain)} 条灰区候选"
+                        base_hint = answer_hint or f"数据库描述匹配仅得到 {len(uncertain_items)} 个灰区库项"
+                    hint = f"{base_hint}；{threshold_note}" if threshold_note else base_hint
                     return self._finish(
                         conclusion,
                         [],
@@ -415,51 +435,77 @@ class AgentController:
                         extra={
                             "matches": ranked,
                             "registryItems": matched_items,
+                            "confirmedRegistryItems": confirmed_items,
+                            "uncertainRegistryItems": uncertain_items,
+                            "classificationKind": "registry",
+                            "matchThresholds": match_thresholds,
                             "planMode": "langgraph",
                             "targetScope": "registry",
-                            "matchCount": len(supported),
-                            "confirmedMatchCount": len(confirmed),
-                            "uncertainMatchCount": len(uncertain),
-                            "found": bool(confirmed),
+                            "matchCount": matched_count,
+                            "confirmedMatchCount": len(confirmed_items),
+                            "uncertainMatchCount": len(uncertain_items),
+                            "found": bool(confirmed_items),
                         },
                         display={"tracks": [], "includeClips": False, "includeRegistry": bool(matched_items)},
                     )
-                # 在库列表 + matchImage 命中：按匹配轨迹/库项列名单
+                # 在库列表 + matchImage 命中：左侧列确认轨迹，右侧列全部灰区轨迹。
                 if is_registry_in_list:
                     hit_items = self._registry_items_from_matches(supported)
-                    label = (
-                        f"视频中确认 {len(confirmed)} 个在库匹配"
-                        if confirmed
-                        else f"视频中疑似 {len(uncertain)} 个在库匹配（相似度未达确认阈值）"
-                    )
+                    if confirmed_tracks:
+                        label = f"视频中确认 {len(confirmed_tracks)} 条在库匹配轨迹"
+                    else:
+                        label = f"视频中发现 {len(uncertain_tracks)} 条灰区轨迹，尚未达到确认阈值"
+                    base_hint = answer_hint or "已完成先验库与视频轨迹的图像对照"
+                    hint = f"{base_hint}；{threshold_note}" if threshold_note else base_hint
                     return self._finish(
-                        label + (f"（{len(hit_tracks)} 条轨迹）" if hit_tracks else ""),
-                        hit_tracks[: self.display_limit],
-                        answer_hint or "listRegistry + matchImage 对照完成",
+                        label,
+                        confirmed_tracks,
+                        hint,
                         state if state in {"sufficient", "uncertain", "conflict"} else "sufficient",
                         extra={
                             "matches": ranked,
                             "registryItems": hit_items or registry_items,
+                            "confirmedTracks": confirmed_tracks,
+                            "uncertainTracks": uncertain_tracks,
+                            "classificationKind": "track",
+                            "matchThresholds": match_thresholds,
                             "planMode": "langgraph",
                             "targetScope": "both",
-                            "matchCount": len(supported),
-                            "confirmedMatchCount": len(confirmed),
-                            "found": bool(confirmed),
+                            "matchCount": len(display_tracks),
+                            "confirmedMatchCount": len(confirmed_tracks),
+                            "uncertainMatchCount": len(uncertain_tracks),
+                            "found": bool(confirmed_tracks),
                         },
                         display={
-                            "tracks": hit_tracks[: self.display_limit],
+                            "tracks": display_tracks,
                             "includeClips": True,
                             "includeRegistry": True,
                         },
                     )
-                if confirmed:
-                    conclusion = "找到匹配目标"
+                target_label = f"舷号 {hull}" if hull else (f"「{description}」" if description else "目标")
+                if confirmed_tracks:
+                    if operation == "existence":
+                        conclusion = f"确认舷号 {hull} 在视频中出现" if hull else f"确认{target_label}在视频中出现"
+                    else:
+                        conclusion = "找到匹配目标"
                     finish_state = state if state in {"sufficient", "uncertain", "conflict"} else "sufficient"
-                    hint = answer_hint or f"共 {len(confirmed)} 条确认匹配（scoreBand=match）"
+                    base_hint = f"共确认 {len(confirmed_tracks)} 条匹配轨迹"
+                    if uncertain_tracks:
+                        base_hint += f"，另有 {len(uncertain_tracks)} 条灰区轨迹待复核"
                 else:
-                    conclusion = "仅有灰区匹配，未达确认阈值"
-                    finish_state = "uncertain" if operation == "existence" else state
-                    hint = answer_hint or f"共 {len(uncertain)} 条 uncertain，最高分未达 match 阈值"
+                    if operation == "existence":
+                        conclusion = (
+                            f"尚未确认舷号 {hull} 在视频中出现，仅发现灰区轨迹"
+                            if hull
+                            else f"尚未确认{target_label}在视频中出现，仅发现灰区轨迹"
+                        )
+                    else:
+                        conclusion = "仅有灰区匹配，未达确认阈值"
+                    finish_state = "uncertain"
+                    base_hint = f"共发现 {len(uncertain_tracks)} 条灰区轨迹，未达到确认阈值"
+                if answer_hint:
+                    base_hint = f"{base_hint}；{answer_hint}"
+                hint = f"{base_hint}；{threshold_note}" if threshold_note else base_hint
                 # matchImage 命中时必须展示库参考图；matchText 也可能带库侧 id
                 has_registry_side = bool(registry_items) or any(
                     m.get("matchedRegistryId")
@@ -469,21 +515,26 @@ class AgentController:
                 )
                 extra_payload: dict[str, Any] = {
                     "matches": ranked,
+                    "confirmedTracks": confirmed_tracks,
+                    "uncertainTracks": uncertain_tracks,
+                    "classificationKind": "track",
+                    "matchThresholds": match_thresholds,
                     "planMode": "langgraph",
-                    "matchCount": len(supported),
-                    "confirmedMatchCount": len(confirmed),
-                    "found": bool(confirmed),
+                    "matchCount": len(display_tracks),
+                    "confirmedMatchCount": len(confirmed_tracks),
+                    "uncertainMatchCount": len(uncertain_tracks),
+                    "found": bool(confirmed_tracks),
                 }
                 if has_registry_side and registry_items:
                     extra_payload["registryItems"] = registry_items
                 return self._finish(
                     conclusion,
-                    hit_tracks[: self.display_limit],
+                    confirmed_tracks,
                     hint,
                     finish_state,
                     extra=extra_payload,
                     display={
-                        "tracks": hit_tracks[: self.display_limit],
+                        "tracks": display_tracks,
                         "includeClips": True,
                         "includeRegistry": has_registry_side,
                     },
@@ -859,6 +910,30 @@ class AgentController:
             if isinstance(value, dict) and value.get("matchMode") == "image_to_image":
                 result = value
         return result
+
+    def _collect_match_thresholds(self) -> dict[str, Any] | None:
+        """优先返回工具本轮实际使用的匹配阈值，避免前端硬编码。"""
+        for value in reversed(list(self.working_scope.values())):
+            if not isinstance(value, dict):
+                continue
+            thresholds = value.get("matchThresholds")
+            if isinstance(thresholds, dict):
+                return dict(thresholds)
+        return None
+
+    @staticmethod
+    def _match_threshold_note(thresholds: dict[str, Any] | None) -> str:
+        if not isinstance(thresholds, dict):
+            return ""
+        try:
+            confirmation = float(thresholds.get("confirmation"))
+            exclusion = float(thresholds.get("exclusion"))
+        except (TypeError, ValueError):
+            return ""
+        return (
+            f"确认阈值为 {confirmation:.3f}（分数不低于该值）；"
+            f"灰区为 {exclusion:.3f} 到 {confirmation:.3f} 之间（不含边界）"
+        )
 
     def _collect_registry(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
@@ -553,3 +554,90 @@ def test_reflect_finishes_registry_out_query_in_first_round_when_video_has_no_tr
     assert state["tool_chain"] == ["getTrack"]
     assert state["reflection"]["acceptanceProgress"]["videoEmptyShortCircuit"] is True
     assert "无需查询整库" in state["final_reason"] or "没有未在库船舶" in state["final_reason"]
+
+
+def test_hull_existence_synthesis_returns_all_confirmed_and_gray_zone_tracks_with_thresholds():
+    controller = AgentController.__new__(AgentController)
+    controller.meta = {
+        "operation": "existence",
+        "targetScope": "both",
+        "targetKind": "hull",
+        "hullNumber": "003",
+        "questionType": "hull_existence",
+    }
+    tracks = [
+        {
+            "trackId": track_id,
+            "startTime": index * 10.0,
+            "endTime": index * 10.0 + 8.0,
+            "keyframeIds": [f"frame-{track_id}"],
+            "shipSegmentIds": [f"segment-{track_id}"],
+        }
+        for index, track_id in enumerate(("10", "13", "11", "15", "17"))
+    ]
+    matches = [
+        {
+            "matchedTrackId": track_id,
+            "matchedRegistryId": "registry-003",
+            "embeddingScore": score,
+            "scoreBand": band,
+            "matchedKeyframeIds": [f"frame-{track_id}"],
+            "matchedRegistryReferenceIds": ["reference-003"],
+        }
+        for track_id, score, band in (
+            ("10", 0.838, "match"),
+            ("13", 0.836, "match"),
+            ("11", 0.760, "match"),
+            ("15", 0.731, "match"),
+            ("17", 0.650, "uncertain"),
+        )
+    ]
+    controller.working_scope = {
+        "tracks": {"ok": True, "tracks": tracks},
+        "registry": {
+            "ok": True,
+            "registryItems": [{
+                "registryId": "registry-003",
+                "hullNumber": "003",
+                "references": [{"referenceId": "reference-003"}],
+            }],
+        },
+        "match": {
+            "ok": True,
+            "matchMode": "image_to_image",
+            "matches": matches,
+            "matchThresholds": {
+                "mode": "image",
+                "confirmation": 0.72,
+                "exclusion": 0.52,
+                "grayZone": {"lower": 0.52, "upper": 0.72},
+            },
+        },
+    }
+    controller.tool_records = [{"tool": "matchImage", "ok": True, "skipped": False}]
+    controller.tool_chain = ["getTrack", "getFrames", "getRegistry", "matchImage"]
+    controller.rounds = []
+    controller.display_limit = 3
+    controller.display_record = None
+    controller.display_groups = []
+    controller.session_id = "session-test"
+    controller.question = "003有没有在视频中出现？"
+    controller.event_handler = None
+    controller._pending_registry_items = []
+    controller.tools = SimpleNamespace()
+
+    result = controller._synthesize("sufficient", "视觉核验完成")
+
+    assert result["conclusion"] == "确认舷号 003 在视频中出现"
+    assert [item["trackId"] for item in result["confirmedTracks"]] == ["10", "13", "11", "15"]
+    assert [item["trackId"] for item in result["uncertainTracks"]] == ["17"]
+    assert [item["trackId"] for item in result["tracks"]] == ["10", "13", "11", "15"]
+    assert result["matchCount"] == 5
+    assert result["confirmedMatchCount"] == 4
+    assert result["uncertainMatchCount"] == 1
+    assert result["classificationKind"] == "track"
+    assert result["matchThresholds"]["confirmation"] == 0.72
+    assert "确认阈值为 0.720" in result["answerText"]
+    assert "灰区为 0.520 到 0.720" in result["answerText"]
+    assert [group["trackId"] for group in result["displayGroups"]] == ["10", "13", "11", "15", "17"]
+    assert [group["scoreBand"] for group in result["displayGroups"]] == ["match", "match", "match", "match", "uncertain"]

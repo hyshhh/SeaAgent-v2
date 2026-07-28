@@ -142,6 +142,10 @@ class BroadMatchTopKTest(unittest.TestCase):
         self.assertEqual(len(unlimited["matches"]), 3)
         self.assertEqual(len(limited["matches"]), 2)
         self.assertEqual([item["matchedTrackId"] for item in limited["matches"]], ["track-1", "track-2"])
+        self.assertEqual(unlimited["matchThresholds"]["confirmation"], 0.72)
+        self.assertEqual(unlimited["matchThresholds"]["exclusion"], 0.52)
+        self.assertEqual(unlimited["matchThresholds"]["grayZone"]["lower"], 0.52)
+        self.assertEqual(unlimited["matchThresholds"]["grayZone"]["upper"], 0.72)
 
 
     def test_match_image_keeps_each_tracks_best_registry_and_ascending_lowest_best_score(self):
