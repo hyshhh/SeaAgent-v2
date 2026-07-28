@@ -392,15 +392,9 @@ function renderDedupResults(result) {
   if (!summary || result?.operation !== 'count') return '';
   const confirmed = Array.isArray(summary.confirmedMergeGroups) ? summary.confirmedMergeGroups : [];
   const pending = Array.isArray(summary.pendingMergeGroups) ? summary.pendingMergeGroups : [];
-  const minimum = Number(summary.minimumShipCount ?? result.minimumCount ?? result.count);
-  const confirmedCount = Number(summary.confirmedShipCount ?? result.confirmedCount ?? minimum);
   const confirmedRows = confirmed.map((item) => dedupResultRow(item, 'confirmed')).join('');
   const pendingRows = pending.map((item) => dedupResultRow(item, 'pending')).join('');
-  const range = Number.isFinite(minimum) && Number.isFinite(confirmedCount) && minimum !== confirmedCount
-    ? `<span>统计区间 <b>${minimum}—${confirmedCount}</b> 艘</span>`
-    : `<span>稳定统计 <b>${Number.isFinite(minimum) ? minimum : 0}</b> 艘</span>`;
   return `<section class="answer-classification dedup-classification">
-    <div class="dedup-count-strip"><strong>最低统计 ${Number.isFinite(minimum) ? minimum : 0} 艘</strong>${range}<em>确认口径 ${Number.isFinite(confirmedCount) ? confirmedCount : 0} 艘</em></div>
     <div class="answer-result-groups">
       <section class="answer-result-group confirmed"><header><div><strong>确认合并的轨迹</strong><span>高阈值通过，同组轨迹确定归为一艘船</span></div><em>${confirmed.length} 组</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">暂无需要确认合并的重复轨迹</div>'}</div></section>
       <section class="answer-result-group pending"><header><div><strong>待确认合并的轨迹</strong><span>影响最低船数，需要结合关键帧复核</span></div><em>${pending.length} 组</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">暂无待确认合并关系</div>'}</div></section>
@@ -428,7 +422,7 @@ function renderAgentAnswer(result) {
   const records = Array.isArray(result.toolRecords) && result.toolRecords.length
     ? result.toolRecords
     : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
-  const chain = records.map((item) => `<span class="tool-tag">${escapeHtml(formatToolCall(item.round, item))}</span>`).join('');
+  const chain = records.map((item) => `<div class="answer-tool-item"><code>${escapeHtml(formatToolCall(item.round, item))}</code></div>`).join('');
   const dedupResults = renderDedupResults(result);
   const classified = renderClassifiedResults(result);
   const fallbackResults = `${renderRegistryHits(result)}${renderTracks(result.tracks, result.questionType)}`;
@@ -442,9 +436,9 @@ function renderAgentAnswer(result) {
       <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
       <p>${escapeHtml(result.answerText || '未生成回答')}</p>
       <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>${hitLabel}：${hitCount}</span></div>
+      ${chain ? `<details class="answer-tool-activity"><summary><span class="answer-tool-icon" aria-hidden="true">›_</span><span>已调用 ${records.length} 个工具</span><em>${records.length} 条记录</em><b aria-hidden="true"></b></summary><div class="answer-tool-items">${chain}</div></details>` : ''}
     </div>
-    <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>
-    ${chain ? `<section class="answer-tool-chain"><header><strong>工具调用链</strong><span>${records.length} 条记录</span></header><div class="tool-tags">${chain}</div></section>` : ''}`;
+    <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>`;
 }
 
 function evidenceItem(type, id, trackId = null, options = {}) {
