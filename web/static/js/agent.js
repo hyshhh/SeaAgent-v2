@@ -402,27 +402,68 @@ function renderDedupResults(result) {
   </section>`;
 }
 
+function setAgentResultState(label, state = 'running') {
+  const panel = document.getElementById('agentResultPanel');
+  const badge = document.getElementById('agentIntentState');
+  if (panel) panel.dataset.state = state;
+  if (badge) badge.textContent = label;
+}
+
 function showAgentProcessView() {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
+  const planDisclosure = document.getElementById('agentPlanDisclosure');
+  const toolDisclosure = document.getElementById('agentToolDisclosure');
+  const toolSummary = document.getElementById('agentToolSummary');
+  const toolBody = document.getElementById('agentResultTools');
+  const hint = document.getElementById('agentResultHint');
   if (processView) processView.hidden = false;
   if (finalView) finalView.hidden = true;
+  if (planDisclosure) planDisclosure.open = true;
+  if (toolDisclosure) toolDisclosure.open = false;
+  if (toolSummary) toolSummary.textContent = '等待完成';
+  if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">工具调用完成后可在此查看。</div>';
+  if (hint) hint.textContent = '正在同步意图识别与执行计划';
+  setAgentResultState('识别中', 'running');
 }
 
-function showAgentFinalView() {
+function showAgentFinalView(state = 'completed') {
   const processView = document.getElementById('agentProcessView');
   const finalView = document.getElementById('agentFinalView');
-  if (processView) processView.hidden = true;
+  const planDisclosure = document.getElementById('agentPlanDisclosure');
+  const toolDisclosure = document.getElementById('agentToolDisclosure');
+  const round = document.getElementById('agentPlanRound');
+  const hint = document.getElementById('agentResultHint');
+  const toolSummary = document.getElementById('agentToolSummary');
+  const toolBody = document.getElementById('agentResultTools');
+  const total = agentPlanItems.length;
+  const completed = agentPlanItems.filter((item) => ['completed', 'skipped'].includes(item.status)).length;
+  if (processView) processView.hidden = false;
   if (finalView) finalView.hidden = false;
+  if (planDisclosure) planDisclosure.open = false;
+  if (toolDisclosure) toolDisclosure.open = false;
+  if (round) round.textContent = total
+    ? `${completed}/${total} 步 · ${state === 'failed' ? '已中断' : '已结束'}`
+    : state === 'failed' ? '计划已中断' : '计划已结束';
+  if (hint) hint.textContent = state === 'failed' ? '过程已折叠，可展开检查失败位置' : '计划与工具已折叠，可按需展开查看';
+  if (state === 'failed') {
+    if (toolSummary) toolSummary.textContent = '调用未完成';
+    if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">执行中断，未生成完整工具调用汇总。</div>';
+  }
+  setAgentResultState(state === 'failed' ? '执行失败' : '已完成', state);
 }
 
 function renderAgentAnswer(result) {
-  showAgentFinalView();
+  showAgentFinalView('completed');
   const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : '全部监控时间';
   const records = Array.isArray(result.toolRecords) && result.toolRecords.length
     ? result.toolRecords
     : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
   const chain = records.map((item) => `<div class="answer-tool-item"><code>${escapeHtml(formatToolCall(item.round, item))}</code></div>`).join('');
+  const toolSummary = document.getElementById('agentToolSummary');
+  const toolBody = document.getElementById('agentResultTools');
+  if (toolSummary) toolSummary.textContent = records.length ? `${records.length} 条调用记录` : '无调用记录';
+  if (toolBody) toolBody.innerHTML = chain || '<div class="agent-result-empty">本次推理未产生工具调用记录。</div>';
   const dedupResults = renderDedupResults(result);
   const classified = renderClassifiedResults(result);
   const fallbackResults = `${renderRegistryHits(result)}${renderTracks(result.tracks, result.questionType)}`;
@@ -436,7 +477,6 @@ function renderAgentAnswer(result) {
       <div class="answer-head"><strong>${escapeHtml(result.conclusion || '问答完成')}</strong><span class="status-tag ${result.uncertainty === 'sufficient' ? 'ok' : 'off'}">${escapeHtml(stateLabel(result.uncertainty))}</span></div>
       <p>${escapeHtml(result.answerText || '未生成回答')}</p>
       <div class="answer-meta"><span>问题类型：${escapeHtml(questionTypeLabel(result.questionType))}</span><span>查询范围：${escapeHtml(scope)}</span><span>${hitLabel}：${hitCount}</span></div>
-      ${chain ? `<details class="answer-tool-activity"><summary><span class="answer-tool-icon" aria-hidden="true">›_</span><span>已调用 ${records.length} 个工具</span><em>${records.length} 条记录</em><b aria-hidden="true"></b></summary><div class="answer-tool-items">${chain}</div></details>` : ''}
     </div>
     <div class="answer-results-scroll">${dedupResults || classified || fallbackResults}</div>`;
 }
@@ -907,10 +947,17 @@ function renderPlanProgress() {
   if (!container) return;
   const total = agentPlanItems.length;
   const completed = agentPlanItems.filter((item) => ['completed', 'skipped'].includes(item.status)).length;
+  const hasRunning = agentPlanItems.some((item) => item.status === 'running');
+  const hasFailed = agentPlanItems.some((item) => item.status === 'failed');
+  const round = document.getElementById('agentPlanRound');
   if (meter) meter.style.width = total ? `${Math.round((completed / total) * 100)}%` : '0%';
   if (!total) {
-    container.innerHTML = '<div class="agent-plan-empty">PlanAgent 生成计划后，将在这里显示待执行步骤。</div>';
+    container.innerHTML = '<div class="agent-plan-empty">计划生成后将在此动态显示步骤。</div>';
     return;
+  }
+  if (round) {
+    const progress = `${completed}/${total} 步`;
+    round.textContent = hasFailed ? `${progress} · 存在失败` : hasRunning ? `${progress} · 执行中` : completed === total ? `${progress} · 已完成` : `${progress} · 待执行`;
   }
   const visibleItems = agentPlanItems;
   container.innerHTML = visibleItems.map((item, index) => {
@@ -936,7 +983,7 @@ function resetPlanProgress() {
   if (round) round.textContent = '等待计划';
   if (decision) {
     decision.className = 'agent-plan-decision';
-    decision.textContent = '等待 ReflectAgent 验收当前计划。';
+    decision.textContent = '等待验收智能体检查当前计划。';
   }
   renderPlanProgress();
 }
@@ -1032,12 +1079,16 @@ function updatePlanReflection(event) {
     agentPlanItems.forEach((item) => { if (!['failed', 'skipped'].includes(item.status)) item.status = item.optional && item.status === 'pending' ? 'skipped' : 'completed'; });
     renderPlanProgress();
     decision.textContent = `第 ${event.round || activeAgentRound} 轮验收通过，正在生成最终回答。`;
+    setAgentResultState('生成结果', 'running');
   } else if (state === 'replan') {
     decision.textContent = `继续规划：${compactAgentValue(event.nextAction || event.evidenceGap || '需要补充证据', 150)}`;
+    setAgentResultState('等待下一轮规划', 'running');
   } else if (state === 'conflict') {
     decision.textContent = `证据冲突：${compactAgentValue(event.evidenceGap || event.nextAction || '需要重新检查证据', 150)}`;
+    setAgentResultState('证据冲突', 'running');
   } else {
     decision.textContent = `当前无法确认：${compactAgentValue(event.evidenceGap || event.nextAction || '证据不足', 150)}`;
+    setAgentResultState('证据不足', 'running');
   }
 }
 
@@ -1140,15 +1191,14 @@ function resetThoughtStream() {
   resetAgentCards();
   resetPlanProgress();
   const intent = ensureAgentCard(0, 'intent');
-  const intentState = document.getElementById('agentIntentState');
   const mode = document.getElementById('agentPlanMode');
   if (intent) {
     intent.classList.add('active');
     const cardState = intent.querySelector('.agent-thought-head em');
     if (cardState) cardState.textContent = '识别中';
-    setAgentStreamText(intent, 'Parsing the question and acceptance target…', {cursor: true});
+    setAgentStreamText(intent, '正在解析问题与验收目标…', {cursor: true});
   }
-  if (intentState) intentState.textContent = '识别中';
+  setAgentResultState('识别中', 'running');
   if (mode) mode.textContent = 'Plan → Observe → Verify · Reflect controls the next round';
   setThinkingState('正在推理', 'active');
 }
@@ -1198,9 +1248,8 @@ function appendSystemThought(event) {
     return;
   }
   if (event.type === 'status' && (/IntentAgent|意图/.test(`${event.title || ''}${event.message || ''}`) || event.role === 'intent')) {
-    const state = document.getElementById('agentIntentState');
     const card = ensureAgentCard(0, 'intent');
-    if (state) state.textContent = '识别中';
+    setAgentResultState('识别中', 'running');
     if (card) {
       card.classList.add('active');
       card.classList.remove('failed');
@@ -1229,13 +1278,13 @@ function appendSystemThought(event) {
   if (event.type === 'synthesis') {
     const decision = document.getElementById('agentPlanDecision');
     if (decision) decision.textContent = `${stateLabel(event.state)}，候选轨迹 ${Number(event.trackCount || 0)} 条。`;
+    setAgentResultState('生成结果', 'running');
     setThinkingState('生成最终回答', 'active');
   }
 }
 
 function renderIntentAgentCard(event) {
   const card = ensureAgentCard(0, 'intent');
-  const state = document.getElementById('agentIntentState');
   const timeScope = event.timeParseError ? `解析失败：${event.timeParseError}` : event.queryScope ? `${formatMonitorTime(event.queryScope[0])}—${formatMonitorTime(event.queryScope[1])}` : '全部监控时间';
   const targetItems = Array.isArray(event.targetItems) ? event.targetItems.filter((item) => item && item.label) : [];
   const targetText = targetItems.length > 1
@@ -1261,7 +1310,7 @@ function renderIntentAgentCard(event) {
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = agentTags({role: 'intent', ...event});
   }
-  if (state) state.textContent = event.timeParseError ? '需确认' : '已识别';
+  setAgentResultState(event.timeParseError ? '需确认' : '规划中', 'running');
   initializePlanBlueprint(event.planBlueprint);
   setThinkingState('规划中', 'active');
 }
@@ -1496,8 +1545,9 @@ function compactAgentErrorMessage(raw) {
 }
 
 function appendThoughtEvent(event) {
-  // 推理全程保持过程视图；complete 仅更新状态，最终结果由 askAgent 在拿到 result 后切换
+  // 推理期间保持计划展开；最终结果生成后自动折叠计划与工具。
   if (event.type === 'complete') {
+    setAgentResultState('整理结果', 'running');
     setThinkingState('推理完成', 'completed');
     const decision = document.getElementById('agentPlanDecision');
     if (decision && !decision.classList.contains('sufficient')) {
@@ -1514,6 +1564,7 @@ function appendThoughtEvent(event) {
     return;
   }
   if (event.type === 'error') {
+    setAgentResultState('执行失败', 'failed');
     setThinkingState('推理失败', 'failed');
     const decision = document.getElementById('agentPlanDecision');
     if (decision) {
@@ -1559,8 +1610,10 @@ function appendThoughtEvent(event) {
     setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
     scrollThoughtStreamToCard(card);
     if (event.role === 'intent') {
+      setAgentResultState('识别中', 'running');
       setThinkingState('意图识别中', 'active');
     } else if (event.role === 'planner') {
+      setAgentResultState(`第 ${event.round || 1} 轮规划中`, 'running');
       setThinkingState(`第 ${event.round || 1} 轮规划中`, 'active');
       const round = document.getElementById('agentPlanRound');
       const decision = document.getElementById('agentPlanDecision');
@@ -1570,8 +1623,10 @@ function appendThoughtEvent(event) {
         decision.textContent = '正在根据当前验收缺口生成计划。';
       }
     } else if (event.role === 'observer') {
+      setAgentResultState(`第 ${event.round || 1} 轮执行中`, 'running');
       setThinkingState(`第 ${event.round || 1} 轮执行中`, 'active');
     } else if (event.role === 'reflector') {
+      setAgentResultState(`第 ${event.round || 1} 轮验收中`, 'running');
       setThinkingState(`第 ${event.round || 1} 轮验收中`, 'active');
     }
   } else if (event.type === 'agent_skill') {
@@ -1778,7 +1833,7 @@ async function askAgent() {
     renderAgentAnswer(result);
     renderEvidence(result.evidence, result.displayGroups, 'No evidence available', result.registryItems || [], result);
   } catch (error) {
-    showAgentFinalView();
+    showAgentFinalView('failed');
     setThinkingState('推理失败', 'failed');
     const answer = document.getElementById('agentAnswer');
     if (answer) {
