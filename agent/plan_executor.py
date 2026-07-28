@@ -692,27 +692,32 @@ class PlanExecutor:
             return False, None
         return True, current
 
-    def _resolve(self, value: Any, scope: dict[str, Any]) -> Any:
+    @classmethod
+    def resolve_references(cls, value: Any, scope: dict[str, Any]) -> Any:
+        """按工作域解析结构化引用，供执行与跨轮次语义去重共用。"""
         if isinstance(value, list):
-            return [self._resolve(item, scope) for item in value]
+            return [cls.resolve_references(item, scope) for item in value]
         if not isinstance(value, dict):
             return value
         if "$ref" not in value:
-            return {key: self._resolve(item, scope) for key, item in value.items()}
-        resolved = self._read(scope, value["$ref"])
-        if self._empty_dependency(resolved) and "$default" in value:
+            return {key: cls.resolve_references(item, scope) for key, item in value.items()}
+        resolved = cls._read(scope, value["$ref"])
+        if cls._empty_dependency(resolved) and "$default" in value:
             default_value = value["$default"]
             if isinstance(default_value, dict) and "$ref" in default_value:
-                resolved = self._resolve(default_value, scope)
+                resolved = cls.resolve_references(default_value, scope)
             else:
                 resolved = default_value
         if value.get("$map") and isinstance(resolved, list):
-            resolved = [self._read(item, value["$map"]) for item in resolved]
+            resolved = [cls._read(item, value["$map"]) for item in resolved]
         if value.get("$compact") and isinstance(resolved, list):
             resolved = [item for item in resolved if item not in (None, "", [])]
         if value.get("$list"):
             resolved = [] if resolved is None else resolved if isinstance(resolved, list) else [resolved]
         return value.get("$default") if resolved is None and "$default" in value else resolved
+
+    def _resolve(self, value: Any, scope: dict[str, Any]) -> Any:
+        return self.resolve_references(value, scope)
 
     def _condition(self, condition: dict[str, Any] | None, scope: dict[str, Any]) -> bool:
         if not condition:
@@ -827,7 +832,7 @@ class PlanExecutor:
         return rewritten
 
     @staticmethod
-    def _call_signature(tool: str, arguments: dict[str, Any]) -> str:
+    def semantic_signature(tool: str, arguments: dict[str, Any]) -> str:
         """生成工具调用的语义签名；只影响去重，不改实际执行参数。"""
         normalized = dict(arguments)
         if tool == "getTrack":
@@ -881,7 +886,7 @@ class PlanExecutor:
             arguments = PlanExecutor._rewrite_call_refs(arguments, aliases)
             condition = item.get("condition") if isinstance(item.get("condition"), dict) else None
             condition = PlanExecutor._rewrite_call_refs(condition, aliases) if condition else None
-            signature = PlanExecutor._call_signature(tool, arguments)
+            signature = PlanExecutor.semantic_signature(tool, arguments)
             if signature in signatures:
                 kept_index = signatures[signature]
                 aliases[requested_id] = str(cleaned[kept_index]["id"])

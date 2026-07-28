@@ -100,7 +100,11 @@ class HandoffFinishArgs(BaseModel):
 
 class HandoffReplanArgs(BaseModel):
     reason: str = Field(description="为何 replan")
-    nextAction: str = Field(default="", description="给 Plan 的下一步")
+    nextAction: str = Field(default="", description="供界面展示的下一步摘要")
+    nextActionSpec: dict[str, Any] = Field(
+        default_factory=dict,
+        description="结构化补全目标：requiredCapabilities、target、reuseScopeKeys、avoidRepeatCallIds",
+    )
     evidenceGap: str = Field(default="")
 
 
@@ -414,12 +418,245 @@ def _enforce_plan_time_scope(
     return guarded
 
 
+_CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
+    "registry_lookup": frozenset({"getRegistry"}),
+    "registry_listing": frozenset({"listRegistry"}),
+    "track_retrieval": frozenset({"getTrack"}),
+    "keyframe_retrieval": frozenset({"getFrames"}),
+    "image_matching": frozenset({"matchImage"}),
+    "text_matching": frozenset({"matchText"}),
+    "deduplication": frozenset({"dedupTracks"}),
+}
+
+
+def _normalize_replan_directive(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    capabilities = []
+    for raw in value.get("requiredCapabilities") or []:
+        capability = str(raw or "").strip()
+        if capability in _CAPABILITY_TOOLS and capability not in capabilities:
+            capabilities.append(capability)
+    target = value.get("target") if isinstance(value.get("target"), dict) else {}
+    return {
+        "objective": str(value.get("objective") or "complete_missing_evidence"),
+        "requiredCapabilities": capabilities,
+        "requiredEvidence": [str(item) for item in (value.get("requiredEvidence") or []) if str(item)],
+        "target": dict(target),
+        "reuseScopeKeys": [str(item) for item in (value.get("reuseScopeKeys") or []) if str(item)],
+        "avoidRepeatCallIds": [str(item) for item in (value.get("avoidRepeatCallIds") or []) if str(item)],
+    }
+
+
+def _merge_replan_directives(authoritative: Any, proposed: Any) -> dict[str, Any]:
+    """保留验收层要求的能力，同时允许 ReflectAgent 补充目标与复用信息。"""
+    base = _normalize_replan_directive(authoritative)
+    extra = _normalize_replan_directive(proposed)
+    capabilities = list(base.get("requiredCapabilities") or [])
+    for capability in extra.get("requiredCapabilities") or []:
+        if capability not in capabilities:
+            capabilities.append(capability)
+    evidence = list(base.get("requiredEvidence") or [])
+    for item in extra.get("requiredEvidence") or []:
+        if item not in evidence:
+            evidence.append(item)
+    target = dict(extra.get("target") or {})
+    target.update(base.get("target") or {})
+    reuse = list(base.get("reuseScopeKeys") or [])
+    for item in extra.get("reuseScopeKeys") or []:
+        if item not in reuse:
+            reuse.append(item)
+    avoid = list(base.get("avoidRepeatCallIds") or [])
+    for item in extra.get("avoidRepeatCallIds") or []:
+        if item not in avoid:
+            avoid.append(item)
+    return {
+        "objective": str(extra.get("objective") or base.get("objective") or "complete_missing_evidence"),
+        "requiredCapabilities": capabilities,
+        "requiredEvidence": evidence,
+        "target": target,
+        "reuseScopeKeys": reuse,
+        "avoidRepeatCallIds": avoid,
+    }
+
+
+def _track_retrieval_has_full_coverage(
+    result: dict[str, Any],
+    arguments: dict[str, Any] | None = None,
+) -> bool:
+    """判断轨迹检索是否覆盖目标范围，避免把分页结果误当作全量候选。"""
+    if not isinstance(result.get("trackIds"), list):
+        return False
+    returned = result.get("returnedTrackCount")
+    total = result.get("totalTrackCount")
+    try:
+        if returned is not None and total is not None:
+            return int(returned) >= int(total)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int((arguments or {}).get("limit")) == 0
+    except (TypeError, ValueError):
+        # 兼容未返回计数元数据的旧工具结果；已有明确列表时仍允许复用。
+        return True
+
+
+def _completed_agent_capabilities(
+    tool_records: list[dict[str, Any]],
+) -> tuple[set[str], list[str]]:
+    completed: set[str] = set()
+    reusable_ids: list[str] = []
+    for record in tool_records or []:
+        if not isinstance(record, dict) or record.get("ok") is False or record.get("skipped"):
+            continue
+        tool_name = str(record.get("tool") or "")
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        arguments = record.get("arguments") if isinstance(record.get("arguments"), dict) else {}
+        call_id = str(record.get("id") or "")
+        if call_id:
+            reusable_ids.append(call_id)
+        if tool_name == "getRegistry":
+            completed.add("registry_lookup")
+        elif tool_name == "listRegistry":
+            completed.add("registry_listing")
+        elif tool_name == "getTrack" and not str(arguments.get("hullNumber") or "").strip():
+            if _track_retrieval_has_full_coverage(result, arguments):
+                completed.add("track_retrieval")
+        elif tool_name == "getFrames" and result.get("keyframes"):
+            completed.add("keyframe_retrieval")
+        elif tool_name == "matchImage" and not result.get("error"):
+            completed.add("image_matching")
+        elif tool_name == "matchText" and not result.get("error"):
+            completed.add("text_matching")
+        elif tool_name == "dedupTracks" and not result.get("error"):
+            completed.add("deduplication")
+    return completed, reusable_ids
+
+
+def _build_replan_directive(
+    intent: dict[str, Any],
+    acceptance_progress: dict[str, Any],
+    *,
+    working_scope: dict[str, Any] | None = None,
+    tool_records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """把验收缺口转换为能力目标；不把具体问题文本或固定工具链作为规划条件。"""
+    missing_keys = [
+        str(item.get("key") or "")
+        for item in (acceptance_progress.get("requirements") or [])
+        if isinstance(item, dict) and not item.get("completed")
+    ]
+    target_kind = str(intent.get("targetKind") or "all")
+    capability_map: dict[str, list[str]] = {
+        "registry_lookup": ["registry_lookup"],
+        "registry": ["registry_lookup" if target_kind == "hull" else "registry_listing"],
+        "tracks": ["track_retrieval"],
+        "frames": ["keyframe_retrieval"],
+        "image_match": ["track_retrieval", "keyframe_retrieval", "image_matching"],
+        "registry_text_match": ["registry_listing", "text_matching"],
+        "text_match": ["track_retrieval", "keyframe_retrieval", "text_matching"],
+        "dedup": ["track_retrieval", "keyframe_retrieval", "deduplication"],
+    }
+    requested: list[str] = []
+    for key in missing_keys:
+        for capability in capability_map.get(key, []):
+            if capability not in requested:
+                requested.append(capability)
+
+    completed, reusable_call_ids = _completed_agent_capabilities(tool_records or [])
+    required = [capability for capability in requested if capability not in completed]
+    reusable_scope_keys = [
+        str(key)
+        for key, value in (working_scope or {}).items()
+        if isinstance(value, dict) and value.get("ok") is not False
+    ][-24:]
+    target = {
+        "kind": target_kind,
+        "scope": str(intent.get("targetScope") or "track_memory"),
+        "operation": str(intent.get("operation") or ""),
+    }
+    if str(intent.get("hullNumber") or "").strip():
+        target["hullNumber"] = str(intent.get("hullNumber") or "").strip()
+    if str(intent.get("description") or "").strip() and target_kind != "hull":
+        target["description"] = str(intent.get("description") or "").strip()
+    if intent.get("timeRange"):
+        target["timeRange"] = intent.get("timeRange")
+    return {
+        "objective": "complete_missing_evidence",
+        "requiredCapabilities": required,
+        "requiredEvidence": missing_keys,
+        "target": target,
+        "reuseScopeKeys": reusable_scope_keys,
+        "avoidRepeatCallIds": reusable_call_ids[-24:],
+    }
+
+
+def _plan_directive_issues(calls: list[dict[str, Any]], directive: dict[str, Any]) -> list[str]:
+    normalized = _normalize_replan_directive(directive)
+    required = normalized.get("requiredCapabilities") or []
+    if not required:
+        return []
+    planned_tools = {str(call.get("tool") or "") for call in calls if isinstance(call, dict)}
+    issues: list[str] = []
+    for capability in required:
+        if not planned_tools.intersection(_CAPABILITY_TOOLS.get(capability, frozenset())):
+            issues.append(f"missing_capability:{capability}")
+    return issues
+
+
+def _remove_completed_call_repeats(
+    calls: list[dict[str, Any]],
+    tool_records: list[dict[str, Any]],
+    working_scope: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """移除跨轮次等价调用，并把其下游引用改写到已有工作域结果。"""
+    previous: dict[str, str] = {}
+    for record in tool_records or []:
+        if not isinstance(record, dict) or record.get("ok") is False or record.get("skipped"):
+            continue
+        tool_name = str(record.get("tool") or "")
+        arguments = record.get("arguments") if isinstance(record.get("arguments"), dict) else {}
+        call_id = str(record.get("id") or "")
+        if not tool_name or not call_id or call_id not in working_scope:
+            continue
+        previous[PlanExecutor.semantic_signature(tool_name, arguments)] = call_id
+
+    aliases: dict[str, str] = {}
+    retained: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for call in calls:
+        item = dict(call)
+        item["arguments"] = PlanExecutor._rewrite_call_refs(item.get("arguments") or {}, aliases)
+        if isinstance(item.get("condition"), dict):
+            item["condition"] = PlanExecutor._rewrite_call_refs(item["condition"], aliases)
+        resolved_arguments = PlanExecutor.resolve_references(
+            item.get("arguments") or {},
+            working_scope,
+        )
+        signature = PlanExecutor.semantic_signature(
+            str(item.get("tool") or ""),
+            resolved_arguments if isinstance(resolved_arguments, dict) else item.get("arguments") or {},
+        )
+        existing_id = previous.get(signature)
+        if existing_id:
+            aliases[str(item.get("id") or "")] = existing_id
+            removed.append(str(item.get("id") or item.get("tool") or ""))
+            continue
+        retained.append(item)
+    for item in retained:
+        item["arguments"] = PlanExecutor._rewrite_call_refs(item.get("arguments") or {}, aliases)
+        if isinstance(item.get("condition"), dict):
+            item["condition"] = PlanExecutor._rewrite_call_refs(item["condition"], aliases)
+    return retained, removed
+
+
 def _default_plan_calls(
     intent: dict[str, Any],
     top_k: int,
     broad_match_top_k: int = 0,
     *,
     replan_hint: str = "",
+    replan_directive: dict[str, Any] | None = None,
     working_scope: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """模型未给出 calls 时的最小可执行链（结构化 $ref，不是业务硬编码分支表）。"""
@@ -430,21 +667,29 @@ def _default_plan_calls(
     target_scope = str(intent.get("targetScope") or "track_memory")
     top = max(1, min(20, int(top_k or 3)))
     broad_top = _normalize_broad_match_top_k(broad_match_top_k)
+    directive = _normalize_replan_directive(replan_directive)
+    required_capabilities = set(directive.get("requiredCapabilities") or [])
     hint_raw = str(replan_hint or intent.get("nextAgentFocus") or "")
     hint = hint_raw.lower()
-    wants_registry = (
-        target_scope in {"registry", "both"}
-        or str(intent.get("registryRelation") or "any") in {"in", "out"}
-        or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
-    )
-    # 视觉匹配：库参考图 ↔ 视频关键帧（舷号 OCR 未命中 / 在库列表）
-    wants_visual_match = any(
-        token in hint
-        for token in (
-            "matchimage", "match_image", "视觉匹配", "图像匹配", "图匹配",
-            "registryreferences", "关键帧匹配", "库图", "对照视频",
+    has_capability_directive = bool(required_capabilities)
+    if has_capability_directive:
+        # 再规划阶段只读取结构化能力契约，界面摘要不参与业务分支判断。
+        wants_registry = bool(required_capabilities.intersection({"registry_lookup", "registry_listing"}))
+        wants_visual_match = "image_matching" in required_capabilities
+    else:
+        wants_registry = (
+            target_scope in {"registry", "both"}
+            or str(intent.get("registryRelation") or "any") in {"in", "out"}
+            or any(token in hint for token in ("先验库", "在库", "未在库", "getregistry", "listregistry", "matchhull", "registry"))
         )
-    ) or ("match" in hint and "image" in hint)
+        # 首轮安全兜底仍可结合结构化意图中的阶段摘要选择最小链。
+        wants_visual_match = any(
+            token in hint
+            for token in (
+                "matchimage", "match_image", "视觉匹配", "图像匹配", "图匹配",
+                "registryreferences", "关键帧匹配", "库图", "对照视频",
+            )
+        ) or ("match" in hint and "image" in hint)
     registry_relation = str(intent.get("registryRelation") or "any")
     # 「有哪些在库船出现」：list + in + both/all，禁止当描述 matchText
     wants_registry_in_list = (
@@ -518,9 +763,10 @@ def _default_plan_calls(
             if not registry_result and isinstance(value.get("registryItems"), list):
                 registry_scope_id, registry_result = str(scope_id), value
 
-        tracks_ready = isinstance(tracks_result.get("trackIds"), list)
+        tracks_ready = _track_retrieval_has_full_coverage(tracks_result)
         track_ids = list(tracks_result.get("trackIds") or []) if tracks_ready else []
-        frames_ready = bool(frames_result.get("keyframes"))
+        # 部分分页轨迹对应的关键帧也不能当作全量候选复用。
+        frames_ready = tracks_ready and bool(frames_result.get("keyframes"))
         registry_ready = isinstance(registry_result.get("registryItems"), list)
 
         # 已明确无轨迹时，图像匹配没有视频侧候选，禁止查整库或制造 galleryImages=null 的伪调用。
@@ -555,13 +801,20 @@ def _default_plan_calls(
         })
         return calls
 
+    # 结构化能力目标只要求库查询时，生成最小库检索步骤；不解析 nextAction 文本。
+    if has_capability_directive and not wants_visual_match:
+        if hull and "registry_lookup" in required_capabilities:
+            return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
+        if "registry_listing" in required_capabilities:
+            return [{"id": "registry", "tool": "listRegistry", "arguments": {}}]
+
+    # 结构化图像匹配能力要求直接生成可复用的库图—关键帧对照链。
+    if has_capability_directive and wants_visual_match and not hull:
+        return _match_image_from_list_registry()
+
     # 在库船列表（视频中出现的库船）：listRegistry → getTrack → getFrames → matchImage
     if wants_registry_in_list or (wants_visual_match and not hull and wants_registry and not description):
         return _match_image_from_list_registry()
-
-    # 验收守卫明确要求先查指定舷号时，只执行库查询，不能被提示中的“勿重复 getTrack”误导。
-    if hull and wants_registry and not wants_visual_match and "getregistry" in hint:
-        return [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": hull}}]
 
     # 指定库船存在性核验：复用已取得的库项，全量扫描视频轨迹并只做一次完整图像匹配。
     if wants_visual_match and hull:
@@ -770,6 +1023,7 @@ def _prepare_plan_calls(
     broad_match_top_k: int,
     broad_match_context: bool = False,
     replan_hint: str = "",
+    replan_directive: dict[str, Any] | None = None,
     working_scope: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """校验模型计划的工具参数契约；无效计划直接替换为确定性正确链。"""
@@ -792,6 +1046,7 @@ def _prepare_plan_calls(
             top_k,
             broad_match_top_k=broad_match_top_k,
             replan_hint=replan_hint,
+            replan_directive=replan_directive,
             working_scope=working_scope or {},
         )
         repair = "；".join(issues)
@@ -1037,7 +1292,12 @@ def build_sea_agent_graph(
         )
 
     @tool("handoff_to_plan_replan", args_schema=HandoffReplanArgs, return_direct=True)
-    def handoff_to_plan_replan(reason: str, nextAction: str = "", evidenceGap: str = "") -> str:
+    def handoff_to_plan_replan(
+        reason: str,
+        nextAction: str = "",
+        nextActionSpec: dict[str, Any] | None = None,
+        evidenceGap: str = "",
+    ) -> str:
         """Reflect 判定 replan，交回 PlanAgent。"""
         return json.dumps(
             {
@@ -1046,6 +1306,7 @@ def build_sea_agent_graph(
                 "replan": True,
                 "reason": reason,
                 "nextAction": nextAction,
+                "nextActionSpec": nextActionSpec or {},
                 "evidenceGap": evidenceGap,
             },
             ensure_ascii=False,
@@ -1133,6 +1394,7 @@ def build_sea_agent_graph(
             "observation_summary": state.get("observation_summary"),
             "evidenceGap": (state.get("reflection") or {}).get("evidenceGap"),
             "nextAction": (state.get("reflection") or {}).get("nextAction"),
+            "replanDirective": (state.get("reflection") or {}).get("nextActionSpec"),
             "acceptanceProgress": (state.get("reflection") or {}).get("acceptanceProgress"),
             "calls": state.get("plan_calls") or [],
         }
@@ -1725,15 +1987,11 @@ def build_sea_agent_graph(
             or reflection.get("reason")
             or ""
         )
-        # Reflect 已给出明确工具链时由确定性规划接管，防止模型忽略验收缺口并重复上一轮调用。
+        # 正常验收补全继续交给 PlanAgent；仅工具契约损坏时使用确定性安全回退。
         decision_source = str(reflection.get("decisionSource") or "")
-        deterministic_sources = {"tool_contract_guard", "acceptance_guard", "deterministic_fallback"}
-        use_deterministic_replan = bool(
-            loop_count > 0
-            and replan_hint
-            and decision_source in deterministic_sources
-        )
+        replan_directive = _normalize_replan_directive(reflection.get("nextActionSpec"))
         contract_replan = decision_source == "tool_contract_guard"
+        use_deterministic_replan = bool(loop_count > 0 and replan_hint and contract_replan)
         used_default_plan = False
         plan_repair = ""
         out: dict[str, Any] = {
@@ -1753,6 +2011,7 @@ def build_sea_agent_graph(
                     state.get("broad_match_top_k", default_broad_match_top_k)
                 ),
                 replan_hint=replan_hint,
+                replan_directive=replan_directive,
                 working_scope=state.get("working_scope") or {},
             )
             used_default_plan = True
@@ -1813,6 +2072,7 @@ def build_sea_agent_graph(
                     "queryTopK": state.get("query_top_k") or default_top_k,
                     "broadMatchTopK": _normalize_broad_match_top_k(state.get("broad_match_top_k", default_broad_match_top_k)),
                     "replanHint": replan_hint or None,
+                    "replanDirective": replan_directive or None,
                     "acceptanceProgress": reflection.get("acceptanceProgress") or None,
                     "workingScopeKeys": list((state.get("working_scope") or {}).keys())[:24],
                     "completedCalls": [
@@ -1822,6 +2082,7 @@ def build_sea_agent_graph(
                             "round": record.get("round"),
                             "ok": record.get("ok") is not False,
                             "skipped": bool(record.get("skipped")),
+                            "arguments": record.get("arguments") or {},
                             "summary": record.get("summary") or {},
                         }
                         for record in (state.get("tool_records") or [])[-16:]
@@ -1840,7 +2101,8 @@ def build_sea_agent_graph(
                         "视觉补洞：getRegistry → getTrack(不带hull) → getFrames → matchImage(query=registryReferences, gallery=keyframes)",
                         "广泛多库多轨迹：第一轮 getTrack(limit=0)，轨迹非空才 getFrames；第二轮复用已有 frames 执行 listRegistry → matchImage，使用 broadMatchTopK；0 表示不截断，不要复用 queryTopK",
                         "数量统计：getTrack(limit=0) → getFrames → dedupTracks(tracks=$ref tracks.tracks, keyframesByTrack=$ref frames.keyframesByTrack)，不要把 frames 整体当 keyframesByTrack",
-                        "有 replanHint 时结合 acceptanceProgress 与 completedCalls 自主补全，复用 working_scope，禁止机械重复已成功步骤",
+                        "有 replanDirective 时必须满足 requiredCapabilities，并结合 acceptanceProgress 与 completedCalls 自主选择最小工具链",
+                        "复用 working_scope；不得重复 completedCalls 中参数等价且已成功的调用",
                         "仅规则确有缺口时调用一次 loadSkill，禁止重复读取同一技能或无目的空转",
                         "无法规划时才 handoff_to_reflect",
                     ],
@@ -1862,6 +2124,8 @@ def build_sea_agent_graph(
                     "acceptanceProgress": reflection.get("acceptanceProgress"),
                     "evidenceGap": reflection.get("evidenceGap"),
                     "nextAction": reflection.get("nextAction"),
+                    "replanDirective": replan_directive,
+                    "completedCalls": (state.get("tool_records") or [])[-16:],
                 },
             )
             handoff = out.get("handoff") or {}
@@ -1884,6 +2148,7 @@ def build_sea_agent_graph(
                         )
                     ),
                     replan_hint=replan_hint,
+                    replan_directive=replan_directive,
                     working_scope=state.get("working_scope") or {},
                 )
                 if plan_repair:
@@ -1892,7 +2157,35 @@ def build_sea_agent_graph(
             else:
                 plan_calls = PlanExecutor.sanitize_calls(handoff.get("calls"))
 
-            # 模型未给出 calls 时，按意图 + replanHint 生成最小可执行链
+            if target != "reflect" and loop_count > 0:
+                plan_calls, repeated_call_ids = _remove_completed_call_repeats(
+                    plan_calls,
+                    state.get("tool_records") or [],
+                    state.get("working_scope") or {},
+                )
+                directive_issues = _plan_directive_issues(plan_calls, replan_directive)
+                if directive_issues:
+                    # 模型计划未满足结构化能力契约时，按能力目标纠正；不解析问题文本或 nextAction 文案。
+                    plan_calls = _default_plan_calls(
+                        intent,
+                        state.get("query_top_k") or default_top_k,
+                        broad_match_top_k=broad_top,
+                        replan_directive=replan_directive,
+                        working_scope=state.get("working_scope") or {},
+                    )
+                    plan_calls, _ = _remove_completed_call_repeats(
+                        plan_calls,
+                        state.get("tool_records") or [],
+                        state.get("working_scope") or {},
+                    )
+                    repair_bits = list(directive_issues)
+                    if repeated_call_ids:
+                        repair_bits.append("repeated_calls:" + ",".join(repeated_call_ids))
+                    plan_repair = "；".join(bit for bit in [plan_repair, *repair_bits] if bit)
+                    used_default_plan = True
+                    plan_hint = f"[能力契约纠正] {' → '.join(c['tool'] for c in plan_calls) or '无步骤'}"
+
+            # 模型未给出 calls 时，按结构化意图与能力目标生成最小可执行链
             if target != "reflect" and not plan_calls:
                 plan_calls = _default_plan_calls(
                     intent,
@@ -1901,6 +2194,7 @@ def build_sea_agent_graph(
                         state.get("broad_match_top_k", default_broad_match_top_k)
                     ),
                     replan_hint=replan_hint,
+                    replan_directive=replan_directive,
                     working_scope=state.get("working_scope") or {},
                 )
                 used_default_plan = True
@@ -1995,6 +2289,7 @@ def build_sea_agent_graph(
                 state.get("broad_match_top_k", default_broad_match_top_k)
             ),
             replan_hint=str((state.get("reflection") or {}).get("nextAction") or state.get("plan_hint") or ""),
+            replan_directive=(state.get("reflection") or {}).get("nextActionSpec") or {},
             working_scope=state.get("working_scope") or {},
         )
         if not plan_calls:
@@ -2006,6 +2301,8 @@ def build_sea_agent_graph(
                     state.get("broad_match_top_k", default_broad_match_top_k)
                 ),
                 replan_hint=str((state.get("reflection") or {}).get("nextAction") or state.get("plan_hint") or ""),
+                replan_directive=(state.get("reflection") or {}).get("nextActionSpec") or {},
+                working_scope=state.get("working_scope") or {},
             )
 
         observe_skill_context = {
@@ -2485,8 +2782,14 @@ def build_sea_agent_graph(
             dedup_usable=dedup_usable,
         )
         pending_requirements = acceptance_progress.get("pendingRequirements") or []
+        replan_directive = _build_replan_directive(
+            intent,
+            acceptance_progress,
+            working_scope=scope,
+            tool_records=state.get("tool_records") or [],
+        )
         pre_handoff: dict[str, Any] | None = None
-        # 可由验收清单直接判定的场景不再等待模型长篇推理，避免 ReflectAgent 空转或重复调用。
+        # 仅工具契约损坏和无候选终态提前短路；普通证据缺口交给 ReflectAgent 判定。
         if tool_contract_failures and loop_count < limit:
             pre_handoff = {
                 "handoff": "plan",
@@ -2494,20 +2797,10 @@ def build_sea_agent_graph(
                 "hardReplan": True,
                 "state": "replan",
                 "decisionSource": "tool_contract_guard",
-                "reason": "本轮工具参数与后端契约不一致，已阻止重复调用并切换为确定性正确工具链",
-                "nextAction": acceptance_progress.get("nextAction") or intent.get("nextAgentFocus") or "按意图重新生成正确工具链",
+                "reason": "本轮工具参数与后端契约不一致，需要重新规划",
+                "nextAction": "修复工具参数并补全尚未满足的验收证据",
+                "nextActionSpec": replan_directive,
                 "evidenceGap": "；".join(tool_contract_failures),
-            }
-        elif should_replan_registry:
-            pre_handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": False,
-                "state": "replan",
-                "decisionSource": "acceptance_guard",
-                "reason": "视频轨迹为 0，尚需对照先验库确认身份或在库情况",
-                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
-                "evidenceGap": "未查询先验库",
             }
         elif membership_mode and zero_tracks and acceptance_progress.get("acceptanceSatisfied"):
             relation_label = "在库" if membership_mode == "in" else "未在库"
@@ -2523,47 +2816,9 @@ def build_sea_agent_graph(
                 "handoff": "finish",
                 "state": "uncertain",
                 "decisionSource": "acceptance_guard",
-                "reason": "视频中存在候选轨迹，但图像匹配缺少有效库图、关键帧或向量，无法可靠判定在库关系",
-                "answerHint": "已停止无收益的重复匹配；仅展示视频候选轨迹，不把完整先验库误当作查询结果",
+                "reason": "视频中存在候选轨迹，但图像匹配输入不可用，无法可靠判定在库关系",
+                "answerHint": "已停止无收益的重复匹配；仅展示视频候选轨迹",
                 "evidenceGap": "图像匹配输入不可用",
-            }
-        elif should_replan_visual:
-            pre_handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": False,
-                "state": "replan",
-                "decisionSource": "acceptance_guard",
-                "reason": "先验库已命中且有可搜参考图，需使用图像匹配对照视频关键帧",
-                "nextAction": (
-                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
-                    "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
-                    "galleryImages=$ref frames.keyframes)"
-                ),
-                "evidenceGap": "已有可搜库图但未做库图与视频关键帧匹配",
-            }
-        elif should_replan_registry_list or should_replan_registry_list_visual:
-            relation_label = "在库" if membership_mode == "in" else "未在库"
-            pre_handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": False,
-                "state": "replan",
-                "decisionSource": "acceptance_guard",
-                "reason": f"{relation_label}船舶列表的验收条件尚未满足，必须进入下一轮完成全库对照",
-                "nextAction": acceptance_progress.get("nextAction"),
-                "evidenceGap": "；".join(pending_requirements),
-            }
-        elif pending_requirements and loop_count < limit:
-            pre_handoff = {
-                "handoff": "plan",
-                "replan": True,
-                "hardReplan": False,
-                "state": "replan",
-                "decisionSource": "acceptance_guard",
-                "reason": "当前证据只完成了部分验收，按首个明确缺口直接进入下一轮",
-                "nextAction": acceptance_progress.get("nextAction"),
-                "evidenceGap": "；".join(pending_requirements),
             }
         user = json.dumps(
             {
@@ -2573,6 +2828,7 @@ def build_sea_agent_graph(
                 "successCriteria": intent.get("successCriteria"),
                 "nextAgentFocus": intent.get("nextAgentFocus"),
                 "acceptanceProgress": acceptance_progress,
+                "replanDirective": replan_directive,
                 "targetScope": target_scope,
                 "registryRelation": registry_relation,
                 "hullNumber": hull or None,
@@ -2609,8 +2865,8 @@ def build_sea_agent_graph(
                 "maxRounds": limit,
                 "notes": [
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
-                    "shouldReplanRegistry=true → 必须 handoff_to_plan_replan，nextAction 写 getRegistry",
-                    "shouldReplanVisual=true → 必须 handoff_to_plan_replan，nextAction 写完整视觉链（含 matchImage）",
+                    "存在待补全能力时调用 handoff_to_plan_replan，并在 nextActionSpec 中原样保留 replanDirective.requiredCapabilities",
+                    "nextAction 仅作简短摘要，不要在文本里硬写固定工具链；由 PlanAgent 根据能力目标选工具",
                     "isRegistryInList/isRegistryOutList=true：先检查全量视频轨迹；trackCount=0 时直接验收为没有候选船舶，禁止继续查整库或调用 matchImage",
                     "trackCount>0 时才必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
                     "shouldReplanRegistryList=true → replan：复用上一轮 tracks/frames，仅补 listRegistry→matchImage",
@@ -2636,6 +2892,7 @@ def build_sea_agent_graph(
             "acceptanceProgress": acceptance_progress,
             "acceptance": acceptance_progress,
             "evidenceGap": "；".join(pending_requirements),
+            "replanDirective": replan_directive,
             "round": loop_count,
             "maxRounds": limit,
         }
@@ -2730,8 +2987,9 @@ def build_sea_agent_graph(
                 "hardReplan": True,
                 "state": "replan",
                 "decisionSource": "tool_contract_guard",
-                "reason": "本轮工具参数与后端契约不一致，已阻止重复调用并切换为确定性正确工具链",
-                "nextAction": acceptance_progress.get("nextAction") or intent.get("nextAgentFocus") or "按意图重新生成正确工具链",
+                "reason": "本轮工具参数与后端契约不一致，需要重新规划",
+                "nextAction": "修复工具参数并补全尚未满足的验收证据",
+                "nextActionSpec": replan_directive,
                 "evidenceGap": "；".join(tool_contract_failures),
             }
         # 硬兜底：模型误判 sufficient / 漏写 nextAction 时强制 replan（始终覆盖）
@@ -2742,9 +3000,10 @@ def build_sea_agent_graph(
                 "hardReplan": False,
                 "state": "replan",
                 "decisionSource": "acceptance_guard",
-                "reason": "视频轨迹为 0，尚需对照先验库确认身份/在库情况",
-                "nextAction": f"使用 getRegistry(hullNumber={hull}) 查先验库，勿重复相同 getTrack",
-                "evidenceGap": "未查询先验库",
+                "reason": "视频侧直接证据不足，仍缺少先验身份核验",
+                "nextAction": "补全先验身份核验证据",
+                "nextActionSpec": replan_directive,
+                "evidenceGap": "未完成先验身份核验",
             }
         elif membership_mode and zero_tracks and acceptance_progress.get("acceptanceSatisfied"):
             relation_label = "在库" if membership_mode == "in" else "未在库"
@@ -2771,13 +3030,10 @@ def build_sea_agent_graph(
                 "hardReplan": False,
                 "state": "replan",
                 "decisionSource": "acceptance_guard",
-                "reason": "先验库已命中且有可搜参考图，需 matchImage 对照视频关键帧",
-                "nextAction": (
-                    f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber, 全时域) → "
-                    "getFrames($ref trackIds) → matchImage(queryImages=$ref registry.registryReferences, "
-                    "galleryImages=$ref frames.keyframes)"
-                ),
-                "evidenceGap": "已有可搜库图但未做库图↔视频关键帧匹配",
+                "reason": "先验身份已有可用参考证据，但视频侧视觉核验尚未完成",
+                "nextAction": "补全视频候选、关键帧与参考图匹配证据",
+                "nextActionSpec": replan_directive,
+                "evidenceGap": "尚未完成参考图与视频证据匹配",
             }
         elif should_replan_registry_list or should_replan_registry_list_visual:
             relation_label = "在库" if membership_mode == "in" else "未在库"
@@ -2788,7 +3044,8 @@ def build_sea_agent_graph(
                 "state": "replan",
                 "decisionSource": "acceptance_guard",
                 "reason": f"{relation_label}船舶列表的验收条件尚未满足，必须进入下一轮完成全库对照",
-                "nextAction": acceptance_progress.get("nextAction"),
+                "nextAction": "补全尚未满足的验收证据",
+                "nextActionSpec": replan_directive,
                 "evidenceGap": "；".join(acceptance_progress.get("pendingRequirements") or []),
             }
         elif (
@@ -2914,10 +3171,19 @@ def build_sea_agent_graph(
                 "hardReplan": False,
                 "state": "replan",
                 "decisionSource": "acceptance_guard",
-                "reason": "库有可搜参考图但尚未 matchImage，不能直接结束",
-                "nextAction": f"getRegistry(hullNumber={hull}) → getTrack(不带hullNumber) → getFrames → matchImage",
-                "evidenceGap": "未做库图↔视频关键帧匹配",
+                "reason": "存在可用先验参考证据，但视频视觉核验尚未完成，不能直接结束",
+                "nextAction": "补全视频视觉核验证据",
+                "nextActionSpec": replan_directive,
+                "evidenceGap": "尚未完成参考图与视频证据匹配",
             }
+
+        if handoff.get("handoff") == "plan" or handoff.get("replan") or str(handoff.get("state") or "") == "replan":
+            handoff["nextActionSpec"] = _merge_replan_directives(
+                replan_directive,
+                handoff.get("nextActionSpec"),
+            )
+            if not str(handoff.get("nextAction") or "").strip():
+                handoff["nextAction"] = "补全尚未满足的验收证据"
 
         handoff.setdefault("decisionSource", "model")
         handoff["acceptanceProgress"] = acceptance_progress
@@ -2946,6 +3212,7 @@ def build_sea_agent_graph(
             "state": reflect_state,
             "evidenceGap": handoff.get("evidenceGap"),
             "nextAction": handoff.get("nextAction"),
+            "nextActionSpec": handoff.get("nextActionSpec"),
             "nextRound": loop_count + 1 if reflect_state == "replan" and loop_count < limit else None,
             "decisionSource": handoff.get("decisionSource"),
             "acceptanceGoal": acceptance_progress.get("goal"),
@@ -2998,6 +3265,7 @@ def build_sea_agent_graph(
                             "state": "uncertain",
                             "reason": f"已达最大轮次 {limit}，仍要求 replan",
                             "nextAction": handoff.get("nextAction"),
+                            "nextActionSpec": handoff.get("nextActionSpec") or replan_directive,
                             "evidenceGap": handoff.get("evidenceGap"),
                             "acceptanceProgress": acceptance_progress,
                             "decisionSource": handoff.get("decisionSource"),
@@ -3017,6 +3285,7 @@ def build_sea_agent_graph(
                         "state": "replan",
                         "reason": handoff.get("reason") or "需要补充证据",
                         "nextAction": handoff.get("nextAction"),
+                        "nextActionSpec": handoff.get("nextActionSpec") or replan_directive,
                         "evidenceGap": handoff.get("evidenceGap"),
                         "hardReplan": bool(handoff.get("hardReplan")),
                         "acceptanceProgress": acceptance_progress,
@@ -3042,6 +3311,7 @@ def build_sea_agent_graph(
                     "state": final_state,
                     "reason": final_reason,
                     "answerHint": handoff.get("answerHint"),
+                    "nextActionSpec": handoff.get("nextActionSpec") or {},
                     "evidenceGap": handoff.get("evidenceGap"),
                     "acceptanceProgress": acceptance_progress,
                     "decisionSource": handoff.get("decisionSource"),

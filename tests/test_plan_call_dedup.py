@@ -68,15 +68,57 @@ def test_duplicates_do_not_consume_call_budget_before_useful_steps():
     assert [call["tool"] for call in sanitized] == ["getTrack", "getRegistry"]
 
 
-def test_registry_acceptance_hint_generates_only_registry_lookup():
+def test_registry_capability_directive_generates_only_registry_lookup():
     calls = _default_plan_calls(
         _hull_intent(),
         top_k=5,
         broad_match_top_k=0,
-        replan_hint="使用 getRegistry(hullNumber=大鱼01) 查先验库，勿重复相同 getTrack",
+        replan_hint="界面摘要可能错误建议重复 getTrack，但不得参与能力判断",
+        replan_directive={
+            "requiredCapabilities": ["registry_lookup"],
+            "target": {"kind": "hull", "hullNumber": "大鱼01"},
+        },
     )
 
     assert calls == [{"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": "大鱼01"}}]
+
+
+def test_image_matching_directive_refetches_full_tracks_when_cached_page_is_partial():
+    calls = _default_plan_calls(
+        {
+            "operation": "list",
+            "targetScope": "both",
+            "targetKind": "all",
+            "registryRelation": "out",
+            "questionType": "registry_out_list",
+        },
+        top_k=5,
+        broad_match_top_k=0,
+        replan_hint="继续完成证据核验",
+        replan_directive={
+            "requiredCapabilities": ["track_retrieval", "keyframe_retrieval", "image_matching"],
+            "target": {"kind": "all", "scope": "both", "operation": "list"},
+        },
+        working_scope={
+            "tracks": {
+                "ok": True,
+                "trackIds": list(range(60)),
+                "returnedTrackCount": 60,
+                "totalTrackCount": 100,
+            },
+            "frames": {"ok": True, "keyframes": [{"keyframeId": "partial-frame"}]},
+            "registry": {
+                "ok": True,
+                "registryItems": [{"registryId": "registry-1"}],
+                "registryReferences": [{"referenceId": "reference-1"}],
+            },
+        },
+    )
+
+    assert [call["tool"] for call in calls] == ["getTrack", "getFrames", "matchImage"]
+    assert calls[0]["arguments"] == {"offset": 0, "limit": 0}
+    assert calls[1]["arguments"]["trackIds"] == {"$ref": "tracks.trackIds"}
+    assert calls[2]["arguments"]["topK"] == 0
 
 
 def test_hull_visual_replan_reuses_registry_and_runs_one_full_match():

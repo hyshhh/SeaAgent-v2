@@ -33,10 +33,11 @@ def role_system_prompt(
         work_style = (
             "## 工作方式\n"
             "- 你只负责规划，不执行业务检索工具。\n"
-            "- 先核对本轮已启用技能、acceptanceProgress、completedCalls 与 workingScopeKeys。\n"
+            "- 先核对本轮已启用技能、acceptanceProgress、replanDirective、completedCalls 与 workingScopeKeys。\n"
             "- 若当前规则仍不足，可调用一次 loadSkill 读取最相关的可选技能；禁止重复读取同一技能或无目的空转。\n"
             "- 随后必须调用 handoff_to_observe(goal, calls, planHint)；确实无法形成计划时才调用 handoff_to_reflect。\n"
-            "- calls 用 $ref 串联并复用已有结果；简体中文写 goal/planHint。\n"
+            "- 根据 replanDirective.requiredCapabilities 自主选择工具，calls 用 $ref 串联并复用已有结果。\n"
+            "- 禁止重复 completedCalls 中已成功且参数等价的调用；只有输入范围变化时才允许再次调用。\n"
             "- 禁止只输出 JSON 正文而不调用移交工具。\n"
         )
     elif agent_key == "observe_agent":
@@ -54,7 +55,7 @@ def role_system_prompt(
             "- 先审计 acceptanceProgress 与本轮证据；规则不足时最多调用一次 loadSkill，禁止重复读取同一技能。\n"
             "- pendingRequirements 非空且未达轮次上限时，立即调用 handoff_to_plan_replan。\n"
             "- 只有 acceptanceSatisfied=true，或继续检索已无收益时，才允许调用 handoff_finish。\n"
-            "- nextAction 必须是 PlanAgent 可直接执行的最小工具链，并明确复用哪些已有结果。\n"
+            "- replan 时必须同时给出结构化 nextActionSpec：声明缺失能力、目标参数和可复用证据；nextAction 只作界面摘要。\n"
             "- 禁止在移交工具调用前输出正文、草稿、英文推理或重复复述输入。\n"
             "- 每轮只能调用一个移交工具；reason、nextAction 使用简短中文，禁止无目的空转。\n"
         )

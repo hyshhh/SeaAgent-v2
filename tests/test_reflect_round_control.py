@@ -368,7 +368,7 @@ def test_registry_out_synthesis_does_not_show_full_registry_when_video_has_no_tr
     assert "未检测到船舶轨迹" in result["conclusion"]
 
 
-def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_models_fail():
+def test_reflect_stages_registry_out_query_without_repeating_completed_calls():
     fields = _out_fields()
 
     class _FakeAgent:
@@ -468,8 +468,8 @@ def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_mode
             broad_match_top_k=0,
         )
 
-    assert state["loop_count"] == 2
-    assert len(state["rounds"]) == 2
+    assert state["loop_count"] == 3
+    assert len(state["rounds"]) == 3
     assert state["final_state"] == "sufficient"
     assert state["tool_chain"] == [
         "getTrack", "getFrames", "listRegistry", "matchImage"
@@ -479,7 +479,7 @@ def test_reflect_drives_registry_out_query_into_a_second_round_when_handoff_mode
         if record.get("tool") in {"getTrack", "getFrames", "listRegistry", "matchImage"}
     ]
     assert [(record["tool"], record["round"]) for record in business_records] == [
-        ("getTrack", 1), ("getFrames", 1), ("listRegistry", 2), ("matchImage", 2)
+        ("getTrack", 1), ("getFrames", 1), ("listRegistry", 2), ("matchImage", 3)
     ]
     assert state["reflection"]["acceptanceProgress"]["acceptanceSatisfied"] is True
 
