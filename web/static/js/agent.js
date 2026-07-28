@@ -435,6 +435,65 @@ function dedupTrackIds(group) {
   return (group?.trackIds || group?.mergedTrackIds || []).map((item) => String(item));
 }
 
+function countEvidenceTime(value) {
+  if (value === null || value === undefined || value === '') return 'Time unavailable';
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? formatMonitorTime(numeric) : String(value);
+}
+
+function countMergeStateLabel(state) {
+  return ({confirmed: 'Confirmed merge', pending: 'Candidate merge', independent: 'Independent track'})[state] || 'Counted track';
+}
+
+function countMergeStateClass(state) {
+  return ({confirmed: 'confirmed', pending: 'pending', independent: 'independent'})[state] || 'independent';
+}
+
+function normalizedCountEvidence(result) {
+  const evidence = result?.countEvidence;
+  if (Array.isArray(evidence?.vesselUnits) && evidence.vesselUnits.length) return evidence;
+  const rawTracks = Array.isArray(result?.tracks) ? result.tracks : [];
+  return {
+    basis: 'confirmed',
+    minimumShipCount: Number(result?.count),
+    confirmedShipCount: Number(result?.confirmedCount ?? result?.count),
+    evidenceUnitCount: rawTracks.length,
+    coverageComplete: rawTracks.length === Number(result?.count),
+    vesselUnits: rawTracks.map((track, index) => ({
+      unitId: `vessel-${index + 1}`,
+      trackIds: [String(track?.trackId ?? index + 1)],
+      tracks: [track || {}],
+      mergeState: 'independent',
+    })),
+  };
+}
+
+function countUnitTracks(unit) {
+  const members = Array.isArray(unit?.tracks) && unit.tracks.length
+    ? unit.tracks
+    : (unit?.trackIds || []).map((trackId) => ({trackId}));
+  return members.map((member) => {
+    const trackId = member?.trackId ?? '—';
+    const start = countEvidenceTime(member?.startTime ?? member?.start_time);
+    const end = countEvidenceTime(member?.endTime ?? member?.end_time);
+    return `<div class="count-evidence-track"><strong>Track ${escapeHtml(trackId)}</strong><span>${escapeHtml(start)} — ${escapeHtml(end)}</span></div>`;
+  }).join('');
+}
+
+function countUnitDecision(unit) {
+  const score = Number(unit?.minimumScore);
+  const current = Array.isArray(unit?.currentGroups) && unit.currentGroups.length
+    ? `<small>from ${escapeHtml(unit.currentGroups.map((group) => `[${(group || []).join(' + ')}]`).join(' + '))}</small>`
+    : '';
+  return `<div class="count-evidence-decision"><em class="count-evidence-state ${countMergeStateClass(unit?.mergeState)}">${countMergeStateLabel(unit?.mergeState)}</em>${Number.isFinite(score) ? `<span>Similarity ${score.toFixed(3)}</span>` : ''}${current}</div>`;
+}
+
+function countEvidenceResultRow(unit, index) {
+  const trackIds = (unit?.trackIds || []).map((item) => String(item));
+  const title = trackIds.length ? `Vessel ${index + 1} · Tracks ${trackIds.join(' + ')}` : `Vessel ${index + 1}`;
+  return `<div class="classified-result-row dedup-result-row count-result-row"><strong>${escapeHtml(title)}</strong><span>${countUnitTracks(unit)}${countUnitDecision(unit)}</span></div>`;
+}
+
 function dedupResultRow(group, kind) {
   const trackIds = dedupTrackIds(group);
   const score = Number(group?.minimumScore);
@@ -453,14 +512,23 @@ function dedupResultRow(group, kind) {
 function renderDedupResults(result) {
   const summary = result?.dedupSummary;
   if (!summary || result?.operation !== 'count') return '';
+  const countEvidence = normalizedCountEvidence(result);
+  const units = countEvidence.vesselUnits || [];
   const confirmed = Array.isArray(summary.confirmedMergeGroups) ? summary.confirmedMergeGroups : [];
   const pending = Array.isArray(summary.pendingMergeGroups) ? summary.pendingMergeGroups : [];
+  const unitRows = units.map(countEvidenceResultRow).join('');
   const confirmedRows = confirmed.map((item) => dedupResultRow(item, 'confirmed')).join('');
   const pendingRows = pending.map((item) => dedupResultRow(item, 'pending')).join('');
+  const countLabel = countEvidence.basis === 'minimum' ? 'Minimum counted vessels' : 'Counted vessels';
+  const coverage = countEvidence.coverageComplete === false
+    ? '<em class="count-evidence-warning">Displayed units do not yet cover the reported count</em>'
+    : '';
   return `<section class="answer-classification dedup-classification">
+    <div class="dedup-count-strip"><strong>${escapeHtml(countLabel)}: ${units.length}</strong><span>Each unit lists the trajectory IDs and observed time interval used for counting.</span>${coverage}</div>
+    <section class="answer-result-group count-vessel-ledger"><header><div><strong>Counted Vessel Ledger</strong><span>Trajectory and time evidence for every vessel unit in the reported count</span></div><em>${units.length} units</em></header><div class="answer-result-list">${unitRows || '<div class="answer-result-empty">No trajectory-time evidence available</div>'}</div></section>
     <div class="answer-result-groups">
-      <section class="answer-result-group confirmed"><header><div><strong>Confirmed Merge Groups</strong><span>High-threshold groups representing the same vessel</span></div><em>${confirmed.length} groups</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed duplicate trajectories</div>'}</div></section>
-      <section class="answer-result-group pending"><header><div><strong>Pending Merge Groups</strong><span>Requires keyframe review before minimum-count confirmation</span></div><em>${pending.length} groups</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No pending merge groups</div>'}</div></section>
+      <section class="answer-result-group confirmed"><header><div><strong>Confirmed Merges</strong><span>High-threshold trajectories already consolidated as one vessel</span></div><em>${confirmed.length} groups</em></header><div class="answer-result-list">${confirmedRows || '<div class="answer-result-empty">No confirmed duplicate trajectories</div>'}</div></section>
+      <section class="answer-result-group pending"><header><div><strong>Candidate Merges</strong><span>Low-threshold relation included only in the minimum-count estimate</span></div><em>${pending.length} groups</em></header><div class="answer-result-list">${pendingRows || '<div class="answer-result-empty">No candidate merge groups</div>'}</div></section>
     </div>
   </section>`;
 }
@@ -777,22 +845,64 @@ function dedupEvidenceGroup(group, index) {
   </article>`;
 }
 
-function renderDedupEvidence(container, resultCount, groups, emptyText) {
+function countEvidenceUnitMedia(unit) {
+  const members = Array.isArray(unit?.tracks) ? unit.tracks : [];
+  const cards = members.map((member) => {
+    const trackId = String(member?.trackId ?? '—');
+    return member?.keyframeId
+      ? evidenceCard(evidenceItem('keyframe', member.keyframeId, trackId, {label: `Track ${trackId} · Count Evidence Keyframe`}))
+      : '';
+  }).filter(Boolean);
+  return cards.length ? cards.join('') : '<div class="count-evidence-no-frame">Trajectory time record available<br>No representative keyframe</div>';
+}
+
+function countEvidenceUnitRow(unit, index) {
+  const tracks = (unit?.trackIds || []).map((item) => String(item));
+  return `<article class="count-evidence-unit ${countMergeStateClass(unit?.mergeState)}">
+    <div class="count-evidence-unit-index"><span>Vessel</span><strong>${index + 1}</strong></div>
+    <div class="count-evidence-unit-tracks"><header><strong>Tracks ${escapeHtml(tracks.join(' + ') || '—')}</strong>${countUnitDecision(unit)}</header>${countUnitTracks(unit)}</div>
+    <div class="count-evidence-unit-media">${countEvidenceUnitMedia(unit)}</div>
+  </article>`;
+}
+
+function renderDedupEvidence(container, resultCount, groups, emptyText, result = null) {
+  const countEvidence = normalizedCountEvidence(result);
+  const allUnits = Array.isArray(countEvidence.vesselUnits) ? countEvidence.vesselUnits : [];
+  const units = limitEvidenceItems(allUnits);
   const confirmedAll = groups.filter((group) => group?.groupType === 'confirmed');
   const pendingAll = groups.filter((group) => group?.groupType === 'pending');
   const confirmed = limitEvidenceItems(confirmedAll);
   const pending = limitEvidenceItems(pendingAll);
+  const rawTrackCount = Array.isArray(countEvidence.rawTracks)
+    ? countEvidence.rawTracks.length
+    : new Set(allUnits.flatMap((unit) => unit?.trackIds || [])).size;
   if (resultCount) {
-    resultCount.textContent = `${confirmedAll.length} confirmed groups · ${pendingAll.length} pending groups`;
+    resultCount.textContent = `${allUnits.length} counted vessel units · ${rawTrackCount} raw tracks`;
   }
   const section = (kind, title, subtitle, rows, total) => `<section class="dedup-evidence-section ${kind}">
     <header><div><strong>${title}</strong><span>${subtitle}</span></div><em>${rows.length === total ? total : `${rows.length}/${total}`} groups</em></header>
     <div class="dedup-evidence-section-body">${rows.length ? rows.map(dedupEvidenceGroup).join('') : `<div class="dedup-evidence-empty">${escapeHtml(emptyText)}</div>`}</div>
   </section>`;
-  container.className = 'evidence-dedup-list';
-  container.innerHTML = `<div class="dedup-evidence-sections">
-    ${section('confirmed', 'Confirmed Merge Evidence', 'Keyframes exceed the high threshold and represent the same vessel', confirmed, confirmedAll.length)}
-    ${section('pending', 'Pending Merge Evidence', 'Gray-zone keyframes require manual review', pending, pendingAll.length)}
+  const countBasis = countEvidence.basis === 'minimum'
+    ? `Minimum-count evidence · ${countEvidence.minimumShipCount ?? allUnits.length} vessels`
+    : `Confirmed-count evidence · ${countEvidence.confirmedShipCount ?? allUnits.length} vessels`;
+  const coverage = countEvidence.coverageComplete === false
+    ? '<em class="count-evidence-warning">Evidence groups are incomplete for the reported count</em>'
+    : '';
+  container.className = 'evidence-count-list';
+  container.innerHTML = `<div class="count-evidence-layout">
+    <section class="count-evidence-ledger">
+      <header><div><strong>Counted Vessel Evidence</strong><span>Each row is one vessel unit used in the final count, with its source tracks and observed time.</span></div><div><em>${escapeHtml(countBasis)}</em>${coverage}</div></header>
+      <div class="count-evidence-ledger-head"><span>Vessel Unit</span><span>Track and Time Evidence</span><span>Representative Keyframes</span></div>
+      <div class="count-evidence-ledger-body">${units.length ? units.map(countEvidenceUnitRow).join('') : '<div class="dedup-evidence-empty">No trajectory-time evidence is available.</div>'}</div>
+    </section>
+    <section class="count-merge-audit">
+      <header><div><strong>Merge Audit</strong><span>Shows exactly which trajectories were confirmed or tentatively merged.</span></div><em>${confirmedAll.length + pendingAll.length} relations</em></header>
+      <div class="dedup-evidence-sections">
+        ${section('confirmed', 'Confirmed Merge Evidence', 'High-threshold relations already merged into the count', confirmed, confirmedAll.length)}
+        ${section('pending', 'Candidate Merge Evidence', 'Gray-zone relations used only for the minimum estimate', pending, pendingAll.length)}
+      </div>
+    </section>
   </div>`;
 }
 
@@ -805,7 +915,7 @@ function renderEvidence(evidence, displayGroups, emptyText = 'No evidence availa
   visibleEvidenceVideos.clear();
   const groups = sortEvidenceGroups(displayGroups || []);
   if (result?.operation === 'count' && result?.dedupSummary) {
-    renderDedupEvidence(container, resultCount, groups, 'No trajectory merge relation is available.');
+    renderDedupEvidence(container, resultCount, groups, 'No trajectory merge relation is available.', result);
     return;
   }
   const registryOnly = result?.targetScope === 'registry';

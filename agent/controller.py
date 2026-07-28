@@ -178,9 +178,10 @@ class AgentController:
                     )
                     if dedup_summary.get(key) is not None
                 }
+                count_evidence = self._build_count_evidence(dedup_summary, tracks)
                 return self._finish(
                     conclusion,
-                    tracks[: self.display_limit],
+                    tracks,
                     answer_text,
                     state,
                     extra={
@@ -191,13 +192,14 @@ class AgentController:
                         "confirmedMergeGroups": confirmed_groups,
                         "pendingMergeGroups": pending_groups,
                         "dedupSummary": public_dedup,
+                        "countEvidence": count_evidence,
                         "planMode": "langgraph",
                     },
                     display={"dedupSummary": public_dedup, "tracks": tracks},
                 )
             return self._finish(
                 f"统计结果为 {count_value}",
-                tracks[: self.display_limit],
+                tracks,
                 answer_hint,
                 state,
                 extra={"count": count_value, "planMode": "langgraph"},
@@ -1043,6 +1045,135 @@ class AgentController:
             if isinstance(groups, list) and groups:
                 return len(groups)
         return None
+
+    @staticmethod
+    def _count_evidence_track(track_id: str, track: dict[str, Any]) -> dict[str, Any]:
+        """构造前端统计台账所需的最小轨迹时间证据。"""
+        start_time = track.get("startTime") if track.get("startTime") is not None else track.get("start_time")
+        end_time = track.get("endTime") if track.get("endTime") is not None else track.get("end_time")
+        record: dict[str, Any] = {
+            "trackId": str(track_id),
+            "startTime": start_time,
+            "endTime": end_time,
+        }
+        for key in ("hullNumber", "finalHullNumber", "shipSegmentIds", "keyframeIds"):
+            if track.get(key) is not None:
+                record[key] = track.get(key)
+        return record
+
+    def _build_count_evidence(
+        self,
+        dedup_summary: dict[str, Any],
+        tracks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """将去重结果转换为“最终计数船舶单元 → 原始轨迹与时间”的可审计证据。
+
+        这里不基于问题文本推断展示路径，只消费 dedupTracks 返回的 high/low groups。
+        低阈值分组对应最小船数，便于回答“至少多少艘”时逐一列出每个计数单元；
+        确认和灰区合并关系则作为独立的审计字段保留。
+        """
+        def _groups(value: Any) -> list[list[str]]:
+            return [
+                [str(track_id) for track_id in group if track_id is not None]
+                for group in (value or [])
+                if isinstance(group, list) and group
+            ]
+
+        by_id = {
+            str(item.get("trackId")): dict(item)
+            for item in tracks
+            if isinstance(item, dict) and item.get("trackId") is not None
+        }
+        high_groups = _groups(dedup_summary.get("highGroups"))
+        low_groups = _groups(dedup_summary.get("lowGroups")) or list(high_groups)
+        confirmed_groups = [item for item in (dedup_summary.get("confirmedMergeGroups") or []) if isinstance(item, dict)]
+        pending_groups = [item for item in (dedup_summary.get("pendingMergeGroups") or []) if isinstance(item, dict)]
+
+        def _index_groups(groups: list[dict[str, Any]]) -> dict[frozenset[str], dict[str, Any]]:
+            indexed: dict[frozenset[str], dict[str, Any]] = {}
+            for item in groups:
+                track_ids = frozenset(str(track_id) for track_id in (item.get("trackIds") or []) if track_id is not None)
+                if track_ids:
+                    indexed[track_ids] = item
+            return indexed
+
+        frame_by_track: dict[str, str] = {}
+        for value in (getattr(self, "working_scope", {}) or {}).values():
+            if not isinstance(value, dict):
+                continue
+            grouped = value.get("keyframesByTrack")
+            if not isinstance(grouped, dict):
+                continue
+            for raw_track_id, bucket in grouped.items():
+                frames = bucket.get("keyframes") if isinstance(bucket, dict) else bucket
+                if not isinstance(frames, list):
+                    continue
+                best = max(
+                    (item for item in frames if isinstance(item, dict) and item.get("keyframeId") is not None),
+                    key=lambda item: float(item.get("retentionScore") or 0),
+                    default=None,
+                )
+                if best:
+                    frame_by_track[str(raw_track_id)] = str(best["keyframeId"])
+
+        def _member(track_id: str) -> dict[str, Any]:
+            record = self._count_evidence_track(track_id, by_id.get(track_id, {}))
+            if track_id in frame_by_track:
+                record["keyframeId"] = frame_by_track[track_id]
+            return record
+
+        confirmed_by_tracks = _index_groups(confirmed_groups)
+        pending_by_tracks = _index_groups(pending_groups)
+        high_sets = {frozenset(group) for group in high_groups}
+        units: list[dict[str, Any]] = []
+        covered_ids: set[str] = set()
+        for index, track_ids in enumerate(low_groups, start=1):
+            track_set = frozenset(track_ids)
+            covered_ids.update(track_set)
+            pending = pending_by_tracks.get(track_set)
+            confirmed = confirmed_by_tracks.get(track_set)
+            if pending:
+                merge_state = "pending"
+                merge_source = pending
+            elif confirmed or (len(track_set) > 1 and track_set in high_sets):
+                merge_state = "confirmed"
+                merge_source = confirmed or {}
+            else:
+                merge_state = "independent"
+                merge_source = {}
+            unit = {
+                "unitId": f"vessel-{index}",
+                "trackIds": track_ids,
+                "tracks": [_member(track_id) for track_id in track_ids],
+                "mergeState": merge_state,
+                "mergeGroupId": merge_source.get("groupId"),
+                "minimumScore": merge_source.get("minimumScore"),
+                "currentGroups": merge_source.get("currentGroups") or [],
+            }
+            units.append({key: value for key, value in unit.items() if value not in (None, [])})
+
+        # 防止工具返回的分组遗漏已检出的轨迹；遗漏项必须单列，不能静默从计数证据中消失。
+        for track_id, track in by_id.items():
+            if track_id in covered_ids:
+                continue
+            units.append({
+                "unitId": f"vessel-{len(units) + 1}",
+                "trackIds": [track_id],
+                "tracks": [_member(track_id)],
+                "mergeState": "independent",
+            })
+
+        minimum_count = int(dedup_summary.get("minimumShipCount", len(units)))
+        confirmed_count = int(dedup_summary.get("confirmedShipCount", minimum_count))
+        return {
+            "basis": "minimum" if minimum_count < confirmed_count else "confirmed",
+            "minimumShipCount": minimum_count,
+            "confirmedShipCount": confirmed_count,
+            "evidenceUnitCount": len(units),
+            "coverageComplete": len(units) == minimum_count,
+            "vesselUnits": units,
+            "rawTracks": [_member(track_id) for track_id in by_id],
+        }
 
     @staticmethod
     def _tracks_from_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -240,6 +240,72 @@ class EvidenceDisplayTest(unittest.TestCase):
         self.assertNotIn("clipTrackId", result["displayGroups"][0])
 
 
+    def test_count_evidence_lists_every_vessel_unit_with_tracks_times_and_merge_state(self):
+        controller = AgentController.__new__(AgentController)
+        controller.tools = _DisplayTools()
+        controller.meta = {"questionType": "count", "operation": "count"}
+        controller.session_id = "session-count-ledger"
+        controller.question = "这个时间段一共出现多少艘船？"
+        controller.rounds = []
+        controller.tool_chain = []
+        controller.tool_records = []
+        controller.display_record = None
+        controller.display_groups = []
+        controller.display_limit = 2
+        controller.event_handler = None
+        track_ids = ("17", "19", "21", "22", "23", "24")
+        controller.working_scope = {
+            "tracks": {
+                "tracks": [
+                    {"trackId": track_id, "startTime": index * 10 + 1, "endTime": index * 10 + 8}
+                    for index, track_id in enumerate(track_ids)
+                ]
+            },
+            "frames": {
+                "keyframesByTrack": {
+                    track_id: {"keyframes": [{"keyframeId": f"frame-{track_id}", "retentionScore": 0.9}]}
+                    for track_id in track_ids
+                }
+            },
+            "dedup": {
+                "trackCount": 6,
+                "minimumShipCount": 4,
+                "confirmedShipCount": 5,
+                "highGroups": [["21", "22"], ["17"], ["19"], ["23"], ["24"]],
+                "lowGroups": [["21", "22"], ["17", "19"], ["23"], ["24"]],
+                "confirmedMergeGroups": [
+                    {"groupId": "confirmed-1", "trackIds": ["21", "22"], "minimumScore": 0.907}
+                ],
+                "pendingMergeGroups": [
+                    {
+                        "groupId": "pending-1",
+                        "trackIds": ["17", "19"],
+                        "currentGroups": [["17"], ["19"]],
+                        "minimumScore": 0.810,
+                    }
+                ],
+            },
+        }
+
+        result = controller._synthesize("sufficient", "去重完成")
+
+        self.assertEqual(len(result["tracks"]), 6)
+        ledger = result["countEvidence"]
+        self.assertEqual(ledger["minimumShipCount"], 4)
+        self.assertEqual(ledger["evidenceUnitCount"], 4)
+        self.assertTrue(ledger["coverageComplete"])
+        self.assertEqual([unit["trackIds"] for unit in ledger["vesselUnits"]], [
+            ["21", "22"], ["17", "19"], ["23"], ["24"]
+        ])
+        self.assertEqual([unit["mergeState"] for unit in ledger["vesselUnits"]], [
+            "confirmed", "pending", "independent", "independent"
+        ])
+        self.assertEqual(ledger["vesselUnits"][0]["tracks"][0]["startTime"], 21)
+        self.assertEqual(ledger["vesselUnits"][0]["tracks"][0]["keyframeId"], "frame-21")
+        self.assertEqual(ledger["vesselUnits"][1]["tracks"][1]["endTime"], 18)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
