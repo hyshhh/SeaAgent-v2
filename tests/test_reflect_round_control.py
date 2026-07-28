@@ -556,6 +556,145 @@ def test_reflect_finishes_registry_out_query_in_first_round_when_video_has_no_tr
     assert "无需查询整库" in state["final_reason"] or "没有未在库船舶" in state["final_reason"]
 
 
+
+def test_hull_existence_acceptance_guard_uses_three_non_repeating_rounds():
+    clear_target_parser_cache()
+    fields = infer_intent_fields("大鱼01 有没有在视频中出现？")
+    executed = []
+
+    def _handoff_messages(tool_name, args, payload, call_id):
+        return [
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": tool_name,
+                    "args": args,
+                    "id": call_id,
+                    "type": "tool_call",
+                }],
+            ),
+            ToolMessage(
+                content=json.dumps(payload, ensure_ascii=False),
+                tool_call_id=call_id,
+                name=tool_name,
+            ),
+        ]
+
+    class _FakeAgent:
+        def __init__(self, name):
+            self.name = name
+
+        def stream(self, *args, **kwargs):
+            if self.name == "intent":
+                payload = {"ok": True, "handoff": "plan", "intent": fields, "note": ""}
+                yield "values", {"messages": _handoff_messages(
+                    "handoff_to_plan", {"intent": fields, "note": ""}, payload, "intent-hull"
+                )}
+                return
+            if self.name == "plan":
+                calls = [{
+                    "id": "exact-track",
+                    "tool": "getTrack",
+                    "arguments": {"hullNumber": "大鱼01", "offset": 0, "limit": 60},
+                }]
+                payload = {
+                    "ok": True,
+                    "handoff": "observe",
+                    "goal": "先做舷号精确查询",
+                    "calls": calls,
+                    "planHint": "先做低成本精确查询",
+                    "reason": "分阶段核验",
+                }
+                yield "values", {"messages": _handoff_messages(
+                    "handoff_to_observe",
+                    {
+                        "goal": payload["goal"],
+                        "calls": calls,
+                        "planHint": payload["planHint"],
+                        "reason": payload["reason"],
+                    },
+                    payload,
+                    "plan-hull",
+                )}
+                return
+            raise RuntimeError(f"{self.name} 模拟未移交")
+
+        def invoke(self, *args, **kwargs):
+            raise RuntimeError(f"{self.name} 模拟未移交")
+
+    class _FakeTools:
+        @staticmethod
+        def execute(name, arguments):
+            executed.append((name, dict(arguments)))
+            if name == "getTrack" and arguments.get("hullNumber"):
+                return {
+                    "ok": True, "trackIds": [], "tracks": [],
+                    "returnedTrackCount": 0, "totalTrackCount": 0,
+                }
+            if name == "getRegistry":
+                return {
+                    "ok": True,
+                    "registryItems": [{
+                        "registryId": "registry-fish-01",
+                        "hullNumber": "大鱼01",
+                        "references": [{"referenceId": "reference-fish-01"}],
+                    }],
+                    "registryReferences": [{"referenceId": "reference-fish-01"}],
+                }
+            if name == "getTrack":
+                return {
+                    "ok": True,
+                    "trackIds": [1, 2],
+                    "tracks": [{"trackId": 1}, {"trackId": 2}],
+                    "returnedTrackCount": 2,
+                    "totalTrackCount": 2,
+                }
+            if name == "getFrames":
+                return {
+                    "ok": True,
+                    "keyframes": [
+                        {"trackId": 1, "keyframeId": "frame-1"},
+                        {"trackId": 2, "keyframeId": "frame-2"},
+                    ],
+                    "keyframeIds": ["frame-1", "frame-2"],
+                }
+            if name == "matchImage":
+                return {
+                    "ok": True,
+                    "visualAttempted": True,
+                    "scoredPairCount": 2,
+                    "matches": [{
+                        "matchedTrackId": 1,
+                        "matchedRegistryId": "registry-fish-01",
+                        "embeddingScore": 0.91,
+                        "scoreBand": "match",
+                    }],
+                }
+            raise AssertionError(name)
+
+    with patch("agent.graph.build_chat_model", return_value=object()), patch(
+        "agent.graph.create_agent", side_effect=lambda model, tools, system_prompt, name: _FakeAgent(name)
+    ):
+        state = run_sea_agent(
+            "大鱼01 有没有在视频中出现？",
+            object(),
+            _FakeTools(),
+            max_rounds=5,
+            query_top_k=5,
+            broad_match_top_k=0,
+        )
+
+    assert state["loop_count"] == 3
+    assert state["final_state"] == "sufficient"
+    assert [name for name, _ in executed] == [
+        "getTrack", "getRegistry", "getTrack", "getFrames", "matchImage"
+    ]
+    assert executed[0][1]["hullNumber"] == "大鱼01"
+    assert "hullNumber" not in executed[2][1]
+    assert executed[2][1]["limit"] == 0
+    assert executed[4][1]["topK"] == 0
+    assert sum(1 for name, _ in executed if name == "matchImage") == 1
+
 def test_hull_existence_synthesis_returns_all_confirmed_and_gray_zone_tracks_with_thresholds():
     controller = AgentController.__new__(AgentController)
     controller.meta = {

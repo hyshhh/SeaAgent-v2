@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 
@@ -809,27 +810,105 @@ class PlanExecutor:
         return summary
 
     @staticmethod
+    def _rewrite_call_refs(value: Any, aliases: dict[str, str]) -> Any:
+        """把被去重步骤的引用改写到实际保留的步骤，避免后续依赖失效。"""
+        if isinstance(value, list):
+            return [PlanExecutor._rewrite_call_refs(item, aliases) for item in value]
+        if not isinstance(value, dict):
+            return value
+        rewritten: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"$ref", "ref"} and isinstance(item, str):
+                head, separator, tail = item.partition(".")
+                target = aliases.get(head, head)
+                rewritten[key] = f"{target}{separator}{tail}" if separator else target
+            else:
+                rewritten[key] = PlanExecutor._rewrite_call_refs(item, aliases)
+        return rewritten
+
+    @staticmethod
+    def _call_signature(tool: str, arguments: dict[str, Any]) -> str:
+        """生成工具调用的语义签名；只影响去重，不改实际执行参数。"""
+        normalized = dict(arguments)
+        if tool == "getTrack":
+            # 后端缺省 offset 即 0，显式与隐式写法应视为同一次查询。
+            normalized.setdefault("offset", 0)
+        elif tool == "getRegistry":
+            normalized["hullNumber"] = str(normalized.get("hullNumber") or "").strip()
+        elif tool == "matchImage":
+            # 同一批图像不能仅因 topK 不同就重复完成昂贵的向量匹配。
+            normalized.pop("topK", None)
+
+        unordered_keys = {
+            "trackIds", "queryImages", "galleryImages", "registryItems", "hullNumberArray",
+        }
+
+        def canonical(value: Any, key: str = "") -> Any:
+            if isinstance(value, dict):
+                return {
+                    str(child_key): canonical(child_value, str(child_key))
+                    for child_key, child_value in sorted(value.items(), key=lambda pair: str(pair[0]))
+                }
+            if isinstance(value, list):
+                items = [canonical(item) for item in value]
+                if key in unordered_keys:
+                    return sorted(
+                        items,
+                        key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str),
+                    )
+                return items
+            return value
+
+        payload = canonical(normalized)
+        return f"{tool}:{json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)}"
+
+    @staticmethod
     def sanitize_calls(calls: Any, *, max_calls: int = 8) -> list[dict[str, Any]]:
         if not isinstance(calls, list):
             return []
         cleaned: list[dict[str, Any]] = []
         used: set[str] = set()
-        for index, item in enumerate(calls[:max_calls]):
+        aliases: dict[str, str] = {}
+        signatures: dict[str, int] = {}
+        for index, item in enumerate(calls):
             if not isinstance(item, dict):
                 continue
             tool = str(item.get("tool") or "").strip()
             if not tool:
                 continue
-            call_id = str(item.get("id") or f"step-{index + 1}").strip() or f"step-{index + 1}"
+            requested_id = str(item.get("id") or f"step-{index + 1}").strip() or f"step-{index + 1}"
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            arguments = PlanExecutor._rewrite_call_refs(arguments, aliases)
+            condition = item.get("condition") if isinstance(item.get("condition"), dict) else None
+            condition = PlanExecutor._rewrite_call_refs(condition, aliases) if condition else None
+            signature = PlanExecutor._call_signature(tool, arguments)
+            if signature in signatures:
+                kept_index = signatures[signature]
+                aliases[requested_id] = str(cleaned[kept_index]["id"])
+                # 后出现的重复调用若带有依赖条件，则补到保留项上，避免空依赖仍被执行。
+                if condition and "condition" not in cleaned[kept_index]:
+                    cleaned[kept_index]["condition"] = condition
+                continue
+            if len(cleaned) >= max_calls:
+                break
+
+            call_id = requested_id
             base = call_id
             n = 1
             while call_id in used:
                 n += 1
                 call_id = f"{base}-{n}"
             used.add(call_id)
-            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            aliases[requested_id] = call_id
             entry: dict[str, Any] = {"id": call_id, "tool": tool, "arguments": arguments}
-            if isinstance(item.get("condition"), dict):
-                entry["condition"] = item["condition"]
+            if condition:
+                entry["condition"] = condition
+            signatures[signature] = len(cleaned)
             cleaned.append(entry)
+
+        # 再处理一次前向引用或后续才发现的别名。
+        for entry in cleaned:
+            entry["arguments"] = PlanExecutor._rewrite_call_refs(entry.get("arguments") or {}, aliases)
+            if isinstance(entry.get("condition"), dict):
+                entry["condition"] = PlanExecutor._rewrite_call_refs(entry["condition"], aliases)
         return cleaned
