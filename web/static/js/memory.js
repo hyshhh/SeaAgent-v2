@@ -33,14 +33,15 @@ function renderTrackMemory(payload) {
     const hull = track.finalHullNumber || '无稳定舷号';
     const frames = `${track.embeddedKeyframeCount || 0}/${track.keyframeCount || 0}`;
     const stateClass = track.memoryState === '已完成' ? 'done' : 'building';
+    const description = escapeMemoryText(track.finalDescription || '暂无稳定描述');
     return `<tr>
       <td><strong class="memory-track-id">${escapeMemoryText(track.trackId)}</strong></td>
-      <td>${formatMemoryTime(track.startTime)} — ${formatMemoryTime(track.endTime)}</td>
-      <td>${escapeMemoryText(hull)}</td>
+      <td class="memory-time-range">${formatMemoryTime(track.startTime)}<span>—</span>${formatMemoryTime(track.endTime)}</td>
+      <td class="memory-hull">${escapeMemoryText(hull)}</td>
       <td><span class="memory-state ${escapeMemoryText(track.finalMatchType)}">${escapeMemoryText(memoryMatchLabel(track.finalMatchType))}</span></td>
       <td><span class="memory-frame-count">${frames}</span><small>已向量/总数</small></td>
       <td><span class="memory-state ${stateClass}">${escapeMemoryText(track.memoryState)}</span></td>
-      <td class="memory-description">${escapeMemoryText(track.finalDescription || '暂无稳定描述')}</td>
+      <td class="memory-description" title="${description}"><div class="memory-description-text">${description}</div></td>
     </tr>`;
   }).join('');
 }
@@ -48,12 +49,12 @@ function renderTrackMemory(payload) {
 async function loadTrackMemory(silent = false) {
   const state = document.getElementById('memoryRefreshState');
   try {
-    if (!silent) state.textContent = '正在刷新…';
+    if (!silent) state.textContent = 'Refreshing…';
     const payload = await apiFetch('/api/memory/tracks');
     renderTrackMemory(payload);
-    state.textContent = `已更新 ${new Date().toLocaleTimeString('zh-CN', {hour12:false})}`;
+    state.textContent = `Updated ${new Date().toLocaleTimeString('zh-CN', {hour12:false})}`;
   } catch (error) {
-    state.textContent = '刷新失败';
+    state.textContent = 'Refresh failed';
     if (!silent) showToast(error.message, 'error');
   }
 }

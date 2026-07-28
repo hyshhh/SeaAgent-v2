@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=20">
+<link rel="stylesheet" href="/static/css/academic.css?v=21">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -97,27 +97,35 @@
 </section>
 <section class="tab-content" id="tab-memory">
   <div class="memory-workspace">
-    <div class="memory-page-head">
-      <div><span class="eyebrow">轨迹记忆管理</span><h2>当前轨迹表与自动维护</h2><p>跨视频保留轨迹记忆；时间范围使用真实监控时间，视频时间仅用于回放定位。</p></div>
-      <button class="btn ghost" onclick="loadTrackMemory()">刷新轨迹表</button>
-    </div>
-    <div class="memory-summary-grid">
-      <article class="memory-stat-card"><span>当前轨迹</span><strong id="memoryTrackCount">-</strong><small>条轨迹记录</small></article>
-      <article class="memory-stat-card"><span>正式关键帧</span><strong id="memoryKeyframeCount">-</strong><small>张入池图像</small></article>
-      <article class="memory-stat-card"><span>可检索关键帧</span><strong id="memoryEmbeddedCount">-</strong><small>张已完成向量</small></article>
-        <section class="memory-settings-card">
-          <div><span>记忆维护时间</span><p>轨迹消失超过设定小时数后自动删除；填 0 表示一直保留。</p></div>
-          <div class="memory-setting-row"><label><input id="memoryRetentionHours" type="number" value="0" min="0" max="24" step="0.1"><em>小时</em></label><button class="btn primary" onclick="saveMemorySettings()">保存设置</button></div>
+    <header class="memory-command-bar">
+      <div class="memory-command-title">
+        <span class="eyebrow">Trajectory Memory</span>
+        <h2>Track Table &amp; Auto Maintenance</h2>
+      </div>
+      <p class="memory-command-note" title="跨视频保留轨迹记忆；时间范围使用真实监控时间，视频时间仅用于回放定位。">跨视频保留轨迹记忆；时间范围使用真实监控时间，视频时间仅用于回放定位。</p>
+      <div class="memory-inline-stats" aria-label="Trajectory memory summary">
+        <article class="memory-stat-card"><span>Active Tracks</span><strong id="memoryTrackCount">-</strong><small>条轨迹记录</small></article>
+        <article class="memory-stat-card"><span>Keyframes</span><strong id="memoryKeyframeCount">-</strong><small>张入池图像</small></article>
+        <article class="memory-stat-card"><span>Searchable</span><strong id="memoryEmbeddedCount">-</strong><small>张可检索图像</small></article>
+      </div>
+      <section class="memory-retention-control" title="轨迹消失超过设定小时数后自动删除；填 0 表示一直保留。">
+        <span>Retention</span>
+        <div class="memory-setting-row"><label><input id="memoryRetentionHours" type="number" value="0" min="0" max="24" step="0.1" aria-label="Memory retention hours"><em>Hours</em></label><button class="btn primary btn-sm" onclick="saveMemorySettings()">Save</button></div>
       </section>
-    </div>
+      <button class="btn ghost btn-sm memory-refresh-button" onclick="loadTrackMemory()">Refresh</button>
+    </header>
     <section class="panel memory-table-panel">
-      <div class="panel-head">
-        <div><span class="eyebrow">当前记忆内容</span><h3>轨迹主表</h3></div>
-        <div class="memory-table-actions"><span id="memoryRefreshState">每两秒自动刷新</span><button class="btn danger" onclick="clearAllMemory()">清除全部记忆</button></div>
+      <div class="panel-head memory-table-head">
+        <div class="memory-table-title"><span class="eyebrow">Memory Records</span><h3>Track Table</h3></div>
+        <div class="memory-table-actions"><span id="memoryRefreshState">Auto-refresh: 2s</span><button class="btn danger btn-sm" onclick="clearAllMemory()">Clear Memory</button></div>
       </div>
       <div class="memory-warning">清除操作会删除全部轨迹、正式关键帧、向量和问答证据，但不会删除先验库。</div>
       <div class="table-wrap memory-table-wrap">
-        <table class="memory-table"><thead><tr><th>轨迹编号</th><th>时间范围</th><th>舷号</th><th>聚合状态</th><th>关键帧</th><th>记忆状态</th><th>外观描述</th></tr></thead><tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">正在读取轨迹记忆…</td></tr></tbody></table>
+        <table class="memory-table">
+          <colgroup><col class="memory-col-track"><col class="memory-col-time"><col class="memory-col-hull"><col class="memory-col-match"><col class="memory-col-frames"><col class="memory-col-state"><col class="memory-col-description"></colgroup>
+          <thead><tr><th>Track</th><th>Observed Time</th><th>Hull</th><th>Match</th><th>Keyframes</th><th>Memory</th><th>Appearance Description</th></tr></thead>
+          <tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">正在读取轨迹记忆…</td></tr></tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -358,7 +366,7 @@
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=17"></script>
-  <script src="/static/js/memory.js?v=5"></script>
+  <script src="/static/js/memory.js?v=6"></script>
 <script src="/static/js/agent.js?v=58"></script>
 <script src="/static/js/settings.js?v=9"></script>
 </body>
