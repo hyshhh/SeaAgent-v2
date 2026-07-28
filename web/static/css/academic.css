@@ -3595,3 +3595,93 @@ tbody tr:hover td { background: #f2f6f9; }
   }
   #tab-agent-qa .agent-result-disclosure-body { max-height: 420px; }
 }
+
+
+/* 研究问答视口压缩：活动式折叠行与双栏内部滚动 */
+#tab-agent-qa .agent-query-panel,
+#tab-agent-qa .agent-thinking-panel {
+  height: clamp(500px, calc(100vh - 300px), 620px);
+  min-height: 500px;
+}
+#tab-agent-qa .agent-result-disclosure > summary {
+  min-height: 25px;
+  padding: 1px 2px;
+  grid-template-columns: 16px auto minmax(0, 1fr) 8px;
+  gap: 6px;
+  color: #526274;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
+}
+#tab-agent-qa .agent-result-disclosure > summary:hover {
+  color: #244a6a;
+  background: transparent;
+}
+#tab-agent-qa .agent-result-index {
+  width: 16px;
+  height: 16px;
+  color: #315f86;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+#tab-agent-qa .agent-tool-disclosure .agent-result-index {
+  color: #376b57;
+  background: transparent;
+  font-size: 9px;
+}
+#tab-agent-qa .agent-result-disclosure > summary > strong {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+#tab-agent-qa .agent-result-disclosure > summary > em {
+  color: #7c8896;
+  font-size: 9px;
+}
+#tab-agent-qa .agent-result-disclosure > summary > b {
+  width: 5px;
+  height: 5px;
+}
+#tab-agent-qa .agent-result-panel[data-state="completed"] .agent-result-disclosure,
+#tab-agent-qa .agent-result-panel[data-state="failed"] .agent-result-disclosure {
+  border-bottom-color: #e3e8ed;
+}
+#tab-agent-qa .agent-result-process,
+#tab-agent-qa .agent-result-disclosure-body,
+#tab-agent-qa .agent-result-tool-body,
+#tab-agent-qa .agent-result-final .answer-results-scroll,
+#tab-agent-qa .fixed-agent-stream,
+#tab-agent-qa .agent-fixed-stack .agent-stream-text {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+#tab-agent-qa .agent-result-final .answer-results-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+#tab-agent-qa .fixed-agent-stream {
+  min-height: 0;
+  overflow-y: auto;
+}
+#tab-agent-qa .agent-fixed-stack {
+  min-height: 0;
+}
+#tab-agent-qa .agent-thinking-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+@media (max-width: 1120px) {
+  #tab-agent-qa .agent-query-panel,
+  #tab-agent-qa .agent-thinking-panel {
+    height: clamp(500px, calc(100vh - 190px), 600px);
+    min-height: 500px;
+  }
+}
+@media (max-width: 700px) {
+  #tab-agent-qa .agent-query-panel,
+  #tab-agent-qa .agent-thinking-panel {
+    height: 540px;
+    min-height: 540px;
+  }
+}
