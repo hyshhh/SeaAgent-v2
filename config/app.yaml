@@ -12,6 +12,9 @@ llm:
   # Qwen3 思考模式：默认关闭；需要前端展示思考时可改为 true
   enable_thinking: false
   timeout_seconds: 90
+  # Reflect 仅生成一次简短验收移交；双重上限避免持续输出绕过读取超时
+  reflect_max_output_tokens: 256
+  reflect_timeout_seconds: 20
   max_context_tokens: 32768
 embedding:
   model: "Qwen/Qwen3-VL-Embedding-2B"

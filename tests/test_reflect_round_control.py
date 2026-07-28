@@ -1,12 +1,52 @@
 import json
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from agent.controller import AgentController
-from agent.graph import _build_acceptance_progress, _default_plan_calls, _registry_membership_list_mode, run_sea_agent
+from agent.graph import (
+    _bounded_model,
+    _build_acceptance_progress,
+    _default_plan_calls,
+    _registry_membership_list_mode,
+    _stream_tool_chunk_chars,
+    run_sea_agent,
+)
 from tools.target_parser import clear_target_parser_cache, infer_intent_fields
 
+
+
+def test_reflect_model_uses_independent_server_side_output_cap():
+    class _Model:
+        max_tokens = None
+
+        def model_copy(self, *, update):
+            clone = _Model()
+            clone.max_tokens = update["max_tokens"]
+            return clone
+
+    base = _Model()
+    reflect = _bounded_model(base, 256)
+
+    assert base.max_tokens is None
+    assert reflect is not base
+    assert reflect.max_tokens == 256
+
+
+def test_reflect_stream_guard_counts_tool_arguments_without_visible_text():
+    chunk = AIMessageChunk(
+        content="",
+        tool_call_chunks=[{
+            "name": "handoff_finish",
+            "args": "{\"state\":\"sufficient\",\"reason\":\"证据充分\"}",
+            "id": "reflect-call",
+            "index": 0,
+            "type": "tool_call_chunk",
+        }],
+    )
+
+    assert _stream_tool_chunk_chars(chunk) >= len("handoff_finish")
+    assert _stream_tool_chunk_chars(chunk) > len(chunk.content)
 
 def _out_fields():
     clear_target_parser_cache()

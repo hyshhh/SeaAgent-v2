@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
@@ -195,6 +196,26 @@ def _emit(handler: Callable[[dict[str, Any]], None] | None, event: dict[str, Any
         handler(event)
     except Exception:
         pass
+
+
+def _bounded_model(model: Any, max_output_tokens: int) -> Any:
+    """克隆仅用于短决策节点的模型，并把输出上限下发到服务端。"""
+    limit = max(1, int(max_output_tokens))
+    if hasattr(model, "model_copy"):
+        return model.model_copy(update={"max_tokens": limit})
+    return model
+
+
+def _stream_tool_chunk_chars(message: Any) -> int:
+    """统计流式工具调用名称和参数，防止只生成参数时绕过正文长度保护。"""
+    total = 0
+    for chunk in getattr(message, "tool_call_chunks", None) or []:
+        if isinstance(chunk, dict):
+            total += len(str(chunk.get("name") or ""))
+            total += len(str(chunk.get("args") or ""))
+        else:
+            total += len(str(chunk))
+    return total
 
 
 def _stream_delta_piece(previous: str, incoming: str) -> str:
@@ -881,6 +902,12 @@ def build_sea_agent_graph(
 ):
     """编译四 Agent LangGraph。"""
     model = build_chat_model(llm)
+    # Reflect 只需生成一个简短移交工具调用。服务端词元硬上限可阻止模型在
+    # 持续返回数据时绕过 HTTP 读取超时而无限生成。
+    llm_settings = getattr(llm, "settings", {}) or {}
+    reflect_max_output_tokens = max(64, min(512, int(llm_settings.get("reflect_max_output_tokens") or 256)))
+    reflect_timeout_seconds = max(5.0, min(60.0, float(llm_settings.get("reflect_timeout_seconds") or 20)))
+    reflect_model = _bounded_model(model, reflect_max_output_tokens)
     reference_time = datetime.now().astimezone()
     default_top_k = int(query_top_k or 3)
     default_broad_match_top_k = _normalize_broad_match_top_k(broad_match_top_k)
@@ -1018,7 +1045,9 @@ def build_sea_agent_graph(
         emit_initial_skill_events: bool = True,
         emit_live_deltas: bool = True,
         stream_char_limit: int | None = None,
+        stream_time_limit_seconds: float | None = None,
         retry_non_stream: bool = True,
+        agent_model: Any | None = None,
     ) -> dict[str, Any]:
         prompt_context = {
             "question": state.get("question"),
@@ -1076,7 +1105,7 @@ def build_sea_agent_graph(
             )
 
         agent = create_agent(
-            model,
+            agent_model or model,
             agent_tools,
             system_prompt=prompt,
             name=name,
@@ -1085,7 +1114,9 @@ def build_sea_agent_graph(
         messages: list[Any] = []
         streamed_thinking = ""
         streamed_text = ""
+        streamed_tool_chars = 0
         stream_guard_triggered = False
+        stream_started_at = time.monotonic()
 
         def _emit_delta(delta: str, *, kind: str = "thinking") -> None:
             if not delta or not role or not emit_live_deltas:
@@ -1119,51 +1150,68 @@ def build_sea_agent_graph(
                     config={"recursion_limit": recursion_limit},
                     stream_mode="messages",
                 )
-            for item in stream:
-                mode = None
-                data: Any = item
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
-                    mode, data = item[0], item[1]
-                if mode == "values" or (
-                    mode is None
-                    and isinstance(data, dict)
-                    and "messages" in data
-                    and not isinstance(data.get("messages"), tuple)
-                ):
-                    if isinstance(data, dict):
-                        final_values = data
-                    continue
-                # messages 模式：data 多为 (message, metadata)
-                message = data[0] if isinstance(data, tuple) and data else data
-                if not isinstance(message, (AIMessageChunk, AIMessage, ToolMessage, HumanMessage)):
-                    continue
-                # 完整消息（非 chunk）直接入列，保证 handoff ToolMessage 可解析
-                if isinstance(message, (AIMessage, ToolMessage, HumanMessage)) and not isinstance(message, AIMessageChunk):
-                    messages.append(message)
-                if isinstance(message, (AIMessageChunk, AIMessage)):
-                    body, thinking = _content_parts(getattr(message, "content", None))
-                    extra = getattr(message, "additional_kwargs", None) or {}
-                    for key in ("reasoning_content", "thinking", "reasoning"):
-                        if extra.get(key):
-                            thinking = f"{thinking}\n{extra.get(key)}".strip() if thinking else str(extra.get(key))
-                    response_meta = getattr(message, "response_metadata", None) or {}
-                    for key in ("reasoning_content", "thinking", "reasoning"):
-                        if response_meta.get(key):
-                            thinking = f"{thinking}\n{response_meta.get(key)}".strip() if thinking else str(response_meta.get(key))
-                    if thinking:
-                        piece = _stream_delta_piece(streamed_thinking, thinking)
-                        if piece:
-                            streamed_thinking += piece
-                            _emit_delta(piece, kind="thinking")
-                    if body and isinstance(message, AIMessageChunk):
-                        piece = _stream_delta_piece(streamed_text, body)
-                        if piece:
-                            streamed_text += piece
-                            _emit_delta(piece, kind="token")
-                    if stream_char_limit and len(streamed_thinking) + len(streamed_text) >= stream_char_limit:
+            try:
+                for item in stream:
+                    if (
+                        stream_time_limit_seconds
+                        and time.monotonic() - stream_started_at >= stream_time_limit_seconds
+                    ):
                         stream_guard_triggered = True
-                        invoke_error = f"{title} 流式内容超过限制，已由确定性验收规则接管"
+                        invoke_error = f"{title} 超过 {stream_time_limit_seconds:g} 秒，已由确定性验收规则接管"
                         break
+                    mode = None
+                    data: Any = item
+                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+                        mode, data = item[0], item[1]
+                    if mode == "values" or (
+                        mode is None
+                        and isinstance(data, dict)
+                        and "messages" in data
+                        and not isinstance(data.get("messages"), tuple)
+                    ):
+                        if isinstance(data, dict):
+                            final_values = data
+                        continue
+                    # messages 模式：data 多为 (message, metadata)
+                    message = data[0] if isinstance(data, tuple) and data else data
+                    if not isinstance(message, (AIMessageChunk, AIMessage, ToolMessage, HumanMessage)):
+                        continue
+                    # 完整消息（非 chunk）直接入列，保证 handoff ToolMessage 可解析
+                    if isinstance(message, (AIMessage, ToolMessage, HumanMessage)) and not isinstance(message, AIMessageChunk):
+                        messages.append(message)
+                    if isinstance(message, (AIMessageChunk, AIMessage)):
+                        body, thinking = _content_parts(getattr(message, "content", None))
+                        extra = getattr(message, "additional_kwargs", None) or {}
+                        for key in ("reasoning_content", "thinking", "reasoning"):
+                            if extra.get(key):
+                                thinking = f"{thinking}\n{extra.get(key)}".strip() if thinking else str(extra.get(key))
+                        response_meta = getattr(message, "response_metadata", None) or {}
+                        for key in ("reasoning_content", "thinking", "reasoning"):
+                            if response_meta.get(key):
+                                thinking = f"{thinking}\n{response_meta.get(key)}".strip() if thinking else str(response_meta.get(key))
+                        if thinking:
+                            piece = _stream_delta_piece(streamed_thinking, thinking)
+                            if piece:
+                                streamed_thinking += piece
+                                _emit_delta(piece, kind="thinking")
+                        if body and isinstance(message, AIMessageChunk):
+                            piece = _stream_delta_piece(streamed_text, body)
+                            if piece:
+                                streamed_text += piece
+                                _emit_delta(piece, kind="token")
+                        streamed_tool_chars += _stream_tool_chunk_chars(message)
+                        if (
+                            stream_char_limit
+                            and len(streamed_thinking) + len(streamed_text) + streamed_tool_chars >= stream_char_limit
+                        ):
+                            stream_guard_triggered = True
+                            invoke_error = f"{title} 流式内容超过限制，已由确定性验收规则接管"
+                            break
+            finally:
+                if stream_guard_triggered:
+                    close_stream = getattr(stream, "close", None)
+                    if callable(close_stream):
+                        close_stream()
             if final_values and isinstance(final_values.get("messages"), list) and not stream_guard_triggered:
                 # values 含完整对话，优先于边收边攒的 messages
                 messages = list(final_values.get("messages") or [])
@@ -2569,7 +2617,9 @@ def build_sea_agent_graph(
                 skill_context=reflect_skill_context,
                 emit_live_deltas=False,
                 stream_char_limit=900,
+                stream_time_limit_seconds=reflect_timeout_seconds,
                 retry_non_stream=False,
+                agent_model=reflect_model,
             )
         handoff = out.get("handoff") or {}
         # 工具参数契约错误必须切换为确定性计划，禁止让模型重复同一错误调用。
