@@ -66,6 +66,17 @@ _pool_rows_lock = threading.Lock()
 _VIDEO_LIST_CACHE_TTL = 300.0
 _video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
 _video_list_lock = asyncio.Lock()
+_PIPE_SCALE_MIN = 0.05
+
+
+def _get_pipe_output_size(width: int, height: int, scale: float) -> tuple[int, int]:
+    """根据推流比例计算偶数尺寸；非法比例回退到原始尺寸。"""
+    if not _PIPE_SCALE_MIN <= scale < 1.0:
+        return width, height
+    return (
+        max(16, int(width * scale)) // 2 * 2,
+        max(16, int(height * scale)) // 2 * 2,
+    )
 
 
 def has_running_pipeline() -> bool:
@@ -207,7 +218,7 @@ class PipelineStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
-    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.1-1.0)
+    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.05-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -223,7 +234,7 @@ class BrowserCameraStartRequest(BaseModel):
     detect_every: int = 2
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
-    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.1-1.0)
+    pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.05-1.0)
     save_output_video: bool = True  # 是否保存推理结果视频
     # ── 高级参数 ──
     max_frames: int = 0
@@ -832,13 +843,11 @@ async def start_pipeline(req: PipelineStartRequest):
     if req.yolo_model:
         cmd.extend(["--yolo-model", req.yolo_model])
 
-    # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
-    if 0.1 <= req.pipe_scale < 1.0:
+    # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率。
+    # 0.05 也必须传入命令行，否则 CLI 会回退到原始分辨率。
+    pipe_w, pipe_h = _get_pipe_output_size(video_w, video_h, req.pipe_scale)
+    if (pipe_w, pipe_h) != (video_w, video_h):
         cmd.extend(["--pipe-scale", str(req.pipe_scale)])
-        pipe_w = max(16, int(video_w * req.pipe_scale)) // 2 * 2
-        pipe_h = max(16, int(video_h * req.pipe_scale)) // 2 * 2
-    else:
-        pipe_w, pipe_h = video_w, video_h
 
     if is_camera:
         cmd.append("--camera")
@@ -1825,12 +1834,8 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
         fake_proc = _FakeProcess(pipe_r)
         cam_fps = int(req.target_fps) if req.target_fps > 0 else 15
-        # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率
-        if 0.1 <= req.pipe_scale < 1.0:
-            pipe_out_w = max(16, int(640 * req.pipe_scale)) // 2 * 2
-            pipe_out_h = max(16, int(480 * req.pipe_scale)) // 2 * 2
-        else:
-            pipe_out_w, pipe_out_h = 640, 480
+        # 仅缩放推流编码分辨率，不改变检测输入和保存视频分辨率。
+        pipe_out_w, pipe_out_h = _get_pipe_output_size(640, 480, req.pipe_scale)
         asyncio.create_task(_start_h264_reader(task_id, fake_proc, pipe_out_w, pipe_out_h, fps=cam_fps))
 
         # ── Pipeline 线程 ──
@@ -1848,7 +1853,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             "output_size": [640, 480],
             "stop_file": str(stream_dir / "__STOP__"),
         })
-        if 0.1 <= req.pipe_scale < 1.0:
+        if (pipe_out_w, pipe_out_h) != (640, 480):
             pipe_cfg["pipe_output_size"] = [pipe_out_w, pipe_out_h]
         if req.max_frames > 0:
             pipe_cfg["max_frames"] = req.max_frames

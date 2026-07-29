@@ -8,6 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 console = Console()
+_MIN_PIPE_SCALE = 0.05
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="seaagent-pipeline", description="船舶检测、跟踪与轨迹记忆构建流水线")
@@ -70,7 +71,7 @@ def _merge_args_to_config(args, config: dict) -> dict:
         except ValueError:
             console.print("[red]--output-size 应为宽x高，例如 640x480[/red]")
             sys.exit(1)
-    if args.pipe_scale is not None and 0.1 <= args.pipe_scale < 1.0 and pipeline.get("output_size"):
+    if args.pipe_scale is not None and _MIN_PIPE_SCALE <= args.pipe_scale < 1.0 and pipeline.get("output_size"):
         width, height = pipeline["output_size"]
         pipeline["pipe_output_size"] = [max(16, int(width * args.pipe_scale)) // 2 * 2, max(16, int(height * args.pipe_scale)) // 2 * 2]
     if args.stop_file:

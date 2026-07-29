@@ -13,6 +13,10 @@ from web.routes import pipeline_api
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov"}
 
 
+def test_pipe_output_size_supports_point_zero_five():
+    assert pipeline_api._get_pipe_output_size(1080, 1920, 0.05) == (54, 96)
+
+
 def test_scan_video_files_includes_nested_videos_and_skips_cache(tmp_path: Path):
     for relative_path in (
         "root.mp4",
