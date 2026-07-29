@@ -261,13 +261,50 @@ class PipelineStatusResponse(BaseModel):
 
 
 def _safe_filename(filename: str) -> str:
-    """安全校验文件名，防止目录遍历"""
+    """安全校验文件名，防止目录遍历；仅用于上传/输出目录的单文件名。"""
     import re
     name = Path(filename).name
     name = re.sub(r'[^\w\-.]', '_', name)
     if not name or name.startswith('.') or '..' in name:
         raise HTTPException(status_code=400, detail="无效的文件名")
     return name
+
+
+def _normalize_video_relative_path(video_filename: str) -> str:
+    """规范化 demo 视频相对路径，允许子目录，拒绝绝对路径和目录穿越。"""
+    if not isinstance(video_filename, str):
+        raise HTTPException(status_code=400, detail="无效的视频路径")
+    normalized = video_filename.replace("\\", "/").strip()
+    if not normalized or "\x00" in normalized:
+        raise HTTPException(status_code=400, detail="无效的视频路径")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise HTTPException(status_code=400, detail="视频路径必须是相对路径")
+
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        raise HTTPException(status_code=400, detail="无效的视频路径")
+    if any(part in {".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="视频路径不能包含目录穿越")
+    if any(part.startswith(".") for part in parts):
+        raise HTTPException(status_code=400, detail="视频路径不能包含隐藏目录或隐藏文件")
+
+    rel_path = "/".join(parts)
+    ext = Path(parts[-1]).suffix.lower()
+    if ext not in _get_allowed_extensions():
+        raise HTTPException(status_code=400, detail=f"不支持的视频格式: {ext}")
+    return rel_path
+
+
+def _resolve_demo_video_path(video_filename: str) -> Path:
+    """把前端传入的相对视频路径解析到 demo 目录内，防止路径逃逸。"""
+    rel_path = _normalize_video_relative_path(video_filename)
+    demo_dir = _get_demo_dir().resolve()
+    video_path = (demo_dir / Path(*rel_path.split("/"))).resolve()
+    try:
+        video_path.relative_to(demo_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="视频路径越界") from exc
+    return video_path
 
 
 def _extract_video_preview(video_path: Path) -> bytes:
@@ -455,25 +492,43 @@ def _is_camera_input(video_filename: str) -> bool:
 
 
 def _get_video_path(video_filename: str) -> Path | None:
-    """获取视频文件路径，摄像头输入返回 None"""
+    """获取视频文件路径，摄像头输入返回 None；本地视频支持子目录相对路径。"""
     if _is_camera_input(video_filename):
         return None
-    demo_dir = _get_demo_dir()
-    return demo_dir / _safe_filename(video_filename)
+    return _resolve_demo_video_path(video_filename)
 
 
 # ── 视频管理 ──
 
 def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]:
-    """快速扫描挂载目录，只读取文件名，避免逐文件状态查询。"""
+    """递归扫描挂载目录，返回相对路径，避免子目录同名视频冲突。"""
     started = time.perf_counter()
-    videos = [
-        {"filename": name, "size_mb": None, "modified": None}
-        for name in os.listdir(demo_dir)
-        if Path(name).suffix.lower() in allowed
-    ]
+    videos: list[dict[str, Any]] = []
+    demo_dir = demo_dir.resolve()
+    skip_dirs = {"_transcoded", "__pycache__"}
+
+    for root, dirs, files in os.walk(demo_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+        root_path = Path(root)
+        for name in files:
+            if name.startswith(".") or Path(name).suffix.lower() not in allowed:
+                continue
+            file_path = root_path / name
+            try:
+                rel_path = file_path.relative_to(demo_dir).as_posix()
+            except ValueError:
+                continue
+            videos.append({
+                "filename": rel_path,
+                "relative_path": rel_path,
+                "display_name": rel_path,
+                "name": name,
+                "size_mb": None,
+                "modified": None,
+            })
+
     elapsed = time.perf_counter() - started
-    logger.info("视频目录扫描完成: path=%s count=%d elapsed=%.3fs", demo_dir, len(videos), elapsed)
+    logger.info("视频目录递归扫描完成: path=%s count=%d elapsed=%.3fs", demo_dir, len(videos), elapsed)
     return sorted(videos, key=lambda item: item["filename"].lower())
 
 
@@ -584,17 +639,15 @@ async def upload_video(file: UploadFile = File(...)):
     }
 
 
-@router.delete("/videos/{filename}")
+@router.delete("/videos/{filename:path}")
 async def delete_video(filename: str):
-    """删除 demo 视频（同时清理转码缓存）"""
-    filename = _safe_filename(filename)
-    demo_dir = _get_demo_dir()
-    video_path = demo_dir / filename
-    if not video_path.exists():
+    """删除 demo 视频（同时清理同目录转码缓存）"""
+    video_path = _resolve_demo_video_path(filename)
+    if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
     video_path.unlink()
     # 清理转码缓存
-    transcoded = demo_dir / "_transcoded" / filename
+    transcoded = video_path.parent / "_transcoded" / video_path.name
     if transcoded.exists():
         transcoded.unlink()
         logger.info("已清理转码缓存: %s", transcoded)
@@ -645,13 +698,11 @@ async def debug_ffmpeg():
 
     return result
 
-@router.get("/videos/{filename}/codec")
+@router.get("/videos/{filename:path}/codec")
 async def check_video_codec(filename: str):
     """检测视频编码格式及浏览器兼容性"""
-    filename = _safe_filename(filename)
-    demo_dir = _get_demo_dir()
-    video_path = demo_dir / filename
-    if not video_path.exists():
+    video_path = _resolve_demo_video_path(filename)
+    if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
 
     codec = _probe_codec(str(video_path))
@@ -674,13 +725,11 @@ async def check_video_codec(filename: str):
     }
 
 
-@router.post("/videos/{filename}/transcode")
+@router.post("/videos/{filename:path}/transcode")
 async def transcode_video(filename: str):
     """手动触发视频转码为 H264（浏览器兼容）"""
-    filename = _safe_filename(filename)
-    demo_dir = _get_demo_dir()
-    video_path = demo_dir / filename
-    if not video_path.exists():
+    video_path = _resolve_demo_video_path(filename)
+    if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
 
     codec = _probe_codec(str(video_path))
@@ -2615,11 +2664,10 @@ async def get_output_video(request: Request, filename: str):
     )
 
 
-@router.get("/video-preview/{filename}")
+@router.get("/video-preview/{filename:path}")
 async def get_video_preview(filename: str):
     """返回所选视频的一张预览帧。"""
-    filename = _safe_filename(filename)
-    video_path = _get_demo_dir() / filename
+    video_path = _resolve_demo_video_path(filename)
     if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
     try:
@@ -2634,13 +2682,11 @@ async def get_video_preview(filename: str):
     )
 
 
-@router.get("/video/{filename}")
+@router.get("/video/{filename:path}")
 async def get_source_video(request: Request, filename: str):
     """获取源视频用于播放（自动转码 HEVC → H264，支持 Range 请求）"""
-    filename = _safe_filename(filename)
-    demo_dir = _get_demo_dir()
-    video_path = demo_dir / filename
-    if not video_path.exists():
+    video_path = _resolve_demo_video_path(filename)
+    if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
 
     # 自动转码不兼容的编码（如 H265/HEVC）为 H264
@@ -2691,7 +2737,7 @@ async def get_source_video(request: Request, filename: str):
                     "Content-Range": f"bytes {start}-{end}/{file_size}",
                     "Accept-Ranges": "bytes",
                     "Content-Length": str(content_length),
-                    "Content-Disposition": f'inline; filename="{filename}"',
+                    "Content-Disposition": f'inline; filename="{video_path.name}"',
                 },
             )
         except (ValueError, IndexError):
@@ -2701,7 +2747,7 @@ async def get_source_video(request: Request, filename: str):
     return FileResponse(
         path=str(video_path),
         media_type=media_type,
-        filename=filename,
+        filename=video_path.name,
         headers={"Accept-Ranges": "bytes"},
     )
 
