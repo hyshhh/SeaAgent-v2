@@ -12,7 +12,10 @@ _MIN_PIPE_SCALE = 0.05
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="seaagent-pipeline", description="船舶检测、跟踪与轨迹记忆构建流水线")
-    parser.add_argument("source", help="视频文件、相机编号、网络视频地址或帧目录")
+    parser.add_argument("source", nargs="?", help="视频文件、相机编号、网络视频地址或帧目录")
+    parser.add_argument("--playlist-json", default=None, help="按顺序处理的视频源 JSON 数组")
+    parser.add_argument("--segment-gap-seconds", type=float, default=0.0, help="相邻视频片段之间的模拟时间间隔")
+    parser.add_argument("--playlist-failure-policy", choices=("skip", "stop"), default="skip", help="片段失败后跳过或终止整个序列")
     parser.add_argument("--output", "-o", help="输出视频路径")
     parser.add_argument("--demo", action="store_true", default=None, help="绘制检测框和轨迹记忆状态")
     parser.add_argument("--display", action="store_true", help="显示实时窗口")
@@ -80,7 +83,7 @@ def _merge_args_to_config(args, config: dict) -> dict:
 
 def _print_config(args, config: dict) -> None:
     pipeline = config.get("pipeline", {})
-    source = f"帧目录：{args.frames_dir}" if args.frames_dir else args.source
+    source = f"帧目录：{args.frames_dir}" if args.frames_dir else (f"播放列表：{args.playlist_json}" if args.playlist_json else args.source)
     lines = [
         "┌─ SeaAgent 流水线配置 ──────────────────┐",
         f"│ 输入源：{source}",
@@ -114,7 +117,39 @@ def main() -> None:
             source = VirtualCamera(frames_path, fps=args.virtual_fps)
         else:
             source = args.source
-        stats = ShipPipeline(config=config).process(source=source, output_path=args.output, display=args.display and not args.stream_dir, max_frames=args.max_frames, stream_dir=args.stream_dir)
+        pipeline = ShipPipeline(config=config)
+        if args.playlist_json:
+            try:
+                playlist = json.loads(args.playlist_json)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"播放列表 JSON 格式错误：{error}") from error
+            if not isinstance(playlist, list) or not playlist or not all(isinstance(item, str) and item.strip() for item in playlist):
+                raise ValueError("播放列表必须是非空的视频源字符串数组")
+
+            def emit_segment(event: dict) -> None:
+                target = sys.stderr if args.raw_stdout else sys.stdout
+                print(f"__PIPELINE_SEGMENT__:{json.dumps(event, ensure_ascii=False)}", file=target, flush=True)
+
+            stats = pipeline.process_playlist(
+                sources=playlist,
+                output_path=args.output,
+                display=args.display and not args.stream_dir,
+                max_frames=args.max_frames,
+                stream_dir=args.stream_dir,
+                segment_gap_seconds=args.segment_gap_seconds,
+                failure_policy=args.playlist_failure_policy,
+                segment_callback=emit_segment,
+            )
+        else:
+            if source is None:
+                raise ValueError("请提供输入源或 --playlist-json")
+            stats = pipeline.process(
+                source=source,
+                output_path=args.output,
+                display=args.display and not args.stream_dir,
+                max_frames=args.max_frames,
+                stream_dir=args.stream_dir,
+            )
         table = Table(title="处理统计")
         table.add_column("指标", style="cyan")
         table.add_column("值", style="white")

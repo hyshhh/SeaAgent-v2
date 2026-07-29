@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=22">
+<link rel="stylesheet" href="/static/css/academic.css?v=23">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -56,44 +56,55 @@
         </div>
       </section>
       <div class="control-grid">
-        <section class="panel compact-panel">
-          <div class="panel-head"><div><span class="eyebrow">视频源</span><h3>视频目录与选择</h3></div></div>
-          <div class="video-directory-toolbar">
-            <label class="video-directory-picker">选择视频目录
-              <select id="videoDirectorySelect" onchange="changeVideoDirectory(this.value)">
-                <option value="">根目录</option>
-              </select>
-            </label>
-            <button class="btn ghost btn-sm" type="button" onclick="loadVideoList()">刷新目录</button>
-            <span id="videoDirectorySummary" class="video-directory-summary">正在读取目录…</span>
+        <section class="panel compact-panel video-source-panel">
+          <div class="panel-head source-panel-head">
+            <div><span class="eyebrow">VIDEO SOURCE</span><h3>Directory &amp; Continuous Monitoring</h3></div>
+            <span id="continuousSelectedCount" class="source-selection-count">0 Selected</span>
           </div>
-          <div class="continuous-monitor-box">
-            <div class="continuous-monitor-head"><div><strong>连续监控序列</strong><span>逐段处理所选视频并保持连续监控时间</span></div><em id="continuousSelectedCount">已选 0 条</em></div>
-            <div class="continuous-monitor-options">
-              <label class="continuous-select-all"><input id="continuousSelectAll" type="checkbox" onchange="toggleAllContinuousVideos(this.checked)">全选视频</label>
-              <label>监控起始时间<input id="continuousStartTime" type="datetime-local" step="1"></label>
-              <label>片段间隔<input id="continuousGapSeconds" type="number" value="0" min="0" max="86400" step="1"><span>秒</span></label>
-              <label>失败处理<select id="continuousFailurePolicy"><option value="skip">跳过并继续</option><option value="stop">立即停止</option></select></label>
+          <div class="video-source-console">
+            <div class="source-directory-row">
+              <span class="source-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6.8h6l1.8 2H21v8.8A2.4 2.4 0 0 1 18.6 20H5.4A2.4 2.4 0 0 1 3 17.6V6.8Z"/><path d="M3 9h18"/></svg></span>
+              <label class="video-directory-picker"><span>Directory</span>
+                <select id="videoDirectorySelect" onchange="changeVideoDirectory(this.value)"><option value="">Root Directory</option></select>
+              </label>
+              <button class="icon-text-button" type="button" onclick="loadVideoList()" title="Refresh video directory">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 16.2A8 8 0 1 1 19.7 9"/></svg><span>Refresh</span>
+              </button>
+              <span id="videoDirectorySummary" class="video-directory-summary">Reading directory...</span>
             </div>
-            <div class="continuous-monitor-actions"><button class="btn secondary" id="btnStartContinuous" onclick="startContinuousMonitoring()">开始连续监控</button><button class="btn danger" id="btnStopContinuous" onclick="stopContinuousMonitoring()" style="display:none">停止连续监控</button><span id="continuousProgress">等待选择视频</span></div>
+            <div class="continuous-monitor-toolbar">
+              <label class="continuous-select-all"><input id="continuousSelectAll" type="checkbox" onchange="toggleAllContinuousVideos(this.checked)"><span>Select All</span></label>
+              <label class="source-control-field"><span>Start Time <em>Optional</em></span><input id="continuousStartTime" type="datetime-local" step="1"></label>
+              <label class="source-control-field compact"><span>Segment Gap</span><div class="field-with-unit"><input id="continuousGapSeconds" type="number" value="0" min="0" max="86400" step="1"><b>s</b></div></label>
+              <label class="source-control-field"><span>On Error</span><select id="continuousFailurePolicy"><option value="skip">Skip &amp; Continue</option><option value="stop">Stop Sequence</option></select></label>
+              <div class="continuous-monitor-actions">
+                <button class="btn secondary sequence-action-button" id="btnStartContinuous" onclick="startContinuousMonitoring()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg><span>Start Sequence</span></button>
+                <button class="btn danger sequence-action-button" id="btnStopContinuous" onclick="stopContinuousMonitoring()" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg><span>Stop Sequence</span></button>
+              </div>
+            </div>
+            <div class="continuous-monitor-status"><span class="status-pulse" aria-hidden="true"></span><span id="continuousProgress">Waiting for video selection</span></div>
           </div>
-          <div class="video-list" id="videoList"><div class="empty-msg">正在加载视频列表…</div></div>
+          <div class="video-list" id="videoList"><div class="empty-msg">Loading video list...</div></div>
         </section>
-        <section class="panel compact-panel">
-          <div class="panel-head"><div><span class="eyebrow">流水线参数</span><h3>监控设置</h3></div></div>
-          <div class="param-grid">
-            <label>检测置信度<input id="optConf" type="number" value="0.5" min="0" max="1" step="0.05"></label>
-            <label>交并比阈值<input id="optIou" type="number" value="0.5" min="0" max="1" step="0.05"></label>
-            <label>检测帧间隔<input id="optDetectEvery" type="number" value="2" min="1"></label>
-            <label>目标帧率<input id="optTargetFps" type="number" value="0" min="0"></label>
-            <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="optPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
-            <label>最大处理帧<input id="optMaxFrames" type="number" value="0" min="0"></label>
-            <label>推理设备<input id="optDevice" type="text" placeholder="留空使用配置"></label>
-            <label>检测模型<input id="optYoloModel" type="text" placeholder="留空使用配置"></label>
-            <label class="check-line"><input id="optSaveVideo" type="checkbox">保存标注视频</label>
+        <section class="panel compact-panel monitoring-settings-panel">
+          <div class="panel-head"><div><span class="eyebrow">PIPELINE PARAMETERS</span><h3>Monitoring Settings</h3></div></div>
+          <div class="param-grid monitoring-param-grid">
+            <label><span>Detection Confidence</span><input id="optConf" type="number" value="0.5" min="0" max="1" step="0.05"></label>
+            <label><span>IoU Threshold</span><input id="optIou" type="number" value="0.5" min="0" max="1" step="0.05"></label>
+            <label><span>Detection Interval</span><input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <label><span>Target FPS</span><input id="optTargetFps" type="number" value="0" min="0"></label>
+            <label title="Only scales the encoded stream; detection keeps the original input"><span>Stream Scale</span><input id="optPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
+            <label><span>Maximum Frames</span><input id="optMaxFrames" type="number" value="0" min="0"></label>
+            <label><span>Inference Device</span><input id="optDevice" type="text" placeholder="Auto"></label>
+            <label><span>Detection Model</span><select id="optYoloModel" size="1" aria-label="Detection model"></select></label>
+            <label class="check-line monitoring-save-toggle"><input id="optSaveVideo" type="checkbox"><span>Save Annotated Video</span></label>
           </div>
-          <div class="history-head"><h3>任务历史</h3><button class="text-btn" onclick="clearTaskHistory()">清空</button></div>
-          <div class="task-history" id="taskHistory"><div class="empty-msg">暂无任务</div></div>
+          <div class="monitor-settings-footer">
+            <span id="monitoringSettingsStatus" class="monitor-settings-status"><i></i>Synced with system settings</span>
+            <button class="btn primary apply-monitor-settings" id="applyMonitoringSettingsButton" onclick="saveMonitoringSettings()" disabled>Apply Settings</button>
+          </div>
+          <div class="history-head"><h3>Task History</h3><button class="text-btn" onclick="clearTaskHistory()">Clear</button></div>
+          <div class="task-history" id="taskHistory"><div class="empty-msg">No tasks</div></div>
         </section>
       </div>
     </div>
@@ -256,7 +267,7 @@
         <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="camPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
         <label>最大处理帧<input id="camMaxFrames" type="number" value="0" min="0"></label>
         <label>推理设备<input id="camDevice" type="text" placeholder="留空使用配置"></label>
-        <label>检测模型<input id="camYoloModel" type="text" placeholder="留空使用配置"></label>
+        <label>检测模型<select id="camYoloModel" size="1"></select></label>
         <label class="check-line"><input id="camOptSaveVideo" type="checkbox">保存标注视频</label>
       </div>
     </section>
@@ -272,6 +283,12 @@
       <section class="panel settings-card settings-card-wide tracking-settings-card">
         <div class="panel-head"><div><span class="eyebrow">检测与跟踪</span><h3>目标关联参数</h3></div></div>
         <div class="settings-fields tracking-settings-fields">
+          <label><span class="setting-name">检测模型</span><select data-setting="yolo.model"></select><small>监控页、摄像头页和后端新任务统一使用该模型；首次使用未缓存模型时会自动获取。</small></label>
+          <label><span class="setting-name">推理设备</span><input data-setting="yolo.device" type="text" placeholder="留空自动选择"><small>留空时由检测框架自动选择；也可填写设备编号或处理器类型。</small></label>
+          <label><span class="setting-name">目标处理帧率</span><input data-setting="pipeline.target_fps" type="number"><small>0 表示不限制；监控页和摄像头页会同步更新。</small></label>
+          <label><span class="setting-name">推流分辨率比例</span><input data-setting="pipeline.pipe_scale" type="number"><small>仅缩放网页推流编码，范围 0.05～1，不改变检测输入分辨率。</small></label>
+          <label><span class="setting-name">最大处理帧</span><input data-setting="pipeline.max_frames" type="number"><small>0 表示不限制；连续监控时限制整个视频序列的累计帧数。</small></label>
+          <label class="settings-toggle-field"><span class="setting-name">保存标注视频</span><span class="setting-switch"><input data-setting="pipeline.save_output_video" type="checkbox"><span>保存新任务的标注结果视频</span></span><small>关闭后仍保留实时推流，不写入结果视频文件。</small></label>
           <label><span class="setting-name">正式检测置信度</span><input data-setting="yolo.confidence" type="number"><small><strong>默认 0.5。</strong>达到该分数的检测结果才会正式输出并写入轨迹记忆；它不再承担低分跟踪候选的入口控制。</small></label>
           <label><span class="setting-name">跟踪候选置信度</span><input data-setting="yolo.tracking_candidate_confidence" type="number"><small><strong>默认 0.2。</strong>控制送入跟踪器的最低候选分数；0.2～0.5 的框只能帮助续接已有轨迹，不会正式输出或写入记忆。</small></label>
           <label><span class="setting-name">检测交并比阈值</span><input data-setting="yolo.iou" type="number"><small><strong>默认 0.5。</strong>仅用于检测阶段的重叠框抑制，不是轨迹关联阈值；越低抑制越强。</small></label>
@@ -369,9 +386,9 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=18"></script>
+<script src="/static/js/pipeline.js?v=19"></script>
   <script src="/static/js/memory.js?v=6"></script>
 <script src="/static/js/agent.js?v=58"></script>
-<script src="/static/js/settings.js?v=9"></script>
+<script src="/static/js/settings.js?v=10"></script>
 </body>
 </html>

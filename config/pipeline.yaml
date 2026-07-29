@@ -13,6 +13,8 @@ pipeline:
   stream_write_every_n_frames: 2
   stream_jpeg_quality: 65
   target_fps: 0
+  pipe_scale: 0.25
+  max_frames: 0
   save_output_video: true
   demo: true
   quality:

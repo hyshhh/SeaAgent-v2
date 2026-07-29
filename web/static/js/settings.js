@@ -29,21 +29,26 @@ function updateSettingInput(input, value, spec = {}) {
     input.checked = Boolean(value);
     return;
   }
-  if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
+  if (spec.type === 'text' || spec.type === 'string' || input.tagName === 'TEXTAREA') {
     input.value = value ?? '';
     if (spec.max_chars) input.maxLength = spec.max_chars;
     return;
   }
   if (spec.type === 'enum' || input.tagName === 'SELECT') {
     const next = value == null ? '' : String(value);
-    input.value = next;
+    if (Array.isArray(spec.choices) && spec.choices.length) {
+      input.innerHTML = spec.choices.map(choice => {
+        const optionValue = String(choice);
+        return `<option value="${optionValue.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}">${optionValue}</option>`;
+      }).join('');
+    }
     if (spec.choices && !spec.choices.map(String).includes(next) && next) {
       const option = document.createElement('option');
       option.value = next;
       option.textContent = next;
       input.appendChild(option);
-      input.value = next;
     }
+    input.value = next;
     return;
   }
   if (spec.min !== undefined) input.min = spec.min;
@@ -74,17 +79,80 @@ function syncAppearanceTrackingFields() {
   });
 }
 
+function setMonitoringSettingsStatus(message, state = 'synced') {
+  const status = document.getElementById('monitoringSettingsStatus');
+  if (!status) return;
+  status.className = `monitor-settings-status ${state}`;
+  status.innerHTML = `<i></i>${message}`;
+}
+
 function syncMonitoringOptions(settings) {
   const links = [
-    ['optConf', 'yolo.confidence'],
-    ['optIou', 'yolo.iou'],
-    ['optDetectEvery', 'yolo.detect_every_n_frames'],
+    [['optConf', 'camConf'], 'yolo.confidence'],
+    [['optIou', 'camIou'], 'yolo.iou'],
+    [['optDetectEvery', 'camDetectEvery'], 'yolo.detect_every_n_frames'],
+    [['optTargetFps', 'camTargetFps'], 'pipeline.target_fps'],
+    [['optPipeScale', 'camPipeScale'], 'pipeline.pipe_scale'],
+    [['optMaxFrames', 'camMaxFrames'], 'pipeline.max_frames'],
+    [['optDevice', 'camDevice'], 'yolo.device'],
+    [['optYoloModel', 'camYoloModel'], 'yolo.model'],
+    [['optSaveVideo', 'camOptSaveVideo'], 'pipeline.save_output_video'],
   ];
-  links.forEach(([elementId, path]) => {
-    const input = document.getElementById(elementId);
+  links.forEach(([elementIds, path]) => {
     const value = settingValue(settings, path);
-    if (input && value !== undefined && value !== null) input.value = value;
+    const spec = systemSettingSpecs[path] || {};
+    elementIds.forEach((elementId) => {
+      const input = document.getElementById(elementId);
+      if (!input || value === undefined || value === null) return;
+      updateSettingInput(input, value, spec);
+    });
   });
+  setMonitoringSettingsStatus('Synced with system settings', 'synced');
+  const applyButton = document.getElementById('applyMonitoringSettingsButton');
+  if (applyButton) applyButton.disabled = false;
+}
+
+async function saveMonitoringSettings() {
+  const button = document.getElementById('applyMonitoringSettingsButton');
+  try {
+    const params = typeof collectVideoParams === 'function' ? collectVideoParams() : {};
+    const settings = {
+      yolo: {
+        confidence: params.conf_threshold,
+        iou: params.iou_threshold,
+        detect_every_n_frames: params.detect_every,
+        device: params.device,
+        model: params.yolo_model,
+      },
+      pipeline: {
+        target_fps: params.target_fps,
+        pipe_scale: params.pipe_scale,
+        max_frames: params.max_frames,
+        save_output_video: params.save_output_video,
+      },
+    };
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Applying...';
+    }
+    setMonitoringSettingsStatus('Saving changes...', 'saving');
+    const response = await apiFetch(SETTINGS_API, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({settings}),
+    });
+    fillSystemSettings(response.data || response);
+    setMonitoringSettingsStatus('Settings synchronized', 'synced');
+    showToast('监控参数已同步到系统设置和后端，新任务将使用最新配置');
+  } catch (error) {
+    setMonitoringSettingsStatus('Synchronization failed', 'error');
+    showToast(error.message, 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Apply Settings';
+    }
+  }
 }
 
 function collectSystemSettings() {
@@ -97,9 +165,9 @@ function collectSystemSettings() {
       setSettingValue(values, path, input.checked);
       continue;
     }
-    if (spec.type === 'text' || input.tagName === 'TEXTAREA') {
+    if (spec.type === 'text' || spec.type === 'string' || input.tagName === 'TEXTAREA') {
       const text = String(raw || '').trim();
-      if (!text) throw new Error(`提示词“${spec.label || path}”不能为空`);
+      if (!text && !spec.allow_empty) throw new Error(`参数“${spec.label || path}”不能为空`);
       if (spec.max_chars && text.length > spec.max_chars) {
         throw new Error(`提示词“${spec.label || path}”过长，最多 ${spec.max_chars} 字符`);
       }
@@ -182,10 +250,14 @@ async function resetSystemSettings() {
 window.loadSystemSettings = loadSystemSettings;
 window.saveSystemSettings = saveSystemSettings;
 window.resetSystemSettings = resetSystemSettings;
+window.saveMonitoringSettings = saveMonitoringSettings;
 
 document.addEventListener('DOMContentLoaded', () => loadSystemSettings(false));
 
 
 document.addEventListener('change', (event) => {
   if (event.target?.matches?.('[data-appearance-toggle]')) syncAppearanceTrackingFields();
+  if (event.target?.closest?.('.monitoring-settings-panel')) {
+    setMonitoringSettingsStatus('Unsaved changes', 'dirty');
+  }
 });

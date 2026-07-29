@@ -60,6 +60,7 @@ _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
 _POOL_EVENT_PREFIX = "__POOL_EVENT__:"
+_PIPELINE_SEGMENT_PREFIX = "__PIPELINE_SEGMENT__:"
 _MAX_POOL_ROWS = 40
 _pool_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
 _pool_rows_lock = threading.Lock()
@@ -210,8 +211,11 @@ def _get_stream_dir(task_id: str) -> Path:
 
 class PipelineStartRequest(BaseModel):
     video_filename: str
+    video_filenames: list[str] | None = None
     display: bool = False
     monitor_start_time: float | None = None  # 连续监控序列中的模拟起始时间
+    segment_gap_seconds: float = 0
+    playlist_failure_policy: str = "skip"
     # ── 核心检测参数 ──
     conf_threshold: float = 0.5
     iou_threshold: float = 0.5
@@ -254,11 +258,17 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     video_filename: str | None = None
+    video_filenames: list[str] | None = None
     progress: str | None = None
     output_filename: str | None = None
     error: str | None = None
     monitor_start_time: float | None = None
     summary: dict[str, Any] | None = None
+    playlist_index: int | None = None
+    playlist_total: int | None = None
+    playlist_current: str | None = None
+    playlist_segment_status: str | None = None
+    playlist_results: list[dict[str, Any]] | None = None
 
 
 class VideoListResponse(BaseModel):
@@ -815,19 +825,39 @@ async def start_pipeline(req: PipelineStartRequest):
             detail=f"已有 {running_count} 个 Pipeline 在运行（上限 {_MAX_PARALLEL_PIPELINES}），请等待完成后再试",
         )
 
-    is_camera = _is_camera_input(req.video_filename)
+    requested_names = req.video_filenames or [req.video_filename]
+    video_names: list[str] = []
+    for filename in requested_names:
+        clean_name = str(filename or "").strip()
+        if clean_name and clean_name not in video_names:
+            video_names.append(clean_name)
+    if not video_names:
+        raise HTTPException(status_code=400, detail="至少需要选择一个视频")
+    if len(video_names) > 500:
+        raise HTTPException(status_code=400, detail="单次连续监控最多处理 500 个视频")
+
+    is_camera = len(video_names) == 1 and _is_camera_input(video_names[0])
+    if is_camera and req.video_filenames:
+        raise HTTPException(status_code=400, detail="摄像头输入不能与视频播放列表混用")
     task_id = str(uuid.uuid4())[:8]
+    video_paths: list[Path] = []
 
     if is_camera:
-        video_source = req.video_filename
+        video_source = video_names[0]
         if video_source.startswith("__camera__"):
             cam_id = video_source.replace("__camera__", "")
             video_source = cam_id
+        playlist_sources = [video_source]
+        video_path = None
     else:
-        video_path = _get_video_path(req.video_filename)
-        if video_path is None or not video_path.exists():
-            raise HTTPException(status_code=404, detail=f"视频不存在: {req.video_filename}")
+        for filename in video_names:
+            resolved = _get_video_path(filename)
+            if resolved is None or not resolved.exists():
+                raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
+            video_paths.append(resolved)
+        video_path = video_paths[0]
         video_source = str(video_path)
+        playlist_sources = [str(item) for item in video_paths]
 
     # 探测视频分辨率（H.264 编码需要知道帧尺寸）
     video_w, video_h = 640, 480  # 默认值
@@ -854,6 +884,11 @@ async def start_pipeline(req: PipelineStartRequest):
         sys.executable, "-m", "pipeline",
         video_source,
     ]
+    if not is_camera and req.video_filenames is not None:
+        cmd.extend(["--playlist-json", json.dumps(playlist_sources, ensure_ascii=False)])
+        cmd.extend(["--segment-gap-seconds", str(max(0.0, req.segment_gap_seconds))])
+        failure_policy = "stop" if str(req.playlist_failure_policy).lower() == "stop" else "skip"
+        cmd.extend(["--playlist-failure-policy", failure_policy])
     # 根据 save_output_video 参数决定是否保存视频
     if req.save_output_video:
         cmd.append("--save-output-video")
@@ -908,13 +943,23 @@ async def start_pipeline(req: PipelineStartRequest):
         _task_status[task_id] = {
             "task_id": task_id,
             "status": "running",
-            "video_filename": req.video_filename,
+            "video_filename": video_names[0],
+            "video_filenames": video_names,
             "output_filename": None,
             "output_path": None,
-            "progress": "处理中...",
+            "progress": "等待流水线启动",
             "error": None,
             "is_camera": is_camera,
             "monitor_start_time": req.monitor_start_time,
+            "playlist_index": 0 if len(video_names) > 1 else None,
+            "playlist_total": len(video_names),
+            "playlist_current": video_names[0],
+            "playlist_segment_status": "queued" if len(video_names) > 1 else None,
+            "playlist_results": [
+                {"index": index, "filename": filename, "status": "queued"}
+                for index, filename in enumerate(video_names)
+            ],
+            "playlist_source_map": {str(source): filename for source, filename in zip(playlist_sources, video_names)},
         }
     _pipeline_logs[task_id] = []
     _log_start[task_id] = 0
@@ -985,6 +1030,43 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
                     logger.warning("池状态事件解析失败 [%s]: %s", task_id, text)
                 continue
 
+            if text.startswith(_PIPELINE_SEGMENT_PREFIX):
+                try:
+                    event = json.loads(text[len(_PIPELINE_SEGMENT_PREFIX):])
+                    index = max(0, int(event.get("index", 0)))
+                    status = str(event.get("status") or "queued")
+                    source = str(event.get("source") or "")
+                    async with _state_lock:
+                        task = _task_status[task_id]
+                        source_map = task.get("playlist_source_map", {})
+                        filename = source_map.get(source) or Path(source).name or source
+                        results = task.setdefault("playlist_results", [])
+                        while len(results) <= index:
+                            results.append({"index": len(results), "filename": "", "status": "queued"})
+                        result = {"index": index, "filename": filename, "status": status}
+                        if event.get("reason"):
+                            result["reason"] = str(event["reason"])
+                        if isinstance(event.get("summary"), dict):
+                            result["summary"] = event["summary"]
+                        results[index] = result
+                        task["playlist_index"] = index
+                        task["playlist_total"] = max(int(event.get("total") or len(results)), len(results))
+                        task["playlist_current"] = filename
+                        task["playlist_segment_status"] = status
+                        task["video_filename"] = filename
+                        if status == "running":
+                            task["progress"] = f"正在处理 {index + 1} / {task['playlist_total']}：{filename}"
+                        elif status == "completed":
+                            task["progress"] = f"已完成 {index + 1} / {task['playlist_total']}：{filename}"
+                        elif status == "failed":
+                            task["progress"] = f"片段失败 {index + 1} / {task['playlist_total']}：{filename}"
+                        elif status == "skipped":
+                            task["progress"] = f"已跳过 {index + 1} / {task['playlist_total']}：{filename}"
+                    _append_pipeline_log(task_id, _task_status[task_id]["progress"], "error" if status == "failed" else "info")
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    logger.warning("播放列表状态事件解析失败 [%s]: %s (%s)", task_id, text, error)
+                continue
+
             download_progress = _compact_download_progress(text)
             if download_progress:
                 async with _state_lock:
@@ -1015,7 +1097,14 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
         async with _state_lock:
             if process.returncode == 0:
                 _task_status[task_id]["status"] = "completed"
-                _task_status[task_id]["progress"] = "处理完成"
+                total = _task_status[task_id].get("playlist_total") or 1
+                results = _task_status[task_id].get("playlist_results", [])
+                completed = sum(1 for item in results if item.get("status") == "completed")
+                failed = sum(1 for item in results if item.get("status") == "failed")
+                _task_status[task_id]["progress"] = (
+                    f"连续监控完成：{completed} 成功，{failed} 失败，共 {total} 段"
+                    if total > 1 else "处理完成"
+                )
                 _append_pipeline_log(task_id, "流水线处理完成", "info")
                 logger.info("Pipeline 完成: %s", task_id)
             else:

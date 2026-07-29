@@ -409,12 +409,16 @@ class TrackMemoryBuilder:
         self._emit_track_status(state, state.last_time, remove=True)
         self.trace.append({"event": "track_finalized", "trackId": state.track_id, "trajectoryPath": str(path)})
 
-    def finalize_all(self) -> None:
+    def finalize_active(self) -> None:
+        """完成当前视频中的活跃轨迹，但保留识别线程池供后续视频复用。"""
         with self._lock:
             self._drain_completed(wait_for_all=True)
             for state in list(self.active.values()):
                 self._finalize_track(state)
             self.active.clear()
+
+    def finalize_all(self) -> None:
+        self.finalize_active()
         self._executor.shutdown(wait=True, cancel_futures=False)
 
     def display_tracks(self) -> dict[int, Any]:

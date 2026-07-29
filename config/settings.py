@@ -10,6 +10,18 @@ import yaml
 
 from .loader import load_config, project_root
 
+
+DETECTION_MODEL_OPTIONS: tuple[str, ...] = (
+    "yolov8n.pt",
+    "yolov8s.pt",
+    "yolov8m.pt",
+    "yolov8l.pt",
+    "yolov8x.pt",
+    "yolo11n.pt",
+    "yolo11s.pt",
+    "yolo11m.pt",
+)
+
 PROMPT_SETTING_KEYS: tuple[str, ...] = (
     "single_frame_recognition",
     "verify_description",
@@ -41,10 +53,16 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
 
 SETTING_SPECS: dict[str, dict[str, Any]] = {
 
+    "yolo.model": {"type": "enum", "choices": list(DETECTION_MODEL_OPTIONS)},
+    "yolo.device": {"type": "string", "allow_empty": True, "max_chars": 128},
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.tracking_candidate_confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.05},
     "yolo.iou": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.detect_every_n_frames": {"type": "int", "min": 1, "max": 100, "step": 1},
+    "pipeline.target_fps": {"type": "float", "min": 0.0, "max": 240.0, "step": 1.0},
+    "pipeline.pipe_scale": {"type": "float", "min": 0.05, "max": 1.0, "step": 0.05},
+    "pipeline.max_frames": {"type": "int", "min": 0, "max": 100000000, "step": 1},
+    "pipeline.save_output_video": {"type": "bool"},
     "yolo.tracker_params.track_high_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
     "yolo.tracker_params.track_low_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
     "yolo.tracker_params.new_track_thresh": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.05},
@@ -140,6 +158,13 @@ def _coerce(path: str, value: Any) -> int | float | str | bool:
             if text_value in {"0", "false", "no", "off"}:
                 return False
             raise ValueError(f"参数 {path} 必须是布尔值")
+        if spec["type"] == "string":
+            text_value = str(value if value is not None else "").strip()
+            if not text_value and not spec.get("allow_empty", False):
+                raise ValueError(f"参数 {path} 不能为空")
+            if len(text_value) > int(spec.get("max_chars", 1024)):
+                raise ValueError(f"参数 {path} 过长")
+            return text_value
         if spec["type"] == "enum":
             text_value = str(value if value is not None else "").strip().lower()
             choices = [str(item).lower() for item in spec.get("choices", [])]

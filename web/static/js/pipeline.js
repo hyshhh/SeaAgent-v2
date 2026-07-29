@@ -79,7 +79,7 @@ function buildVideoDirectories(videos) {
     counts.set(directory, (counts.get(directory) || 0) + 1);
   });
   return [
-    { path: '', name: '根目录', count: counts.get('') || 0 },
+    { path: '', name: 'Root Directory', count: counts.get('') || 0 },
     ...[...counts.keys()]
       .filter(path => path)
       .sort((a, b) => a.localeCompare(b))
@@ -93,15 +93,15 @@ function renderVideoDirectorySelector() {
   if (!select) return;
 
   select.innerHTML = videoDirectories.map(directory => `
-    <option value="${safeAttr(directory.path)}">${escHtml(directory.name)}（${directory.count} 个视频）</option>
+    <option value="${safeAttr(directory.path)}">${escHtml(directory.name)} (${directory.count})</option>
   `).join('');
   select.value = selectedVideoDirectory;
 
   const current = videoDirectories.find(directory => directory.path === selectedVideoDirectory);
   if (summary) {
     summary.textContent = current
-      ? `当前目录：${current.name} · ${current.count} 个视频`
-      : '当前目录暂无视频';
+      ? `${current.name} · ${current.count} Videos`
+      : 'No videos in this directory';
   }
 }
 
@@ -133,13 +133,13 @@ function renderVideoList() {
            onclick="selectVideo(this.dataset.name, this)" data-name="${safeAttr(v.filename)}">
         <label class="video-sequence-check" onclick="event.stopPropagation()" title="加入连续监控序列"><input type="checkbox" data-name="${safeAttr(v.filename)}" ${continuousSelectedVideos.has(v.filename) ? 'checked' : ''} onchange="toggleContinuousVideo(this.dataset.name, this.checked)"></label>
         <span class="video-sequence-index">${index + 1}</span>
-        <div class="video-item-icon">🎬</div>
+        <div class="video-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14M16 5v14M3 10h5M16 10h5M3 14h5M16 14h5"/></svg></div>
         <div class="video-item-info">
            <div class="video-item-name">${escHtml(relativeName)}</div>
-           <div class="video-item-meta">${v.size_mb == null ? '视频文件' : `${v.size_mb} MB`}<span class="video-sequence-state" data-sequence-state="${safeAttr(v.filename)}">${continuousSelectedVideos.has(v.filename) ? '待处理' : '未加入'}</span></div>
+           <div class="video-item-meta">${v.size_mb == null ? 'Video File' : `${v.size_mb} MB`}<span class="video-sequence-state" data-sequence-state="${safeAttr(v.filename)}">${continuousSelectedVideos.has(v.filename) ? 'Queued' : 'Not Selected'}</span></div>
         </div>
         <div class="video-item-actions">
-          <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteVideo(this.dataset.name)" data-name="${safeAttr(v.filename)}">🗑️</button>
+          <button class="video-delete-button" title="Delete video" aria-label="Delete video" onclick="event.stopPropagation(); deleteVideo(this.dataset.name)" data-name="${safeAttr(v.filename)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button>
         </div>
       </div>
     `;
@@ -311,7 +311,7 @@ async function startVideoPipeline() {
   await launchVideoPipeline(selectedVideo, null, false);
 }
 
-async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMode = false) {
+async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMode = false, sequenceOptions = null) {
 
   const btn = document.getElementById('btnStartPipeline');
   if (btn) {
@@ -325,7 +325,10 @@ async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMo
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         video_filename: filename,
+        video_filenames: sequenceOptions?.filenames || null,
         monitor_start_time: monitorStartTime,
+        segment_gap_seconds: sequenceOptions?.gapSeconds || 0,
+        playlist_failure_policy: sequenceOptions?.failurePolicy || 'skip',
         ...collectVideoParams(),
       }),
     });
@@ -378,68 +381,63 @@ async function startContinuousMonitoring() {
     return;
   }
   const startInput = document.getElementById('continuousStartTime');
-  const startTime = startInput ? new Date(startInput.value).getTime() / 1000 : NaN;
-  if (!Number.isFinite(startTime) || startTime <= 0) {
-    showToast('请设置有效的监控起始时间', 'error');
+  const parsedStart = startInput?.value ? new Date(startInput.value).getTime() / 1000 : null;
+  if (startInput?.value && (!Number.isFinite(parsedStart) || parsedStart <= 0)) {
+    showToast('监控起始时间格式不正确', 'error');
     return;
   }
-  const gapInput = document.getElementById('continuousGapSeconds');
-  const parsedGap = Number(gapInput?.value || 0);
+  const parsedGap = Number(document.getElementById('continuousGapSeconds')?.value || 0);
   const gapSeconds = Number.isFinite(parsedGap) ? Math.max(0, parsedGap) : 0;
+  const failurePolicy = document.getElementById('continuousFailurePolicy')?.value || 'skip';
   continuousMonitorState = {
     queue,
     index: 0,
-    cursor: startTime,
     gapSeconds,
-    failurePolicy: document.getElementById('continuousFailurePolicy')?.value || 'skip',
+    failurePolicy,
     currentTaskId: null,
     cancelled: false,
-    results: [],
+    results: queue.map((filename, index) => ({index, filename, status: 'queued'})),
   };
-  updateContinuousMonitorControls();
-  await startNextContinuousVideo();
-}
-
-async function startNextContinuousVideo() {
-  const state = continuousMonitorState;
-  if (!state || state.cancelled) return;
-  if (state.index >= state.queue.length) {
-    finishContinuousMonitoring('连续监控序列已完成', 'completed');
-    return;
-  }
-  const filename = state.queue[state.index];
-  selectedVideo = filename;
-  markSequenceVideo(filename, 'running');
-  showVideoPreview(filename);
+  queue.forEach(filename => markSequenceVideo(filename, 'queued'));
+  selectedVideo = queue[0];
+  markSequenceVideo(queue[0], 'running');
   clearPoolTables();
-  updateContinuousProgress(`正在处理 ${state.index + 1} / ${state.queue.length}：${filename}`);
-  const started = await launchVideoPipeline(filename, state.cursor, true);
-  if (!started) handleContinuousFailure(filename, '启动失败');
+  updateContinuousProgress(`Starting one pipeline for ${queue.length} videos...`);
+  updateContinuousMonitorControls();
+  const started = await launchVideoPipeline(queue[0], parsedStart, true, {
+    filenames: queue,
+    gapSeconds,
+    failurePolicy,
+  });
+  if (!started) finishContinuousMonitoring('Sequence failed to start', 'failed');
 }
 
-function handleContinuousFailure(filename, reason) {
+function syncContinuousSequenceStatus(data) {
   const state = continuousMonitorState;
-  if (!state) return;
-  state.results.push({filename, status: 'failed', reason});
-  markSequenceVideo(filename, 'failed');
-  if (state.cancelled || state.failurePolicy === 'stop') {
-    finishContinuousMonitoring(`连续监控已停止：${filename}`, 'failed');
-    return;
+  if (!state || state.currentTaskId !== currentTaskId) return;
+  const results = Array.isArray(data.playlist_results) ? data.playlist_results : [];
+  results.forEach((result) => {
+    if (!result?.filename || !result.status || result.status === 'queued') return;
+    markSequenceVideo(result.filename, result.status);
+  });
+  state.results = results.length ? results : state.results;
+  const index = Number(data.playlist_index);
+  if (Number.isInteger(index) && index >= 0) state.index = index;
+  const current = data.playlist_current;
+  if (current && data.playlist_segment_status === 'running') {
+    selectedVideo = current;
+    markSequenceVideo(current, 'running');
   }
-  state.index += 1;
-  updateContinuousProgress(`已跳过 ${filename}，准备处理下一段`);
-  setTimeout(startNextContinuousVideo, 250);
+  if (data.progress) updateContinuousProgress(data.progress);
 }
 
 function finishContinuousMonitoring(message, status = 'completed') {
-  const state = continuousMonitorState;
   continuousMonitorState = null;
   updateContinuousMonitorControls();
   resetPipelineButtons();
   updatePipelineStatus(status, message);
   updateContinuousProgress(message);
-  if (status === 'completed') showToast(message);
-  else showToast(message, 'info');
+  showToast(message, status === 'completed' ? 'success' : 'info');
   loadTaskHistory();
 }
 
@@ -743,6 +741,7 @@ async function pollTaskStatus() {
     }
     const data = await resp.json();
     updatePipelineStatus(data.status, data.progress || data.error || '');
+    syncContinuousSequenceStatus(data);
 
     if (data.status === 'completed') {
       if (currentTaskId === taskId) {
@@ -752,23 +751,11 @@ async function pollTaskStatus() {
         currentTaskId = null;
         const sequence = continuousMonitorState;
         if (sequence && sequence.currentTaskId === taskId) {
-          const filename = sequence.queue[sequence.index];
-          const summary = data.summary || {};
-          const duration = Number(summary.video_duration_seconds || 0);
-          const monitorEnd = Number(summary.monitor_end_time);
-          sequence.results.push({filename, status: 'completed'});
-          markSequenceVideo(filename, 'completed');
-          sequence.cursor = Number.isFinite(monitorEnd) && monitorEnd > 0 ? monitorEnd + sequence.gapSeconds : sequence.cursor + duration + sequence.gapSeconds;
-          sequence.index += 1;
+          (data.playlist_results || []).forEach(result => {
+            if (result?.filename) markSequenceVideo(result.filename, result.status || 'completed');
+          });
           sequence.currentTaskId = null;
-          if (sequence.cancelled) {
-            finishContinuousMonitoring('连续监控已停止', 'failed');
-          } else if (sequence.index >= sequence.queue.length) {
-            finishContinuousMonitoring('连续监控序列已完成', 'completed');
-          } else {
-            updateContinuousProgress(`已完成 ${sequence.index} / ${sequence.queue.length}，准备切换下一段`);
-            setTimeout(startNextContinuousVideo, 250);
-          }
+          finishContinuousMonitoring(data.progress || 'Continuous monitoring completed', 'completed');
           return;
         }
         resetPipelineButtons();
@@ -790,9 +777,11 @@ async function pollTaskStatus() {
         currentTaskId = null;
         const sequence = continuousMonitorState;
         if (sequence && sequence.currentTaskId === taskId) {
-          const filename = sequence.queue[sequence.index];
+          (data.playlist_results || []).forEach(result => {
+            if (result?.filename) markSequenceVideo(result.filename, result.status || 'failed');
+          });
           sequence.currentTaskId = null;
-          handleContinuousFailure(filename, errorMsg);
+          finishContinuousMonitoring(errorMsg === '用户手动停止' ? 'Continuous monitoring stopped' : `Sequence failed: ${errorMsg}`, 'failed');
           return;
         }
         resetPipelineButtons();
@@ -883,12 +872,6 @@ function renderPoolRows(elementId, rows, emptyText) {
 }
 
 function initializeContinuousMonitorControls() {
-  const input = document.getElementById('continuousStartTime');
-  if (input && !input.value) {
-    const now = new Date();
-    const pad = value => String(value).padStart(2, '0');
-    input.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-  }
   updateContinuousMonitorControls();
 }
 
@@ -899,7 +882,7 @@ function toggleContinuousVideo(filename, checked) {
   const item = [...document.querySelectorAll('.video-item')].find(node => node.dataset.name === filename);
   if (item) item.classList.toggle('sequence-selected', checked);
   const stateLabel = [...document.querySelectorAll('.video-sequence-state')].find(node => node.dataset.sequenceState === filename);
-  if (stateLabel) stateLabel.textContent = checked ? '待处理' : '未加入';
+  if (stateLabel) stateLabel.textContent = checked ? 'Queued' : 'Not Selected';
   updateContinuousMonitorControls();
 }
 
@@ -914,7 +897,7 @@ function toggleAllContinuousVideos(checked) {
   }
   document.querySelectorAll('.video-sequence-check input').forEach(input => { input.checked = checked; });
   document.querySelectorAll('.video-item').forEach(item => item.classList.toggle('sequence-selected', checked));
-  document.querySelectorAll('.video-sequence-state').forEach(label => { label.textContent = checked ? '待处理' : '未加入'; });
+  document.querySelectorAll('.video-sequence-state').forEach(label => { label.textContent = checked ? 'Queued' : 'Not Selected'; });
   updateContinuousMonitorControls();
 }
 
@@ -927,7 +910,7 @@ function updateContinuousMonitorControls() {
   const visibleVideos = getVisibleVideoCatalog();
   const visibleNames = new Set(visibleVideos.map(video => video.filename));
   const count = visibleVideos.filter(video => continuousSelectedVideos.has(video.filename)).length;
-  if (selectedCount) selectedCount.textContent = `已选 ${count} 条`;
+  if (selectedCount) selectedCount.textContent = `${count} Selected`;
   if (selectAll) {
     selectAll.checked = visibleVideos.length > 0 && count === visibleVideos.length;
     selectAll.indeterminate = count > 0 && count < visibleVideos.length;
@@ -952,13 +935,19 @@ function updateContinuousProgress(text) {
 }
 
 function markSequenceVideo(filename, state) {
-  document.querySelectorAll('.video-item').forEach(item => {
-    item.classList.remove('sequence-running', 'sequence-completed', 'sequence-failed');
-    if (item.dataset.name === filename) item.classList.add(`sequence-${state}`);
-  });
-  const stateLabels = {running: '处理中', completed: '已完成', failed: '已跳过'};
+  const target = [...document.querySelectorAll('.video-item')].find(item => item.dataset.name === filename);
+  if (state === 'running') {
+    document.querySelectorAll('.video-item.sequence-running').forEach(item => {
+      if (item !== target) item.classList.remove('sequence-running');
+    });
+  }
+  if (target) {
+    target.classList.remove('sequence-running', 'sequence-completed', 'sequence-failed', 'sequence-skipped');
+    if (state !== 'queued') target.classList.add(`sequence-${state}`);
+  }
+  const stateLabels = {running: 'Running', completed: 'Completed', failed: 'Failed', skipped: 'Skipped', queued: 'Queued'};
   const label = [...document.querySelectorAll('.video-sequence-state')].find(node => node.dataset.sequenceState === filename);
-  if (label) label.textContent = stateLabels[state] || '待处理';
+  if (label) label.textContent = stateLabels[state] || 'Queued';
 }
 
 function renderActiveTrackMonitor(rows) {

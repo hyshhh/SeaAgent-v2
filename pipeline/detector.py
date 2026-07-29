@@ -149,6 +149,24 @@ class ShipDetector:
 
         return detections
 
+    def reset_tracking(self) -> None:
+        """在视频边界重置跟踪状态，不重新加载检测模型。"""
+        try:
+            predictor = getattr(self._model, "predictor", None)
+            trackers = getattr(predictor, "trackers", None) if predictor is not None else None
+            for tracker in trackers or []:
+                reset = getattr(tracker, "reset", None)
+                if callable(reset):
+                    reset()
+            if predictor is not None:
+                for name in ("vid_path", "seen_vid_path"):
+                    value = getattr(predictor, name, None)
+                    if isinstance(value, list):
+                        for index in range(len(value)):
+                            value[index] = None
+        except Exception as error:
+            logger.warning("视频边界跟踪器重置失败，将继续处理下一段：%s", error)
+
     def cleanup(self) -> None:
         if self._tracker_tmp_file:
             try:
