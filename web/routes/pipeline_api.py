@@ -64,7 +64,7 @@ _MAX_POOL_ROWS = 40
 _pool_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
 _pool_rows_lock = threading.Lock()
 _VIDEO_LIST_CACHE_TTL = 300.0
-_video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": []}
+_video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": [], "directories": []}
 _video_list_lock = asyncio.Lock()
 _PIPE_SCALE_MIN = 0.05
 
@@ -263,6 +263,7 @@ class TaskStatusResponse(BaseModel):
 
 class VideoListResponse(BaseModel):
     videos: list[dict[str, Any]]
+    directories: list[dict[str, Any]] = []
 
 
 class PipelineStatusResponse(BaseModel):
@@ -529,11 +530,13 @@ def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]
                 rel_path = file_path.relative_to(demo_dir).as_posix()
             except ValueError:
                 continue
+            directory = rel_path.split("/", 1)[0] if "/" in rel_path else ""
             videos.append({
                 "filename": rel_path,
                 "relative_path": rel_path,
                 "display_name": rel_path,
                 "name": name,
+                "directory": directory,
                 "size_mb": None,
                 "modified": None,
             })
@@ -541,6 +544,27 @@ def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]
     elapsed = time.perf_counter() - started
     logger.info("视频目录递归扫描完成: path=%s count=%d elapsed=%.3fs", demo_dir, len(videos), elapsed)
     return sorted(videos, key=lambda item: item["filename"].lower())
+
+
+def _build_video_directories(videos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按根目录下的一级子目录分组；子目录下的多级视频仍归入其一级目录。"""
+    counts: dict[str, int] = {"": 0}
+    for video in videos:
+        directory = str(video.get("directory") or "")
+        counts[directory] = counts.get(directory, 0) + 1
+
+    directories = [{
+        "path": "",
+        "name": "根目录",
+        "count": counts.get("", 0),
+    }]
+    for directory in sorted((item for item in counts if item), key=str.lower):
+        directories.append({
+            "path": directory,
+            "name": directory,
+            "count": counts[directory],
+        })
+    return directories
 
 
 def _invalidate_video_list_cache() -> None:
@@ -554,14 +578,26 @@ async def list_videos():
     directory = str(demo_dir)
     now = time.monotonic()
     if _video_list_cache["directory"] == directory and now < _video_list_cache["expires_at"]:
-        return VideoListResponse(videos=list(_video_list_cache["videos"]))
+        return VideoListResponse(
+            videos=list(_video_list_cache["videos"]),
+            directories=list(_video_list_cache["directories"]),
+        )
     async with _video_list_lock:
         now = time.monotonic()
         if _video_list_cache["directory"] == directory and now < _video_list_cache["expires_at"]:
-            return VideoListResponse(videos=list(_video_list_cache["videos"]))
+            return VideoListResponse(
+                videos=list(_video_list_cache["videos"]),
+                directories=list(_video_list_cache["directories"]),
+            )
         videos = await asyncio.to_thread(_scan_video_files, demo_dir, set(_get_allowed_extensions()))
-        _video_list_cache.update(directory=directory, expires_at=now + _VIDEO_LIST_CACHE_TTL, videos=videos)
-    return VideoListResponse(videos=videos)
+        directories = _build_video_directories(videos)
+        _video_list_cache.update(
+            directory=directory,
+            expires_at=now + _VIDEO_LIST_CACHE_TTL,
+            videos=videos,
+            directories=directories,
+        )
+    return VideoListResponse(videos=videos, directories=directories)
 
 
 @router.post("/videos/upload")

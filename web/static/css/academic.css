@@ -797,6 +797,61 @@ tbody tr:hover td { background: #f2f6f9; }
   .agent-query-panel,
   .agent-thinking-panel { min-height: 0; }
 }
+/* 视频目录选择：目录是监控序列的明确边界 */
+.video-directory-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d6dee6;
+  border-radius: 4px;
+  background: #f8fafc;
+}
+.video-directory-picker {
+  display: grid;
+  gap: 5px;
+  min-width: 260px;
+  color: #536273;
+  font-size: 11px;
+  font-weight: 700;
+}
+.video-directory-picker select {
+  min-width: 260px;
+  height: 34px;
+  padding: 0 9px;
+  color: #263547;
+  border: 1px solid #bdc9d4;
+  border-radius: 4px;
+  background: #fff;
+  color-scheme: light;
+}
+.video-directory-picker select:focus {
+  outline: 2px solid rgba(31, 78, 121, .16);
+  outline-offset: 1px;
+  border-color: #6f8faa;
+}
+.video-directory-summary {
+  margin-left: auto;
+  color: #718096;
+  font-size: 10px;
+  white-space: nowrap;
+}
+@media (max-width: 620px) {
+  .video-directory-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .video-directory-picker,
+  .video-directory-picker select {
+    min-width: 0;
+    width: 100%;
+  }
+  .video-directory-summary {
+    margin-left: 0;
+  }
+}
+
 /* 监控页残留控件修正 */
 .result-area .video-placeholder {
   min-height: 420px;

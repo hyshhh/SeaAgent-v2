@@ -39,6 +39,15 @@ def test_scan_video_files_includes_nested_videos_and_skips_cache(tmp_path: Path)
     ]
     assert videos[0]["name"] == "clip.avi"
     assert videos[0]["relative_path"] == "mission_a/clip.avi"
+    assert videos[0]["directory"] == "mission_a"
+    assert videos[1]["directory"] == "mission_b"
+    assert videos[2]["directory"] == ""
+
+    assert pipeline_api._build_video_directories(videos) == [
+        {"path": "", "name": "根目录", "count": 1},
+        {"path": "mission_a", "name": "mission_a", "count": 1},
+        {"path": "mission_b", "name": "mission_b", "count": 1},
+    ]
 
 
 def test_resolve_demo_video_path_allows_nested_relative_path_and_rejects_escape(tmp_path: Path, monkeypatch):

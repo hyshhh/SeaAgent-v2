@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=21">
+<link rel="stylesheet" href="/static/css/academic.css?v=22">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -57,12 +57,16 @@
       </section>
       <div class="control-grid">
         <section class="panel compact-panel">
-          <div class="panel-head"><div><span class="eyebrow">视频源</span><h3>上传与选择</h3></div></div>
-          <div class="upload-zone" id="videoUploadZone" onclick="document.getElementById('videoFileInput').click()">
-            <strong>上传监控视频</strong><span>支持常见视频格式</span><em id="videoUploadFilename"></em>
-            <input id="videoFileInput" type="file" accept="video/*" hidden>
+          <div class="panel-head"><div><span class="eyebrow">视频源</span><h3>视频目录与选择</h3></div></div>
+          <div class="video-directory-toolbar">
+            <label class="video-directory-picker">选择视频目录
+              <select id="videoDirectorySelect" onchange="changeVideoDirectory(this.value)">
+                <option value="">根目录</option>
+              </select>
+            </label>
+            <button class="btn ghost btn-sm" type="button" onclick="loadVideoList()">刷新目录</button>
+            <span id="videoDirectorySummary" class="video-directory-summary">正在读取目录…</span>
           </div>
-          <div class="upload-progress" id="videoUploadProgress" style="display:none"><div class="progress-track"><div id="videoProgressBar"></div></div><span id="videoProgressText">0%</span></div>
           <div class="continuous-monitor-box">
             <div class="continuous-monitor-head"><div><strong>连续监控序列</strong><span>逐段处理所选视频并保持连续监控时间</span></div><em id="continuousSelectedCount">已选 0 条</em></div>
             <div class="continuous-monitor-options">
@@ -365,7 +369,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=17"></script>
+<script src="/static/js/pipeline.js?v=18"></script>
   <script src="/static/js/memory.js?v=6"></script>
 <script src="/static/js/agent.js?v=58"></script>
 <script src="/static/js/settings.js?v=9"></script>
