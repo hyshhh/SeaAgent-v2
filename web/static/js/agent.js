@@ -582,6 +582,73 @@ function setAgentResultState(label, state = 'running') {
   if (badge) badge.textContent = label;
 }
 
+let agentLiveActivityTimer = null;
+let agentLiveActivitySignature = '';
+
+function clearAgentLiveActivity() {
+  if (agentLiveActivityTimer) {
+    window.clearTimeout(agentLiveActivityTimer);
+    agentLiveActivityTimer = null;
+  }
+  agentLiveActivitySignature = '';
+  const activity = document.getElementById('agentLiveActivity');
+  if (!activity) return;
+  activity.hidden = true;
+  activity.dataset.kind = 'idle';
+  activity.classList.remove('running', 'settling', 'scrolling');
+}
+
+function setAgentLiveActivity({kind = 'phase', label = '', detail = '', running = true, clearAfter = 0} = {}) {
+  const activity = document.getElementById('agentLiveActivity');
+  const labelNode = document.getElementById('agentLiveActivityLabel');
+  const detailNode = document.getElementById('agentLiveActivityDetail');
+  const separator = activity?.querySelector('.agent-live-separator');
+  if (!activity || !labelNode || !detailNode) return;
+  const safeLabel = String(label || '').trim();
+  const safeDetail = String(detail || '').replace(/\s+/g, ' ').trim();
+  const signature = `${kind}|${safeLabel}|${safeDetail}|${running ? 'running' : 'settling'}`;
+  if (agentLiveActivityTimer) {
+    window.clearTimeout(agentLiveActivityTimer);
+    agentLiveActivityTimer = null;
+  }
+  if (agentLiveActivitySignature === signature && !activity.hidden) {
+    if (!running && clearAfter > 0) {
+      agentLiveActivityTimer = window.setTimeout(() => {
+        if (agentLiveActivitySignature === signature) clearAgentLiveActivity();
+      }, Math.max(80, Number(clearAfter) || 0));
+    }
+    return;
+  }
+  agentLiveActivitySignature = signature;
+  activity.hidden = !safeLabel && !safeDetail;
+  activity.dataset.kind = kind;
+  activity.classList.toggle('running', Boolean(running));
+  activity.classList.toggle('settling', !running);
+  activity.classList.remove('scrolling');
+  labelNode.textContent = safeLabel;
+  if (separator) separator.hidden = !safeDetail;
+  detailNode.innerHTML = safeDetail
+    ? `<span class="agent-live-marquee-text">${escapeHtml(safeDetail)}</span>`
+    : '';
+  const cursor = activity.querySelector('.agent-live-cursor');
+  if (cursor) cursor.hidden = !running;
+  if (safeDetail) {
+    window.requestAnimationFrame(() => {
+      if (agentLiveActivitySignature !== signature || activity.hidden) return;
+      const textNode = detailNode.querySelector('.agent-live-marquee-text');
+      if (!textNode || detailNode.clientWidth <= 0 || textNode.scrollWidth <= detailNode.clientWidth + 8) return;
+      const escaped = escapeHtml(safeDetail);
+      detailNode.innerHTML = `<span class="agent-live-marquee-track"><span class="agent-live-marquee-text">${escaped}</span><span class="agent-live-marquee-text" aria-hidden="true">${escaped}</span></span>`;
+      activity.classList.add('scrolling');
+    });
+  }
+  if (!running && clearAfter > 0) {
+    agentLiveActivityTimer = window.setTimeout(() => {
+      if (agentLiveActivitySignature === signature) clearAgentLiveActivity();
+    }, Math.max(80, Number(clearAfter) || 0));
+  }
+}
+
 function setAgentInitSummary(label) {
   const summary = document.getElementById('agentInitSummary');
   if (summary) summary.textContent = label;
@@ -606,6 +673,7 @@ function showAgentProcessView() {
   if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">Tool records will appear here after execution.</div>';
   if (hint) hint.textContent = 'Init and plan updates appear here in real time';
   setAgentResultState('Initializing', 'running');
+  setAgentLiveActivity({kind: 'phase', label: 'Initializing', detail: 'Waiting for structured agent events', running: true});
 }
 
 function showAgentFinalView(state = 'completed') {
@@ -635,6 +703,7 @@ function showAgentFinalView(state = 'completed') {
     if (toolSummary) toolSummary.textContent = 'Incomplete calls';
     if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">Execution stopped before a complete tool summary was generated.</div>';
   }
+  clearAgentLiveActivity();
   setAgentResultState(state === 'failed' ? 'Failed' : 'Completed', state);
 }
 
@@ -1537,6 +1606,7 @@ function resetThoughtStream() {
     setAgentInitSummary('Parsing intent');
   }
   setAgentResultState('Initializing', 'running');
+  setAgentLiveActivity({kind: 'phase', label: 'Initializing', detail: 'Parsing the question and acceptance target', running: true});
   if (mode) mode.textContent = 'Plan → Observe → Verify · Reflect controls the next round';
   setThinkingState('Reasoning', 'active');
 }
@@ -1597,6 +1667,7 @@ function appendSystemThought(event) {
       setAgentInitSummary('Parsing intent');
     }
     setThinkingState('Initializing', 'active');
+    setAgentLiveActivity({kind: 'phase', label: 'Initializing', detail: event.message || 'Parsing intent', running: true});
     return;
   }
   if (event.type === 'status' && event.role) {
@@ -1609,15 +1680,22 @@ function appendSystemThought(event) {
       const content = card.querySelector('.agent-stream-text');
       const isPlaceholder = content?.querySelector('.agent-stream-placeholder');
       if (isPlaceholder || !(card.dataset.streamText || '').trim()) {
-        setAgentStreamText(card, event.message, {cursor: true});
+          setAgentStreamText(card, event.message, {cursor: true});
       }
     }
+    setAgentLiveActivity({
+      kind: 'phase',
+      label: roleRunningLabel(event.role),
+      detail: event.message || event.title || 'Structured agent event',
+      running: true,
+    });
     return;
   }
   if (event.type === 'synthesis') {
     const decision = document.getElementById('agentPlanDecision');
     if (decision) decision.textContent = `${stateLabel(event.state)} · ${Number(event.trackCount || 0)} candidate tracks.`;
     setAgentResultState('Synthesizing', 'running');
+    setAgentLiveActivity({kind: 'phase', label: 'Synthesizing result', detail: event.message || 'Organizing evidence and final answer', running: true});
     setThinkingState('Synthesizing Result', 'active');
   }
 }
@@ -1681,34 +1759,89 @@ function toolResultText(call) {
   return 'done';
 }
 
+function toolArgumentsForCall(callOrArguments) {
+  let value = callOrArguments;
+  if (callOrArguments && typeof callOrArguments === 'object' && !Array.isArray(callOrArguments)) {
+    if (Object.prototype.hasOwnProperty.call(callOrArguments, 'arguments')) value = callOrArguments.arguments;
+    else if (Object.prototype.hasOwnProperty.call(callOrArguments, 'args')) value = callOrArguments.args;
+  }
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch (_) { return {value: compactAgentValue(value, 120)}; }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
 function formatToolArgumentValue(value) {
   if (value == null) return 'null';
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return compactAgentValue(value, 96);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
     const visible = value.slice(0, 10).map((item) => formatToolArgumentValue(item));
     return `[${visible.join(', ')}${value.length > visible.length ? `, …+${value.length - visible.length}` : ''}]`;
   }
   if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length > 12) return `<object:${keys.length} keys>`;
     const fields = Object.entries(value).slice(0, 6)
       .map(([key, item]) => `${key}:${formatToolArgumentValue(item)}`);
-    return `{${fields.join(', ')}${Object.keys(value).length > fields.length ? ', …' : ''}}`;
+    return `{${fields.join(', ')}${keys.length > fields.length ? ', …' : ''}}`;
   }
-  return String(value);
+  return compactAgentValue(value, 96);
 }
 
 function formatToolArguments(argumentsValue) {
-  if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return 'no args';
-  const entries = Object.entries(argumentsValue);
+  const normalized = toolArgumentsForCall(argumentsValue);
+  const entries = Object.entries(normalized);
   if (!entries.length) return 'no args';
   return entries.map(([key, value]) => `${key}=${formatToolArgumentValue(value)}`).join(', ');
 }
 
-function formatToolCall(round, call) {
+function formatToolCall(round, call = {}) {
   const roundNumber = Math.max(1, Number(round || call.round || 1));
   if (call.legacy) return `${roundNumber}-${call.legacy}-done`;
   const tool = call.tool || 'tool';
-  return `${roundNumber} · ${tool}(${formatToolArguments(call.arguments)}) · ${toolResultText(call)}`;
+  return `${roundNumber} · ${tool}(${formatToolArguments(toolArgumentsForCall(call))}) · ${toolResultText(call)}`;
+}
+
+function liveSkillSnapshot(card, event = {}) {
+  const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
+  const eventIndex = Number(event.skillIndex || 0);
+  const eventTotal = Number(event.skillTotal || 0);
+  const eventId = event.skillId || event.currentSkillId;
+  const record = (eventId && reads.find((item) => item.skillId === eventId))
+    || (eventIndex > 0 && reads[eventIndex - 1])
+    || card?._currentSkill
+    || reads.find((item) => item.phase === 'running')
+    || reads[0]
+    || {};
+  const index = eventIndex > 0
+    ? eventIndex
+    : Math.max(1, Number(card?._currentSkill?.index || reads.indexOf(record) + 1));
+  const total = Math.max(index, eventTotal || Number(card?._currentSkill?.total || reads.length || 1));
+  const name = event.currentSkillTitle || event.skillTitle || eventId || record.title || record.skillId || 'skill';
+  return {index, total, name: String(name), description: event.description || record.description || ''};
+}
+
+function setLiveSkillActivity(card, event = {}) {
+  const snapshot = liveSkillSnapshot(card, event);
+  const phase = String(event.phase || 'running');
+  const running = phase === 'running';
+  const label = `${running ? 'Reading' : phase === 'failed' ? 'Failed to read' : 'Read'} skill ${snapshot.index}/${snapshot.total} · ${snapshot.name}`;
+  const detail = `${snapshot.name}${snapshot.description ? ` · ${compactAgentValue(snapshot.description, 90)}` : ''} · ${phase}`;
+  setAgentLiveActivity({kind: 'skill', label, detail, running, clearAfter: running ? 0 : phase === 'failed' ? 520 : 180});
+}
+
+function setLiveToolActivity(card, event = {}, logs = [], runningIndex = -1) {
+  const eventPhase = String(event.phase || event.status || 'completed');
+  const running = eventPhase === 'running' || event.status === 'running';
+  const current = runningIndex >= 0 ? logs[runningIndex] : event;
+  const index = runningIndex >= 0 ? runningIndex + 1 : Math.max(1, logs.findIndex((item) => item.id === event.id) + 1);
+  const total = Math.max(logs.length, Number(card?._toolTotal || 0) || 0, index);
+  const tool = current?.tool || event.tool || event.id || 'tool';
+  const args = formatToolArguments(toolArgumentsForCall(current || event));
+  const label = `${running ? 'Running' : eventPhase === 'failed' ? 'Failed' : eventPhase === 'skipped' ? 'Skipped' : 'Completed'} tool ${index}/${total} · ${tool}`;
+  const detail = `${tool}(${args}) · ${eventPhase}`;
+  setAgentLiveActivity({kind: 'tool', label, detail, running, clearAfter: running ? 0 : eventPhase === 'failed' ? 620 : 220});
 }
 
 function agentActivityOpen(card, kind) {
@@ -1781,8 +1914,8 @@ function currentSkillSnapshot(card, reads) {
   if (!Number.isFinite(index) || index <= 0) index = Math.max(1, reads.indexOf(record) + 1);
   if (!Number.isFinite(total) || total <= 0) total = fallbackTotal;
   total = Math.max(total, index);
-  const name = current.skillId || current.currentSkillId || record.skillId || current.title || current.currentSkillTitle || record.title || 'skill';
-  const title = current.title || current.currentSkillTitle || record.title || name;
+  const name = current.title || current.currentSkillTitle || record.title || current.skillId || current.currentSkillId || record.skillId || 'skill';
+  const title = current.title || current.currentSkillTitle || record.title || current.skillId || record.skillId || name;
   return {index, total, name, title};
 }
 
@@ -1813,11 +1946,13 @@ function renderToolActivity(card) {
   const failed = logs.filter((item) => item.failed).length;
   const current = running ? logs[runningIndex] : null;
   const total = Math.max(logs.length, Number(card?._toolTotal || 0) || 0, runningIndex + 1);
+  const toolName = (current && (current.tool || current.id)) || 'tool';
+  const currentArguments = current ? formatToolArguments(toolArgumentsForCall(current)) : '';
   const label = running
-    ? `Running tool ${runningIndex + 1}/${Math.max(1, total)} · ${(current && (current.tool || current.id)) || 'tool'}`
+    ? `Running tool ${runningIndex + 1}/${Math.max(1, total)} · ${toolName} · ${toolName}(${currentArguments})`
     : `Ran ${logs.length} tools${failed ? ` · ${failed} failed` : ''}`;
   const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
-  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml((current && (current.tool || current.id)) || label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml(running ? `${toolName}(${currentArguments})` : label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
 function bindAgentActivityState(card) {
@@ -1845,12 +1980,16 @@ function updateObserverToolEvent(event) {
   const index = logs.findIndex((item) => item.id === eventId);
   const running = event.phase === 'running' || event.status === 'running';
   const toolName = event.tool || event.message || eventId;
+  const argumentsValue = toolArgumentsForCall(event);
+  const phase = event.phase || event.status || (running ? 'running' : 'completed');
   const item = {
     id: eventId,
     tool: toolName,
-    text: formatToolCall(event.round, {...event, id: eventId, tool: toolName}),
+    arguments: argumentsValue,
+    text: formatToolCall(event.round, {...event, id: eventId, tool: toolName, arguments: argumentsValue, phase}),
     running,
-    phase: event.phase || event.status || (running ? 'running' : 'completed'),
+    phase,
+    skipped: Boolean(event.skipped),
     failed: !running && event.ok === false && !event.skipped,
   };
   if (index >= 0) logs[index] = item; else logs.push(item);
@@ -1866,6 +2005,7 @@ function updateObserverToolEvent(event) {
   if (state) state.textContent = running ? 'Running' : roleRunningLabel('observer');
   const streamText = card.dataset.streamText || 'Running tools and collecting evidence…';
   setAgentProcessStream(card, streamText, {cursor: running});
+  setLiveToolActivity(card, {...event, tool: toolName, arguments: argumentsValue, phase}, logs, runningIndex);
   scrollThoughtStreamToCard(card);
   updatePlanProgressFromTool(event);
 }
@@ -1887,6 +2027,7 @@ function compactAgentErrorMessage(raw) {
 function appendThoughtEvent(event) {
   // 推理期间保持计划展开；最终结果生成后自动折叠计划与工具。
   if (event.type === 'complete') {
+    clearAgentLiveActivity();
     setAgentResultState('Finalizing', 'running');
     setThinkingState('Reasoning Completed', 'completed');
     const decision = document.getElementById('agentPlanDecision');
@@ -1904,6 +2045,7 @@ function appendThoughtEvent(event) {
     return;
   }
   if (event.type === 'error') {
+    clearAgentLiveActivity();
     setAgentResultState('Failed', 'failed');
     setThinkingState('Reasoning Failed', 'failed');
     const decision = document.getElementById('agentPlanDecision');
@@ -1940,7 +2082,7 @@ function appendThoughtEvent(event) {
       ? {skillId: card._skillReads[0].skillId, title: card._skillReads[0].title, index: 1, total: card._skillReads.length}
       : null;
     card._skillsRunning = card._skillReads.length > 0;
-    markSkillReading(card, 1600);
+    if (card._skillsRunning) markSkillReading(card, 1200);
     card._toolsRunning = false;
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: card._skillReads});
@@ -1948,6 +2090,24 @@ function appendThoughtEvent(event) {
     if (state) state.textContent = roleRunningLabel(event.role);
     card.dataset.streamText = rolePendingText(event.role);
     setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
+    if (card._skillsRunning) {
+      setLiveSkillActivity(card, {
+        ...card._skillReads[0],
+        phase: 'running',
+        skillId: card._skillReads[0].skillId,
+        currentSkillId: card._skillReads[0].skillId,
+        currentSkillTitle: card._skillReads[0].title,
+        skillIndex: 1,
+        skillTotal: card._skillReads.length,
+      });
+    } else {
+      setAgentLiveActivity({
+        kind: 'phase',
+        label: roleRunningLabel(event.role),
+        detail: event.message || event.title || 'Structured agent event',
+        running: true,
+      });
+    }
     scrollThoughtStreamToCard(card);
     if (event.role === 'intent') {
       setAgentResultState('Initializing', 'running');
@@ -1999,13 +2159,22 @@ function appendThoughtEvent(event) {
       total: Math.max(Number.isFinite(eventTotal) && eventTotal > 0 ? eventTotal : reads.length, resolvedIndex),
     };
     card._skillsRunning = event.phase === 'running';
-    if (card.classList.contains('active')) {
-      markSkillReading(card, event.phase === 'running' ? 1400 : 720);
+    if (card._skillsRunning && card.classList.contains('active')) {
+      markSkillReading(card, 1200);
+    } else if (!card._skillsRunning) {
+      card.dataset.skillsRunningUntil = '0';
     }
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
     const streamText = card.dataset.streamText || rolePendingText(event.role);
     setAgentProcessStream(card, streamText, {cursor: card.classList.contains('active')});
+    setLiveSkillActivity(card, {
+      ...event,
+      skillId: record.skillId,
+      currentSkillId: record.skillId,
+      currentSkillTitle: record.title,
+      description: record.description,
+    });
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_delta') {
     // 模型原始增量可能混入内部推理；界面只展示结构化计划、技能、工具和结论。
@@ -2025,14 +2194,21 @@ function appendThoughtEvent(event) {
     card._toolsRunning = false;
     card._currentTool = null;
     if (event.role === 'observer' && !card._toolLogs?.length && Array.isArray(event.calls)) {
-      card._toolLogs = event.calls.map((call, index) => ({
-        id: call.id || `${call.tool || 'tool'}-${index + 1}`,
-        tool: call.tool || call.id || 'tool',
-        text: formatToolCall(event.round, call),
-        running: false,
-        phase: call.phase || call.status || 'completed',
-        failed: !call.skipped && call.ok === false,
-      }));
+      card._toolTotal = event.calls.length;
+      card._toolLogs = event.calls.map((call, index) => {
+        const argumentsValue = toolArgumentsForCall(call);
+        const phase = call.phase || call.status || (call.skipped ? 'skipped' : call.ok === false ? 'failed' : 'completed');
+        return {
+          id: call.id || `${call.tool || 'tool'}-${index + 1}`,
+          tool: call.tool || call.id || 'tool',
+          arguments: argumentsValue,
+          text: formatToolCall(event.round, {...call, arguments: argumentsValue, phase}),
+          running: false,
+          phase,
+          skipped: Boolean(call.skipped),
+          failed: !call.skipped && call.ok === false,
+        };
+      });
     } else if (card._toolLogs?.length) {
       card._toolLogs = card._toolLogs.map((item) => ({...item, running: false, phase: item.phase || 'completed'}));
     }
@@ -2045,6 +2221,20 @@ function appendThoughtEvent(event) {
     card.dataset.streamThinking = '';
     card.dataset.streamToken = '';
     card.classList.remove('active');
+    const completionLabel = event.role === 'observer'
+      ? 'Tool execution complete'
+      : event.role === 'reflector'
+        ? 'Verification complete'
+        : event.role === 'planner'
+          ? 'Plan ready'
+          : 'Agent step complete';
+    setAgentLiveActivity({
+      kind: 'phase',
+      label: completionLabel,
+      detail: event.message || event.title || 'Waiting for the next structured event',
+      running: false,
+      clearAfter: event.role === 'reflector' ? 260 : 160,
+    });
     const calls = event.calls || [];
     const hasHardFail = event.role === 'observer' && calls.some((call) => !call.skipped && call.ok === false);
     const onlySkipped = event.role === 'observer'

@@ -5314,3 +5314,118 @@ tbody tr:hover td { background: #f2f6f9; }
   0%, 100% { transform: scale(1); opacity: .75; }
   50% { transform: scale(1.22); opacity: 1; }
 }
+
+/* 研究问答实时活动栏：工具参数与技能名称只显示为结构化状态，不进入正文流。 */
+#tab-agent-qa .agent-result-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+#tab-agent-qa .agent-live-activity {
+  min-width: 0;
+  min-height: 27px;
+  padding: 3px 9px;
+  display: grid;
+  grid-template-columns: 15px auto 8px minmax(0, 1fr) 5px;
+  align-items: center;
+  gap: 6px;
+  color: #53677a;
+  border-bottom: 1px solid #e0e6eb;
+  background: #fbfcfd;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", "Courier New", monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+#tab-agent-qa .agent-live-activity[hidden] { display: none; }
+#tab-agent-qa .agent-live-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  color: #6a7e91;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+#tab-agent-qa .agent-live-label {
+  min-width: 0;
+  color: #40566b;
+  font-weight: 650;
+  letter-spacing: .005em;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-live-separator {
+  color: #9aa7b3;
+  text-align: center;
+}
+#tab-agent-qa .agent-live-marquee {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0, #000 5%, #000 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 5%, #000 95%, transparent 100%);
+}
+#tab-agent-qa .agent-live-marquee::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0;
+  background: linear-gradient(105deg, transparent 0%, transparent 38%, rgba(255,255,255,.72) 50%, transparent 62%);
+  transform: translateX(-115%);
+  pointer-events: none;
+  opacity: 0;
+}
+#tab-agent-qa .agent-live-activity.running .agent-live-marquee::after {
+  opacity: 1;
+  animation: agentLiveShine 1.45s linear infinite;
+}
+#tab-agent-qa .agent-live-marquee-text {
+  display: inline-block;
+  max-width: 100%;
+  color: #718090;
+  font-weight: 500;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  filter: blur(.08px);
+  opacity: .82;
+  text-shadow: 0 0 .35px currentColor;
+}
+#tab-agent-qa .agent-live-marquee-track {
+  display: flex;
+  width: max-content;
+  min-width: max-content;
+  gap: 52px;
+  will-change: transform;
+}
+#tab-agent-qa .agent-live-activity.scrolling .agent-live-marquee-track {
+  animation: agentLiveMarquee 13s linear infinite;
+}
+#tab-agent-qa .agent-live-cursor {
+  width: 4px;
+  height: 12px;
+  background: #71879a;
+  animation: thinkingPulse .8s steps(1) infinite;
+}
+#tab-agent-qa .agent-live-activity[data-kind="skill"] .agent-live-icon,
+#tab-agent-qa .agent-live-activity[data-kind="skill"] .agent-live-label {
+  color: #2f638d;
+}
+#tab-agent-qa .agent-live-activity[data-kind="tool"] .agent-live-icon,
+#tab-agent-qa .agent-live-activity[data-kind="tool"] .agent-live-label {
+  color: #3c725c;
+}
+#tab-agent-qa .agent-live-activity[data-kind="tool"] .agent-live-cursor {
+  background: #3c725c;
+}
+#tab-agent-qa .agent-live-activity.settling .agent-live-cursor { opacity: .35; }
+@keyframes agentLiveMarquee {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(calc(-50% - 26px), 0, 0); }
+}
+@keyframes agentLiveShine {
+  from { transform: translateX(-115%); }
+  to { transform: translateX(115%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #tab-agent-qa .agent-live-activity.scrolling .agent-live-marquee-track,
+  #tab-agent-qa .agent-live-activity.running .agent-live-marquee::after,
+  #tab-agent-qa .agent-live-cursor { animation: none; }
+}

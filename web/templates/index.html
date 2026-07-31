@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=25">
+<link rel="stylesheet" href="/static/css/academic.css?v=26">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -167,6 +167,13 @@
 
         <section id="agentResultPanel" class="agent-response-panel agent-result-panel" data-state="idle">
           <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Init and plan updates appear here in real time</em></div><b id="agentIntentState">Waiting</b></div>
+          <div id="agentLiveActivity" class="agent-live-activity" data-kind="idle" hidden aria-live="polite">
+            <span class="agent-live-icon" aria-hidden="true">◇</span>
+            <strong id="agentLiveActivityLabel" class="agent-live-label">Waiting</strong>
+            <span class="agent-live-separator" aria-hidden="true">·</span>
+            <span id="agentLiveActivityDetail" class="agent-live-marquee"><span class="agent-live-marquee-text">Waiting for structured events</span></span>
+            <i class="agent-live-cursor" aria-hidden="true"></i>
+          </div>
           <div id="agentProcessView" class="agent-process-view agent-result-process">
             <details id="agentInitDisclosure" class="agent-result-disclosure agent-init-disclosure" open>
               <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Init</strong><em id="agentInitSummary">Waiting for intent</em><b aria-hidden="true"></b></summary>
@@ -394,7 +401,7 @@
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=21"></script>
   <script src="/static/js/memory.js?v=7"></script>
-<script src="/static/js/agent.js?v=58"></script>
+<script src="/static/js/agent.js?v=59"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
