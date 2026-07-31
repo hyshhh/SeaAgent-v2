@@ -117,13 +117,13 @@
         <span class="eyebrow">Trajectory Memory</span>
         <h2>Track Table &amp; Auto Maintenance</h2>
       </div>
-      <p class="memory-command-note" title="跨视频保留轨迹记忆；时间范围使用真实监控时间，视频时间仅用于回放定位。">跨视频保留轨迹记忆；时间范围使用真实监控时间，视频时间仅用于回放定位。</p>
+      <p class="memory-command-note" title="Trajectory memory is retained across videos; time ranges use actual monitoring time, while video time is used only for playback positioning.">Trajectory memory is retained across videos; time ranges use actual monitoring time, while video time is used only for playback positioning.</p>
       <div class="memory-inline-stats" aria-label="Trajectory memory summary">
-        <article class="memory-stat-card"><span>Active Tracks</span><strong id="memoryTrackCount">-</strong><small>条轨迹记录</small></article>
-        <article class="memory-stat-card"><span>Keyframes</span><strong id="memoryKeyframeCount">-</strong><small>张入池图像</small></article>
-        <article class="memory-stat-card"><span>Searchable</span><strong id="memoryEmbeddedCount">-</strong><small>张可检索图像</small></article>
+        <article class="memory-stat-card"><span>Active Tracks</span><strong id="memoryTrackCount">-</strong><small>track records</small></article>
+        <article class="memory-stat-card"><span>Keyframes</span><strong id="memoryKeyframeCount">-</strong><small>pooled images</small></article>
+        <article class="memory-stat-card"><span>Searchable</span><strong id="memoryEmbeddedCount">-</strong><small>searchable images</small></article>
       </div>
-      <section class="memory-retention-control" title="轨迹消失超过设定小时数后自动删除；填 0 表示一直保留。">
+      <section class="memory-retention-control" title="Tracks are removed after the configured idle period; enter 0 to retain them indefinitely.">
         <span>Retention</span>
         <div class="memory-setting-row"><label><input id="memoryRetentionHours" type="number" value="0" min="0" max="24" step="0.1" aria-label="Memory retention hours"><em>Hours</em></label><button class="btn primary btn-sm" onclick="saveMemorySettings()">Save</button></div>
       </section>
@@ -134,12 +134,12 @@
         <div class="memory-table-title"><span class="eyebrow">Memory Records</span><h3>Track Table</h3></div>
         <div class="memory-table-actions"><span id="memoryRefreshState">Auto-refresh: 2s</span><button class="btn danger btn-sm" onclick="clearAllMemory()">Clear Memory</button></div>
       </div>
-      <div class="memory-warning">清除操作会删除全部轨迹、正式关键帧、向量和问答证据，但不会删除先验库。</div>
+      <div class="memory-warning">Clearing removes all tracks, confirmed keyframes, vectors, and QA evidence, but does not delete the registry.</div>
       <div class="table-wrap memory-table-wrap">
         <table class="memory-table">
           <colgroup><col class="memory-col-track"><col class="memory-col-time"><col class="memory-col-hull"><col class="memory-col-match"><col class="memory-col-frames"><col class="memory-col-state"><col class="memory-col-description"></colgroup>
           <thead><tr><th>Track</th><th>Observed Time</th><th>Hull</th><th>Match</th><th>Keyframes</th><th>Memory</th><th>Appearance Description</th></tr></thead>
-          <tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">正在读取轨迹记忆…</td></tr></tbody>
+          <tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">Loading trajectory memory…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -387,7 +387,7 @@
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
 <script src="/static/js/pipeline.js?v=20"></script>
-  <script src="/static/js/memory.js?v=6"></script>
+  <script src="/static/js/memory.js?v=7"></script>
 <script src="/static/js/agent.js?v=58"></script>
 <script src="/static/js/settings.js?v=10"></script>
 </body>
