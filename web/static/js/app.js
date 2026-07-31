@@ -19,7 +19,7 @@ function escapeHtml(value) {
 
 function formatVideoTime(seconds) {
   const value = Number(seconds);
-  if (!Number.isFinite(value)) return '时间未知';
+  if (!Number.isFinite(value)) return 'Unknown time';
   const tenths = Math.max(0, Math.round(value * 10));
   const hours = Math.floor(tenths / 36000);
   const minutes = Math.floor((tenths % 36000) / 600);
@@ -30,8 +30,8 @@ function formatVideoTime(seconds) {
 
 function formatMonitorTime(timestamp) {
   const value = Number(timestamp);
-  if (!Number.isFinite(value)) return '时间未知';
-  if (value < 946684800) return `历史视频 ${formatVideoTime(value)}`;
+  if (!Number.isFinite(value)) return 'Unknown time';
+  if (value < 946684800) return `Historical video ${formatVideoTime(value)}`;
   const date = new Date(value * 1000);
   const pad = number => String(number).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
@@ -60,9 +60,9 @@ function imageFiles(files) {
 
 function validateFiles(files, available = MAX_REFERENCE_IMAGES) {
   const selected = imageFiles(files);
-  if (selected.length !== Array.from(files || []).length) throw new Error('只能选择图片文件');
-  if (selected.length > available) throw new Error(`最多还能选择 ${available} 张参考图`);
-  if (selected.some((file) => file.size > 20 * 1024 * 1024)) throw new Error('单张图片不能超过 20MB');
+  if (selected.length !== Array.from(files || []).length) throw new Error('Only image files are allowed');
+  if (selected.length > available) throw new Error(`Select no more than ${available} additional reference images`);
+  if (selected.some((file) => file.size > 20 * 1024 * 1024)) throw new Error('Each image must be 20 MB or smaller');
   return selected;
 }
 
@@ -85,16 +85,16 @@ function renderLocalPreviews(containerId, files) {
 function referenceHtml(reference, hullNumber, allowDelete = true) {
   const referenceId = encodeURIComponent(reference.referenceId);
   const hull = encodeURIComponent(hullNumber);
-  const state = reference.isEmbedded ? '已写入向量库' : '不可检索';
+  const state = reference.isEmbedded ? 'Indexed in vector store' : 'Not searchable';
   const button = allowDelete
-    ? `<button title="删除参考图" onclick="deleteReference('${hull}','${referenceId}')">×</button>`
+    ? `<button title="Delete reference image" onclick="deleteReference('${hull}','${referenceId}')">×</button>`
     : '';
-  return `<div class="reference-thumb" title="${state}"><img loading="lazy" src="/api/evidence/registry/${referenceId}" alt="先验库参考图">${button}</div>`;
+  return `<div class="reference-thumb" title="${state}"><img loading="lazy" src="/api/evidence/registry/${referenceId}" alt="Registry reference image">${button}</div>`;
 }
 
 async function loadShips(query = '') {
   const table = document.getElementById('shipTable');
-  if (table) table.innerHTML = '<tr><td colspan="4" class="empty-msg">正在加载…</td></tr>';
+  if (table) table.innerHTML = '<tr><td colspan="4" class="empty-msg">Loading…</td></tr>';
   try {
     const url = query.trim() ? `${SHIP_API}/search?q=${encodeURIComponent(query.trim())}` : SHIP_API;
     const data = await apiFetch(url);
@@ -118,21 +118,21 @@ function renderShips() {
   const table = document.getElementById('shipTable');
   if (!table) return;
   if (!ships.length) {
-    table.innerHTML = '<tr><td colspan="4" class="empty-msg">暂无先验库项</td></tr>';
+    table.innerHTML = '<tr><td colspan="4" class="empty-msg">No registry items found</td></tr>';
     return;
   }
   table.innerHTML = ships.map((ship) => {
     const references = ship.references || [];
-    const state = ship.searchable ? '<span class="status-tag ok">可检索</span>' : '<span class="status-tag off">缺少有效向量</span>';
+    const state = ship.searchable ? '<span class="status-tag ok">Searchable</span>' : '<span class="status-tag off">Missing valid vector</span>';
     const images = references.length
       ? `<div class="reference-grid">${references.map((item) => referenceHtml(item, ship.hull_number)).join('')}</div>`
-      : '<span class="hint">暂无参考图</span>';
+      : '<span class="hint">No reference images</span>';
     const hull = encodeURIComponent(ship.hull_number);
     return `<tr>
       <td><span class="hull-num">${escapeHtml(ship.hull_number)}</span></td>
       <td>${escapeHtml(ship.description || '—')}</td>
       <td>${state}<span class="hint"> ${references.length}/${MAX_REFERENCE_IMAGES}</span>${images}</td>
-      <td><div class="actions"><button class="btn ghost btn-sm" onclick="openEditModal('${hull}')">编辑</button><button class="btn danger btn-sm" onclick="deleteShip('${hull}')">删除</button></div></td>
+      <td><div class="actions"><button class="btn ghost btn-sm" onclick="openEditModal('${hull}')">Edit</button><button class="btn danger btn-sm" onclick="deleteShip('${hull}')">Delete</button></div></td>
     </tr>`;
   }).join('');
 }
@@ -149,7 +149,7 @@ function resetShipModal() {
 
 function openAddModal() {
   resetShipModal();
-  document.getElementById('modalTitle').textContent = '新建先验库项';
+  document.getElementById('modalTitle').textContent = 'New Registry Item';
   document.getElementById('shipModal').classList.add('active');
 }
 
@@ -159,14 +159,14 @@ async function openEditModal(encodedHull) {
     const ship = await apiFetch(`${SHIP_API}/${encodeURIComponent(hull)}`);
     editingHull = ship.hull_number;
     editingReferences = ship.references || [];
-    document.getElementById('modalTitle').textContent = `编辑舷号 ${ship.hull_number}`;
+    document.getElementById('modalTitle').textContent = `Edit Hull ${ship.hull_number}`;
     document.getElementById('modalHullNumber').value = ship.hull_number;
     document.getElementById('modalHullNumber').disabled = true;
     document.getElementById('modalDescription').value = ship.description || '';
     document.getElementById('modalReferenceFiles').value = '';
     document.getElementById('modalReferenceList').innerHTML = editingReferences.length
       ? editingReferences.map((item) => referenceHtml(item, ship.hull_number)).join('')
-      : '<span class="hint">暂无参考图</span>';
+      : '<span class="hint">No reference images</span>';
     document.getElementById('shipModal').classList.add('active');
   } catch (error) {
     showToast(error.message, 'error');
@@ -185,9 +185,9 @@ async function submitShip() {
   let files;
   try {
     files = validateFiles(document.getElementById('modalReferenceFiles').files, MAX_REFERENCE_IMAGES - editingReferences.length);
-    if (!hull) throw new Error('舷号不能为空');
+    if (!hull) throw new Error('Hull number is required');
     button.disabled = true;
-    button.textContent = '保存中…';
+    button.textContent = 'Saving…';
     if (editingHull) {
       await apiFetch(`${SHIP_API}/${encodeURIComponent(editingHull)}`, {
         method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({description})
@@ -205,14 +205,14 @@ async function submitShip() {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hull_number: hull, description, aliases: []})
       });
     }
-    showToast('先验库项已保存');
+    showToast('Registry item saved');
     closeModal();
     await loadShips(document.getElementById('searchInput').value);
   } catch (error) {
     showToast(error.message, 'error');
   } finally {
     button.disabled = false;
-    button.textContent = '保存';
+    button.textContent = 'Save';
   }
 }
 
@@ -225,10 +225,10 @@ async function addReferenceImages(hull, files) {
 async function deleteReference(encodedHull, encodedReferenceId) {
   const hull = decodeURIComponent(encodedHull);
   const referenceId = decodeURIComponent(encodedReferenceId);
-  if (!confirm(`确认删除舷号 ${hull} 的这张参考图？`)) return;
+  if (!confirm(`Delete this reference image for hull ${hull}?`)) return;
   try {
     await apiFetch(`${SHIP_API}/${encodeURIComponent(hull)}/images/${encodeURIComponent(referenceId)}`, {method: 'DELETE'});
-    showToast('参考图已删除，向量库已重建');
+    showToast('Reference image deleted; vector index rebuilt');
     if (editingHull === hull) await openEditModal(encodeURIComponent(hull));
     await loadShips(document.getElementById('searchInput').value);
   } catch (error) {
@@ -238,10 +238,10 @@ async function deleteReference(encodedHull, encodedReferenceId) {
 
 async function deleteShip(encodedHull) {
   const hull = decodeURIComponent(encodedHull);
-  if (!confirm(`确认删除舷号 ${hull} 及其全部参考图？`)) return;
+  if (!confirm(`Delete hull ${hull} and all reference images?`)) return;
   try {
     await apiFetch(`${SHIP_API}/${encodeURIComponent(hull)}`, {method: 'DELETE'});
-    showToast(`已删除舷号 ${hull}`);
+    showToast(`Hull ${hull} deleted`);
     await loadShips(document.getElementById('searchInput').value);
   } catch (error) {
     showToast(error.message, 'error');
@@ -260,7 +260,7 @@ function closeBulkModal() {
 async function submitBulk() {
   try {
     const shipsObject = JSON.parse(document.getElementById('bulkInput').value);
-    if (!shipsObject || Array.isArray(shipsObject) || typeof shipsObject !== 'object') throw new Error('请输入舷号到描述的对象');
+    if (!shipsObject || Array.isArray(shipsObject) || typeof shipsObject !== 'object') throw new Error('Enter an object mapping hull numbers to descriptions');
     const result = await apiFetch(`${SHIP_API}/bulk`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ships: shipsObject})
     });
@@ -305,11 +305,11 @@ function setUploadFiles(files) {
 }
 
 async function doRecognize() {
-  if (!uploadFiles.length) return showToast('请先选择参考图', 'error');
+  if (!uploadFiles.length) return showToast('Select reference images first', 'error');
   const button = document.getElementById('btnRecognize');
   try {
     button.disabled = true;
-    button.textContent = '识别中…';
+    button.textContent = 'Recognizing…';
     const form = new FormData();
     form.append('file', uploadFiles[0]);
     const result = await apiFetch(`${SHIP_API}/recognize`, {method: 'POST', body: form});
@@ -318,14 +318,14 @@ async function doRecognize() {
     document.getElementById('recDescription').value = recognizedUpload.description || '';
     const warning = document.getElementById('recExistsWarn');
     warning.style.display = recognizedUpload.already_exists ? 'block' : 'none';
-    warning.textContent = recognizedUpload.already_exists ? '该舷号已存在，确认后将追加参考图并更新描述。' : '';
+    warning.textContent = recognizedUpload.already_exists ? 'This hull number already exists. Confirming will append reference images and update the description.' : '';
     document.getElementById('recognizeResult').classList.add('show');
     document.getElementById('btnConfirmAdd').style.display = '';
   } catch (error) {
     showToast(error.message, 'error');
   } finally {
     button.disabled = false;
-    button.textContent = '识别首图';
+    button.textContent = 'Recognize First Image';
   }
 }
 
@@ -333,11 +333,11 @@ async function doConfirmAdd() {
   const hull = document.getElementById('recHullNumber').value.trim();
   const description = document.getElementById('recDescription').value.trim();
   const button = document.getElementById('btnConfirmAdd');
-  if (!hull) return showToast('舷号不能为空', 'error');
-  if (!uploadFiles.length) return showToast('请先选择参考图', 'error');
+  if (!hull) return showToast('Hull number is required', 'error');
+  if (!uploadFiles.length) return showToast('Select reference images first', 'error');
   try {
     button.disabled = true;
-    button.textContent = '写入中…';
+    button.textContent = 'Writing…';
     let existing = recognizedUpload?.already_exists;
     if (recognizedUpload?.hull_number !== hull) {
       try { await apiFetch(`${SHIP_API}/${encodeURIComponent(hull)}`); existing = true; }
@@ -358,14 +358,14 @@ async function doConfirmAdd() {
       form.append('aliases', '[]');
       await apiFetch(`${SHIP_API}/upload`, {method: 'POST', body: form});
     }
-    showToast(`舷号 ${hull} 已写入先验库`);
+    showToast(`Hull ${hull} added to registry`);
     closeUploadModal();
     await loadShips();
   } catch (error) {
     showToast(error.message, 'error');
   } finally {
     button.disabled = false;
-    button.textContent = '确认入库';
+    button.textContent = 'Confirm Add';
   }
 }
 
