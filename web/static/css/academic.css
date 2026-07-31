@@ -5238,3 +5238,59 @@ tbody tr:hover td { background: #f2f6f9; }
   .monitor-settings-footer { align-items: stretch; flex-direction: column; }
   .apply-monitor-settings { width: 100%; }
 }
+
+
+/* 连续监控运行态细节：运行时只保留停止操作，避免灰色按钮占位造成误解 */
+.continuous-monitor-actions {
+  justify-content: flex-end;
+  min-width: 138px;
+}
+.continuous-monitor-actions .sequence-action-button {
+  width: 100%;
+}
+.continuous-monitor-actions .btn.danger {
+  color: #862b38;
+  border-color: #c9858e;
+  background: #fff8f8;
+  font-weight: 800;
+}
+.continuous-monitor-actions .btn.danger:hover {
+  color: #70202c;
+  border-color: #a95562;
+  background: #fdf0f1;
+}
+.continuous-monitor-status {
+  position: relative;
+  overflow: hidden;
+}
+.continuous-monitor-status::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: #dbe5ec;
+}
+.continuous-monitor-status.is-active::after {
+  background: linear-gradient(90deg, #2a668b 0%, #7faec6 45%, #2a668b 90%);
+  background-size: 220% 100%;
+  animation: sequence-status-progress 2.2s linear infinite;
+}
+.continuous-monitor-status.is-active .status-pulse {
+  background: #2a668b;
+  box-shadow: 0 0 0 3px rgba(42, 102, 139, .13);
+  animation: sequence-status-pulse 1.3s ease-in-out infinite;
+}
+.video-directory-summary {
+  color: #405a70;
+  font-weight: 750;
+}
+@keyframes sequence-status-progress {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@keyframes sequence-status-pulse {
+  0%, 100% { transform: scale(1); opacity: .75; }
+  50% { transform: scale(1.22); opacity: 1; }
+}

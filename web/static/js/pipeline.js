@@ -100,7 +100,7 @@ function renderVideoDirectorySelector() {
   const current = videoDirectories.find(directory => directory.path === selectedVideoDirectory);
   if (summary) {
     summary.textContent = current
-      ? `${current.name} · ${current.count} Videos`
+      ? `${current.count} Videos Available`
       : 'No videos in this directory';
   }
 }
@@ -405,7 +405,7 @@ async function startContinuousMonitoring() {
   selectedVideo = queue[0];
   markSequenceVideo(queue[0], 'running');
   clearPoolTables();
-  updateContinuousProgress(`Starting one pipeline for ${queue.length} videos...`);
+  updateContinuousProgress(`Initializing one pipeline · 0 / ${queue.length} videos`);
   updateContinuousMonitorControls();
   const started = await launchVideoPipeline(queue[0], parsedStart, true, {
     filenames: queue,
@@ -921,8 +921,14 @@ function updateContinuousMonitorControls() {
   }
   const singleStartButton = document.getElementById('btnStartPipeline');
   if (singleStartButton) singleStartButton.disabled = active;
-  if (startButton) startButton.disabled = active || count === 0;
-  if (stopButton) stopButton.style.display = active ? '' : 'none';
+  if (startButton) {
+    startButton.disabled = active || count === 0;
+    startButton.style.display = active ? 'none' : '';
+  }
+  if (stopButton) {
+    stopButton.style.display = active ? '' : 'none';
+    stopButton.disabled = false;
+  }
   document.querySelectorAll('.video-sequence-check input').forEach(input => {
     input.disabled = active || !visibleNames.has(input.dataset.name);
   });
@@ -934,7 +940,10 @@ function updateContinuousMonitorControls() {
 
 function updateContinuousProgress(text) {
   const element = document.getElementById('continuousProgress');
-  if (element) element.textContent = text;
+  if (!element) return;
+  element.textContent = text;
+  const status = element.closest('.continuous-monitor-status');
+  if (status) status.classList.toggle('is-active', Boolean(continuousMonitorState));
 }
 
 function markSequenceVideo(filename, state) {
