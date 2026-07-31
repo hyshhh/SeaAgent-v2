@@ -166,8 +166,11 @@ function changeVideoDirectory(directory) {
   continuousSelectedVideos.clear();
   selectedVideo = null;
   selectedVideoDirectory = directory;
-  document.getElementById('pipelineControl').style.display = 'none';
+  // 切换目录只重置当前视频和结果状态，不隐藏推流主面板。
+  const pipelinePanel = document.getElementById('pipelineControl');
+  if (pipelinePanel) pipelinePanel.style.display = '';
   _restoreResultPlaceholder();
+  resetPipelineStatus();
   renderVideoDirectorySelector();
   renderVideoList();
 }
