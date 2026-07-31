@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=24">
+<link rel="stylesheet" href="/static/css/academic.css?v=25">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -89,9 +89,16 @@
         <section class="panel compact-panel monitoring-settings-panel">
           <div class="panel-head"><div><span class="eyebrow">PIPELINE PARAMETERS</span><h3>Monitoring Settings</h3></div></div>
           <div class="param-grid monitoring-param-grid">
-            <label><span>Detection Confidence</span><input id="optConf" type="number" value="0.5" min="0" max="1" step="0.05"></label>
-            <label><span>IoU Threshold</span><input id="optIou" type="number" value="0.5" min="0" max="1" step="0.05"></label>
-            <label><span>Detection Interval</span><input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <label title="Minimum confidence passed to both detection and tracking"><span>Detection Confidence</span><input id="optConf" type="number" value="0.5" min="0.01" max="1" step="0.01"></label>
+            <label title="Overlap threshold used by detection-stage suppression"><span>IoU Threshold</span><input id="optIou" type="number" value="0.5" min="0.01" max="1" step="0.01"></label>
+            <label title="Run detection once every N processed frames"><span>Detection Interval</span><input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <div class="monitoring-param-divider"><span>Tracking Parameters</span><i></i></div>
+            <label title="Threshold for the first association stage"><span>Track High Threshold</span><input id="optTrackHigh" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Lower bound for the second association stage"><span>Track Low Threshold</span><input id="optTrackLow" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Minimum confidence required to create a new track"><span>New Track Threshold</span><input id="optNewTrack" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Maximum distance allowed when matching a detection to an existing track"><span>Match Threshold</span><input id="optMatchThresh" type="number" min="0.01" max="1" step="0.01"></label>
+            <label title="Frames for which the tracker keeps a lost track alive"><span>Track Buffer</span><input id="optTrackBuffer" type="number" min="1" max="1000" step="1"></label>
+            <label title="Frames before a missing track is finalized in memory"><span>Max Stale Frames</span><input id="optMaxStale" type="number" min="1" max="1000" step="1"></label>
             <label><span>Target FPS</span><input id="optTargetFps" type="number" value="0" min="0"></label>
             <label title="Only scales the encoded stream; detection keeps the original input"><span>Stream Scale</span><input id="optPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
             <label><span>Maximum Frames</span><input id="optMaxFrames" type="number" value="0" min="0"></label>
@@ -289,14 +296,13 @@
           <label><span class="setting-name">推流分辨率比例</span><input data-setting="pipeline.pipe_scale" type="number"><small>仅缩放网页推流编码，范围 0.05～1，不改变检测输入分辨率。</small></label>
           <label><span class="setting-name">最大处理帧</span><input data-setting="pipeline.max_frames" type="number"><small>0 表示不限制；连续监控时限制整个视频序列的累计帧数。</small></label>
           <label class="settings-toggle-field"><span class="setting-name">保存标注视频</span><span class="setting-switch"><input data-setting="pipeline.save_output_video" type="checkbox"><span>保存新任务的标注结果视频</span></span><small>关闭后仍保留实时推流，不写入结果视频文件。</small></label>
-          <label><span class="setting-name">正式检测置信度</span><input data-setting="yolo.confidence" type="number"><small><strong>默认 0.5。</strong>达到该分数的检测结果才会正式输出并写入轨迹记忆；它不再承担低分跟踪候选的入口控制。</small></label>
-          <label><span class="setting-name">跟踪候选置信度</span><input data-setting="yolo.tracking_candidate_confidence" type="number"><small><strong>默认 0.2。</strong>控制送入跟踪器的最低候选分数；0.2～0.5 的框只能帮助续接已有轨迹，不会正式输出或写入记忆。</small></label>
+          <label><span class="setting-name">正式检测置信度</span><input data-setting="yolo.confidence" type="number"><small><strong>默认 0.5。</strong>同时作为检测器和跟踪器的最低输入置信度；低于该分数的检测框不会进入关联，也不会写入轨迹记忆。</small></label>
           <label><span class="setting-name">检测交并比阈值</span><input data-setting="yolo.iou" type="number"><small><strong>默认 0.5。</strong>仅用于检测阶段的重叠框抑制，不是轨迹关联阈值；越低抑制越强。</small></label>
           <label><span class="setting-name">检测帧间隔</span><input data-setting="yolo.detect_every_n_frames" type="number"><small><strong>默认 1。</strong>每隔多少个视频帧执行一次检测；1 表示逐帧检测，增大可提速但可能漏掉快速目标。</small></label>
           <label><span class="setting-name">轨迹最大保持帧</span><input data-setting="pipeline.max_stale_frames" type="number"><small><strong>默认 120。</strong>系统连续未收到某个轨迹编号后，仍保留其关键帧与识别任务的时间；超出后完成轨迹并写入记忆。</small></label>
           <label><span class="setting-name">跟踪缓冲帧数</span><input data-setting="yolo.tracker_params.track_buffer" type="number"><small><strong>默认 90。</strong>跟踪器对暂时丢失目标保留原轨迹编号的帧数；期间重新匹配成功可继续原编号。</small></label>
           <label><span class="setting-name">跟踪高分阈值</span><input data-setting="yolo.tracker_params.track_high_thresh" type="number"><small><strong>默认 0.5。</strong>达到该分数的检测框进入主要关联流程，建议与检测置信度保持一致。</small></label>
-          <label><span class="setting-name">跟踪低分阈值</span><input data-setting="yolo.tracker_params.track_low_thresh" type="number"><small><strong>默认 0.2。</strong>第二阶段补充关联的分数下限，与跟踪候选置信度保持一致；仅用于维持已有轨迹。</small></label>
+          <label><span class="setting-name">跟踪低分阈值</span><input data-setting="yolo.tracker_params.track_low_thresh" type="number"><small><strong>默认 0.2。</strong>第二阶段补充关联的分数下限；只有检测置信度允许这些框进入检测器时，该阶段才会获得对应候选。</small></label>
           <label><span class="setting-name">新建轨迹阈值</span><input data-setting="yolo.tracker_params.new_track_thresh" type="number"><small><strong>默认 0.6。</strong>未匹配检测框必须达到更高分数才能创建新轨迹编号，可进一步减少误检和碎片轨迹。</small></label>
           <label><span class="setting-name">跟踪关联阈值</span><input data-setting="yolo.tracker_params.match_thresh" type="number"><small><strong>默认 0.8。</strong>控制检测框与已有轨迹允许的关联距离；越大越宽松，过高可能把相邻船舶错误关联。</small></label>
           <label class="settings-toggle-field"><span class="setting-name">外观相似度跟踪</span><span class="setting-switch"><input data-setting="yolo.appearance_tracking.enabled" data-appearance-toggle type="checkbox"><span>启用后结合船体外观恢复轨迹身份</span></span><small><strong>默认关闭。</strong>开启后自动切换为支持外观重识别的跟踪器，遮挡与交叉场景更稳定，但会增加计算开销。</small></label>
@@ -386,9 +392,9 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>图片识别并写入先验库</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>选择一至六张参考图</strong><span>第一张用于自动识别舷号与描述</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>识别舷号<input id="recHullNumber" type="text"></label><label>识别描述<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">取消</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">识别首图</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">确认入库</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=7"></script>
-<script src="/static/js/pipeline.js?v=20"></script>
+<script src="/static/js/pipeline.js?v=21"></script>
   <script src="/static/js/memory.js?v=7"></script>
 <script src="/static/js/agent.js?v=58"></script>
-<script src="/static/js/settings.js?v=10"></script>
+<script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>

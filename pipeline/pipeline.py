@@ -42,7 +42,6 @@ class ShipPipeline:
             model_path=settings.get("yolo_model", "yolov8n.pt"),
             device=settings.get("device", ""),
             conf_threshold=float(settings.get("conf_threshold", 0.5)),
-            tracking_candidate_confidence=float(settings.get("tracking_candidate_confidence", 0.2)),
             iou_threshold=float(settings.get("iou_threshold", 0.5)),
             tracker_type=settings.get("tracker", "bytetrack"),
             tracker_params=settings.get("tracker_params"),

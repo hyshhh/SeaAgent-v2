@@ -5151,6 +5151,26 @@ tbody tr:hover td { background: #f2f6f9; }
   font-weight: 800;
   letter-spacing: .025em;
 }
+.monitoring-param-divider {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 -1px;
+  color: #6a7c8d;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.monitoring-param-divider::before,
+.monitoring-param-divider::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: #d9e1e8;
+}
+.monitoring-param-divider i { display: none; }
 .monitoring-param-grid .monitoring-save-toggle {
   align-self: end;
   min-height: 34px;

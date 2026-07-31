@@ -56,7 +56,6 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "yolo.model": {"type": "enum", "choices": list(DETECTION_MODEL_OPTIONS)},
     "yolo.device": {"type": "string", "allow_empty": True, "max_chars": 128},
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
-    "yolo.tracking_candidate_confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.05},
     "yolo.iou": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},
     "yolo.detect_every_n_frames": {"type": "int", "min": 1, "max": 100, "step": 1},
     "pipeline.target_fps": {"type": "float", "min": 0.0, "max": 240.0, "step": 1.0},
@@ -135,7 +134,13 @@ def _read_runtime() -> dict[str, Any]:
     if not RUNTIME_FILE.exists():
         return {}
     content = yaml.safe_load(RUNTIME_FILE.read_text(encoding="utf-8")) or {}
-    return content if isinstance(content, dict) else {}
+    if not isinstance(content, dict):
+        return {}
+    # 清理旧版本遗留的独立跟踪候选阈值，避免再次写回运行时配置。
+    for section in ("yolo", "pipeline"):
+        if isinstance(content.get(section), dict):
+            content[section].pop("tracking_candidate_confidence", None)
+    return content
 
 
 def _write_runtime(data: dict[str, Any]) -> None:
@@ -192,8 +197,6 @@ def _coerce(path: str, value: Any) -> int | float | str | bool:
 def _validate_relations(config: dict[str, Any]) -> None:
     yolo = config["yolo"]
     tracker = yolo["tracker_params"]
-    if yolo["tracking_candidate_confidence"] > tracker["track_low_thresh"]:
-        raise ValueError("跟踪候选置信度不能高于跟踪低分阈值，否则第二阶段关联区间不完整")
     if tracker["track_low_thresh"] > tracker["track_high_thresh"]:
         raise ValueError("跟踪低分阈值不能高于跟踪高分阈值")
     if tracker["new_track_thresh"] < tracker["track_high_thresh"]:

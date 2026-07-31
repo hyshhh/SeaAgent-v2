@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--conf", type=float, default=None, help="检测置信度阈值")
     parser.add_argument("--iou", type=float, default=None, help="交并比阈值")
     parser.add_argument("--detect-every", type=int, default=None, help="每多少帧执行一次检测")
+    parser.add_argument("--track-high-thresh", type=float, default=None, help="跟踪高分阈值")
+    parser.add_argument("--track-low-thresh", type=float, default=None, help="跟踪低分阈值")
+    parser.add_argument("--new-track-thresh", type=float, default=None, help="新建轨迹阈值")
+    parser.add_argument("--match-thresh", type=float, default=None, help="跟踪关联阈值")
+    parser.add_argument("--track-buffer", type=int, default=None, help="跟踪缓冲帧数")
+    parser.add_argument("--max-stale-frames", type=int, default=None, help="轨迹最大保持帧数")
     parser.add_argument("--target-fps", type=float, default=None, help="目标处理帧率，零表示不限制")
     parser.add_argument("--monitor-start-time", type=float, default=None, help="连续监控序列中的模拟起始时间戳")
     parser.add_argument("--camera", action="store_true", help="相机输入标记")
@@ -55,6 +61,19 @@ def _merge_args_to_config(args, config: dict) -> dict:
         pipeline["iou_threshold"] = args.iou
     if args.detect_every is not None:
         pipeline["detect_every_n_frames"] = max(1, args.detect_every)
+    tracker_params = pipeline.setdefault("tracker_params", {})
+    if args.track_high_thresh is not None:
+        tracker_params["track_high_thresh"] = args.track_high_thresh
+    if args.track_low_thresh is not None:
+        tracker_params["track_low_thresh"] = args.track_low_thresh
+    if args.new_track_thresh is not None:
+        tracker_params["new_track_thresh"] = args.new_track_thresh
+    if args.match_thresh is not None:
+        tracker_params["match_thresh"] = args.match_thresh
+    if args.track_buffer is not None:
+        tracker_params["track_buffer"] = max(1, args.track_buffer)
+    if args.max_stale_frames is not None:
+        pipeline["max_stale_frames"] = max(1, args.max_stale_frames)
     if args.target_fps is not None:
         pipeline["target_fps"] = max(0.0, args.target_fps)
     if args.monitor_start_time is not None:

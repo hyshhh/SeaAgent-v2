@@ -34,10 +34,12 @@ def _resolve_paths(config: dict[str, Any]) -> None:
 def _build_runtime_config(config: dict[str, Any]) -> None:
     pipeline = config.setdefault("pipeline", {})
     yolo = config.setdefault("yolo", {})
+    # 兼容旧 runtime.yaml，但不再保留已移除的独立跟踪候选阈值。
+    yolo.pop("tracking_candidate_confidence", None)
+    pipeline.pop("tracking_candidate_confidence", None)
     mapping = {
         "yolo_model": yolo.get("model"), "device": yolo.get("device"),
         "conf_threshold": yolo.get("confidence"),
-        "tracking_candidate_confidence": yolo.get("tracking_candidate_confidence"),
         "iou_threshold": yolo.get("iou"),
         "detect_classes": yolo.get("classes"), "detect_every_n_frames": yolo.get("detect_every_n_frames"),
         "tracker": yolo.get("tracker"), "tracker_params": yolo.get("tracker_params"),

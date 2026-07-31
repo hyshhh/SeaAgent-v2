@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import load_config
 
@@ -220,6 +220,12 @@ class PipelineStartRequest(BaseModel):
     conf_threshold: float = 0.5
     iou_threshold: float = 0.5
     detect_every: int = 2
+    track_high_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    track_low_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    new_track_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    match_thresh: float | None = Field(default=None, ge=0.01, le=1.0)
+    track_buffer: int | None = Field(default=None, ge=1, le=1000)
+    max_stale_frames: int | None = Field(default=None, ge=1, le=1000)
     target_fps: float = 0
     capture_fps: int = 15  # 摄像头推帧帧率
     pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.05-1.0)
@@ -236,6 +242,12 @@ class BrowserCameraStartRequest(BaseModel):
     conf_threshold: float = 0.5
     iou_threshold: float = 0.5
     detect_every: int = 2
+    track_high_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    track_low_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    new_track_thresh: float | None = Field(default=None, ge=0.0, le=1.0)
+    match_thresh: float | None = Field(default=None, ge=0.01, le=1.0)
+    track_buffer: int | None = Field(default=None, ge=1, le=1000)
+    max_stale_frames: int | None = Field(default=None, ge=1, le=1000)
     target_fps: float = 0
     capture_fps: int = 15  # 浏览器推帧帧率
     pipe_scale: float = 0.25  # 推流编码分辨率比例 (0.05-1.0)
@@ -899,6 +911,17 @@ async def start_pipeline(req: PipelineStartRequest):
     cmd.extend(["--conf", str(req.conf_threshold)])
     cmd.extend(["--iou", str(req.iou_threshold)])
     cmd.extend(["--detect-every", str(req.detect_every)])
+    tracker_args = (
+        ("--track-high-thresh", req.track_high_thresh),
+        ("--track-low-thresh", req.track_low_thresh),
+        ("--new-track-thresh", req.new_track_thresh),
+        ("--match-thresh", req.match_thresh),
+        ("--track-buffer", req.track_buffer),
+        ("--max-stale-frames", req.max_stale_frames),
+    )
+    for flag, value in tracker_args:
+        if value is not None:
+            cmd.extend([flag, str(value)])
 
     # ── 帧率控制 ──
     if req.target_fps > 0:
@@ -1965,10 +1988,21 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
         # ── Pipeline 线程 ──
         pipe_cfg = dict(pipeline_cfg)
+        tracker_params = dict(pipe_cfg.get("tracker_params") or {})
+        for key, value in {
+            "track_high_thresh": req.track_high_thresh,
+            "track_low_thresh": req.track_low_thresh,
+            "new_track_thresh": req.new_track_thresh,
+            "match_thresh": req.match_thresh,
+            "track_buffer": req.track_buffer,
+        }.items():
+            if value is not None:
+                tracker_params[key] = value
         pipe_cfg.update({
             "conf_threshold": req.conf_threshold,
             "iou_threshold": req.iou_threshold,
             "detect_every_n_frames": req.detect_every,
+            "tracker_params": tracker_params,
             "target_fps": req.target_fps,
             "demo": True,
             "no_output": not req.save_output_video,
@@ -1982,6 +2016,8 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             pipe_cfg["pipe_output_size"] = [pipe_out_w, pipe_out_h]
         if req.max_frames > 0:
             pipe_cfg["max_frames"] = req.max_frames
+        if req.max_stale_frames is not None:
+            pipe_cfg["max_stale_frames"] = req.max_stale_frames
         if req.device:
             pipe_cfg["device"] = req.device
         if req.yolo_model:
