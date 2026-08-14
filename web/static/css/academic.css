@@ -4197,6 +4197,8 @@ tbody tr:hover td { background: #f2f6f9; }
 
 /* Flat action history, inspired by developer-tool timelines. */
 #tab-agent-qa .agent-stream-text .agent-activity-row {
+  position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 26px;
   display: grid;
@@ -4246,6 +4248,20 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-stream-text .agent-activity-row.running .agent-activity-label strong { color: #2e638e; }
 #tab-agent-qa .agent-stream-text .agent-activity-row.running .agent-activity-icon {
   animation: agentReadingPulse .85s ease-in-out infinite alternate;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row.running::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -2px -32%;
+  background: linear-gradient(105deg, transparent 0%, rgba(46, 99, 142, 0) 35%, rgba(46, 99, 142, .14) 46%, rgba(255, 255, 255, .86) 52%, rgba(46, 99, 142, .14) 58%, transparent 72%);
+  transform: translateX(-72%);
+  animation: agentReadingShine 1.15s linear infinite;
+  pointer-events: none;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row.running > * {
+  position: relative;
+  z-index: 1;
 }
 #tab-agent-qa .agent-stream-text .agent-activity-row.failed .agent-activity-icon,
 #tab-agent-qa .agent-stream-text .agent-activity-row.failed .agent-activity-label,

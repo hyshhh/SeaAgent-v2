@@ -1955,22 +1955,36 @@ function renderActivityRow({kind, verb, target, running = false, failed = false,
 
 function renderSkillActivity(card) {
   const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
-  if (!reads.length) return '';
+  const history = Array.isArray(card?._skillHistory) ? card._skillHistory : [];
+  if (!reads.length && !history.length) return '';
   const reading = isSkillReadingActive(card);
   const activeSkill = card?._currentSkill || {};
-  return reads.map((item, index) => {
-    const running = item.phase === 'running'
-      || (reading && (item.skillId === activeSkill.skillId || index === Number(activeSkill.index || 0) - 1));
+  const rows = history.map((item) => {
     const target = item.title || item.skillId || 'skill';
     return renderActivityRow({
       kind: 'skill',
       verb: 'Read',
       target,
-      running,
       failed: item.ok === false,
       title: `${target}${item.description ? ` · ${item.description}` : ''}`,
     });
-  }).join('');
+  });
+  if (!reading) return rows.join('');
+  const activeIndex = Math.max(0, Number(activeSkill.index || 1) - 1);
+  const current = reads.find((item) => item.skillId === activeSkill.skillId && item.source === activeSkill.source)
+    || reads[activeIndex]
+    || reads[0];
+  if (!current) return rows.join('');
+  const target = current.title || current.skillId || 'skill';
+  rows.push(renderActivityRow({
+    kind: 'skill',
+    verb: 'Read',
+    target,
+    running: true,
+    failed: current.ok === false,
+    title: `${target}${current.description ? ` · ${current.description}` : ''}`,
+  }));
+  return rows.join('');
 }
 
 function renderToolActivity(card) {
@@ -2124,6 +2138,7 @@ function appendThoughtEvent(event) {
       card._toolTotal = 0;
     }
     card._skillReads = normalizedSkillReads(event);
+    card._skillHistory = [];
     card._currentSkill = card._skillReads.length
       ? {skillId: card._skillReads[0].skillId, title: card._skillReads[0].title, index: 1, total: card._skillReads.length}
       : null;
@@ -2205,6 +2220,12 @@ function appendThoughtEvent(event) {
       total: Math.max(Number.isFinite(eventTotal) && eventTotal > 0 ? eventTotal : reads.length, resolvedIndex),
     };
     card._skillsRunning = event.phase === 'running';
+    if (event.phase !== 'running') {
+      const history = card._skillHistory || [];
+      const historyIndex = history.findIndex((item) => item.skillId === record.skillId && item.source === record.source);
+      if (historyIndex >= 0) history[historyIndex] = record; else history.push(record);
+      card._skillHistory = history;
+    }
     if (card._skillsRunning && card.classList.contains('active')) {
       markSkillReading(card, 1200);
     } else if (!card._skillsRunning) {
