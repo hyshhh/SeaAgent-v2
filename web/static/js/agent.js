@@ -1724,7 +1724,8 @@ function renderIntentAgentCard(event) {
     const head = card.querySelector('.agent-thought-head em');
     if (head) head.textContent = event.timeParseError ? 'Needs Review' : 'Completed';
     setAgentInitSummary(event.timeParseError ? 'Needs review' : `Initialized · ${questionTypeLabel(event.questionType)}`);
-    setAgentStreamText(card, summary);
+    // 用 setAgentProcessStream 保留 ReAct 工具往返与技能活动，意图摘要与活动共存
+    setAgentProcessStream(card, summary);
     const tags = card.querySelector('.agent-thought-tags');
     if (tags) tags.innerHTML = agentTags({role: 'intent', ...event});
   }
@@ -1972,8 +1973,10 @@ function setAgentProcessStream(card, text, {cursor = false} = {}) {
   bindAgentActivityState(card);
 }
 
-function updateObserverToolEvent(event) {
-  const card = ensureAgentCard(event.round, 'observer');
+function updateAgentToolEvent(event) {
+  // ReAct 微循环工具往返：按 event.role 渲染到对应角色卡
+  const role = String(event.role || 'observer');
+  const card = ensureAgentCard(event.round, role);
   if (!card) return;
   const logs = card._toolLogs || [];
   const eventId = String(event.id || event.tool || `tool-${logs.length + 1}`);
@@ -2002,12 +2005,21 @@ function updateObserverToolEvent(event) {
   card._toolsRunning = runningIndex >= 0;
   card.classList.add('active');
   const state = card.querySelector('.agent-thought-head em');
-  if (state) state.textContent = running ? 'Running' : roleRunningLabel('observer');
-  const streamText = card.dataset.streamText || 'Running tools and collecting evidence…';
+  if (state && state.textContent !== 'Completed' && state.textContent !== 'Repaired') {
+    state.textContent = running ? 'Running' : roleRunningLabel(role);
+  }
+  const fallbackText = role === 'intent'
+    ? 'Parsing the question and acceptance target…'
+    : role === 'planner'
+      ? 'Drafting the tool plan for this round…'
+      : role === 'reflector'
+        ? 'Checking evidence against the acceptance target…'
+        : 'Running tools and collecting evidence…';
+  const streamText = card.dataset.streamText || fallbackText;
   setAgentProcessStream(card, streamText, {cursor: running});
   setLiveToolActivity(card, {...event, tool: toolName, arguments: argumentsValue, phase}, logs, runningIndex);
   scrollThoughtStreamToCard(card);
-  updatePlanProgressFromTool(event);
+  if (role === 'observer') updatePlanProgressFromTool(event);
 }
 
 function compactAgentErrorMessage(raw) {
@@ -2180,7 +2192,7 @@ function appendThoughtEvent(event) {
     // 模型原始增量可能混入内部推理；界面只展示结构化计划、技能、工具和结论。
     return;
   } else if (event.type === 'agent_tool') {
-    updateObserverToolEvent(event);
+    updateAgentToolEvent(event);
   } else if (event.type === 'agent_end') {
     const card = ensureAgentCard(event.round, event.role);
     if (!card) return;

@@ -34,7 +34,7 @@ def role_system_prompt(
             "## 工作方式\n"
             "- 你只负责规划，不执行业务检索工具。\n"
             "- 先核对本轮已启用技能、acceptanceProgress、replanDirective、completedCalls 与 workingScopeKeys。\n"
-            "- 若当前规则仍不足，可调用一次 loadSkill 读取最相关的可选技能；禁止重复读取同一技能或无目的空转。\n"
+            "- ReAct 过程中若当前规则仍不足，可多次按需调用 loadSkill 读取可选技能全文；同一技能不要重复读取；无目的空转仍禁止。\n"
             "- 随后必须调用 handoff_to_observe(goal, calls, planHint)；确实无法形成计划时才调用 handoff_to_reflect。\n"
             "- 根据 replanDirective.requiredCapabilities 自主选择工具，calls 用 $ref 串联并复用已有结果。\n"
             "- 禁止重复 completedCalls 中已成功且参数等价的调用；只有输入范围变化时才允许再次调用。\n"
@@ -44,7 +44,7 @@ def role_system_prompt(
         work_style = (
             "## 工作方式\n"
             "- 业务工具已由确定性执行器运行，你只审阅计划、压缩工具结果和证据域，不得重新执行业务工具。\n"
-            "- 先核对本轮已启用技能；规则不足时可调用一次 loadSkill，禁止重复读取或空转。\n"
+            "- 先核对本轮已启用技能；规则不足时可多次按需调用 loadSkill；同一技能不要重复读取或空转。\n"
             "- 只陈述工具结果中已有事实，明确失败、跳过、空结果和真实证据缺口。\n"
             "- 审阅后必须调用 handoff_to_reflect(summary, evidenceGap, proposedState)。\n"
         )
@@ -52,7 +52,7 @@ def role_system_prompt(
         work_style = (
             "## 工作方式\n"
             "- 你是是否进入下一轮的唯一决策者，acceptanceProgress 是最高优先级的验收依据。\n"
-            "- 先审计 acceptanceProgress 与本轮证据；规则不足时最多调用一次 loadSkill，禁止重复读取同一技能。\n"
+            "- 先审计 acceptanceProgress 与本轮证据；规则不足时可多次按需调用 loadSkill；同一技能不要重复读取。\n"
             "- pendingRequirements 非空且未达轮次上限时，立即调用 handoff_to_plan_replan。\n"
             "- 只有 acceptanceSatisfied=true，或继续检索已无收益时，才允许调用 handoff_finish。\n"
             "- replan 时必须同时给出结构化 nextActionSpec：声明缺失能力、目标参数和可复用证据；nextAction 只作界面摘要。\n"

@@ -1462,6 +1462,96 @@ def build_sea_agent_graph(
                 },
             )
 
+        pending_calls: dict[str, dict[str, Any]] = {}
+        emitted_react_calls: set[str] = set()
+        emitted_react_results: set[str] = set()
+        emitted_skill_ids: set[str] = set()
+
+        def _emit_react_tool_progress(message: Any) -> None:
+            """ReAct 微循环实时事件：角色节点内的工具往返对前端可见。
+
+            只发非 handoff / 非 loadSkill 的辅助工具（parseTime / parseTargets /
+            extractHull 等）；handoff 触发节点切换不展示，loadSkill 走 agent_skill 事件。
+            """
+            if not role:
+                return
+            if isinstance(message, AIMessage) and not isinstance(message, AIMessageChunk):
+                for call in getattr(message, "tool_calls", None) or []:
+                    if not isinstance(call, dict):
+                        continue
+                    tname = str(call.get("name") or "")
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    call_id = str(call.get("id") or f"{tname}-{len(pending_calls) + 1}")
+                    pending_calls[call_id] = {"name": tname, "arguments": args}
+                    if tname.startswith("handoff") or tname == "loadSkill" or call_id in emitted_react_calls:
+                        continue
+                    emitted_react_calls.add(call_id)
+                    _emit(event_handler, {
+                        "type": "agent_tool",
+                        "title": "ReAct",
+                        "message": tname,
+                        "role": role,
+                        "round": round_number,
+                        "id": call_id,
+                        "tool": tname,
+                        "arguments": args,
+                        "phase": "running",
+                        "status": "running",
+                        "ok": True,
+                        "error": None,
+                        "summary": {"tool": tname},
+                    })
+                return
+            if isinstance(message, ToolMessage):
+                payload = _safe_json(str(message.content or ""))
+                tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+                pending = pending_calls.get(tool_call_id) or {}
+                tname = str(getattr(message, "name", "") or pending.get("name") or "")
+                if payload.get("handoff") or not tname or tname.startswith("handoff"):
+                    return
+                if tname == "loadSkill":
+                    skill_id = str((pending.get("arguments") or {}).get("skillId") or payload.get("skillId") or "").strip()
+                    if skill_id and skill_id not in emitted_skill_ids:
+                        emitted_skill_ids.add(skill_id)
+                        meta = get_skill_meta(agent_key, skill_id)
+                        record = {
+                            "skillId": skill_id,
+                            "title": meta.title if meta else skill_id,
+                            "description": meta.description if meta else "",
+                            "source": "dynamic",
+                            "ok": payload.get("ok") is not False,
+                        }
+                        _emit_skill_read_events(
+                            event_handler,
+                            title=title,
+                            role=role,
+                            event_round=round_number,
+                            records=[record],
+                        )
+                    return
+                if tool_call_id and tool_call_id in emitted_react_results:
+                    return
+                if tool_call_id:
+                    emitted_react_results.add(tool_call_id)
+                ok = payload.get("ok") is not False
+                summary = _tool_summary(tname, payload)
+                _emit(event_handler, {
+                    "type": "agent_tool",
+                    "title": "ReAct",
+                    "message": tname,
+                    "role": role,
+                    "round": round_number,
+                    "id": tool_call_id or f"{tname}-{len(pending_calls) + 1}",
+                    "tool": tname,
+                    "arguments": pending.get("arguments") or {},
+                    "phase": "completed" if ok else "failed",
+                    "status": "completed" if ok else "failed",
+                    "ok": ok,
+                    "error": None if ok else payload.get("error"),
+                    "summary": summary,
+                    **summary,
+                })
+
         try:
             # messages：边生成边推思考；values：拿最终 messages，避免二次 invoke 拖垮超时
             final_values: dict[str, Any] | None = None
@@ -1507,6 +1597,7 @@ def build_sea_agent_graph(
                     # 完整消息（非 chunk）直接入列，保证 handoff ToolMessage 可解析
                     if isinstance(message, (AIMessage, ToolMessage, HumanMessage)) and not isinstance(message, AIMessageChunk):
                         messages.append(message)
+                        _emit_react_tool_progress(message)
                     if isinstance(message, (AIMessageChunk, AIMessage)):
                         body, thinking = _content_parts(getattr(message, "content", None))
                         extra = getattr(message, "additional_kwargs", None) or {}
@@ -1550,6 +1641,11 @@ def build_sea_agent_graph(
                     config={"recursion_limit": recursion_limit},
                 )
                 messages = result.get("messages") or []
+            # values 模式会用完整 messages 覆盖流中攒的消息；统一补齐 ReAct 工具事件
+            # （running/结果均按 call id 去重，loadSkill/handoff 不重复发出）
+            if not stream_guard_triggered:
+                for message in messages:
+                    _emit_react_tool_progress(message)
         except Exception as error:
             invoke_error = str(error)
             if not messages and retry_non_stream:
@@ -1580,7 +1676,6 @@ def build_sea_agent_graph(
         tool_records: list[dict[str, Any]] = []
         handoff: dict[str, Any] | None = None
         scope_updates: dict[str, Any] = {}
-        pending_calls: dict[str, dict[str, Any]] = {}
         plan_calls: list[dict[str, Any]] = []
 
         for message in messages:
@@ -1605,6 +1700,8 @@ def build_sea_agent_graph(
                     continue
                 if not tname or tname.startswith("handoff") or tname == "loadSkill":
                     if tname == "loadSkill" and role:
+                        # 动态技能读取事件已在 ReAct 流式过程中实时发出（_emit_react_tool_progress），
+                        # 此处只更新汇总列表，避免重复 emit。
                         skill_id = str(arguments.get("skillId") or payload.get("skillId") or "").strip()
                         if skill_id:
                             dynamic_records = _skill_read_records(agent_key, [skill_id], source="dynamic")
@@ -1616,13 +1713,6 @@ def build_sea_agent_graph(
                                     for item in skill_reads
                                 ):
                                     skill_reads.append(record)
-                                _emit_skill_read_events(
-                                    event_handler,
-                                    title=title,
-                                    role=role,
-                                    event_round=event_round,
-                                    records=[record],
-                                )
                     continue
                 call_id = tool_call_id or f"{tname}-{len(tool_records)+1}"
                 scope_updates[call_id] = payload
