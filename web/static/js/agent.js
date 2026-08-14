@@ -1959,32 +1959,21 @@ function renderSkillActivity(card) {
   if (!reads.length && !history.length) return '';
   const reading = isSkillReadingActive(card);
   const activeSkill = card?._currentSkill || {};
+  const activeIndex = Math.max(0, Number(activeSkill.index || 1) - 1);
+  const current = reads.find((item) => item.skillId === activeSkill.skillId && item.source === activeSkill.source) || reads[activeIndex] || reads[0] || null;
   const rows = history.map((item) => {
     const target = item.title || item.skillId || 'skill';
-    return renderActivityRow({
-      kind: 'skill',
-      verb: 'Read',
-      target,
-      failed: item.ok === false,
-      title: `${target}${item.description ? ` · ${item.description}` : ''}`,
-    });
+    return renderActivityRow({kind: 'skill-child', verb: 'Read', target, failed: item.ok === false, title: target + (item.description ? ' · ' + item.description : '')});
   });
-  if (!reading) return rows.join('');
-  const activeIndex = Math.max(0, Number(activeSkill.index || 1) - 1);
-  const current = reads.find((item) => item.skillId === activeSkill.skillId && item.source === activeSkill.source)
-    || reads[activeIndex]
-    || reads[0];
-  if (!current) return rows.join('');
-  const target = current.title || current.skillId || 'skill';
-  rows.push(renderActivityRow({
-    kind: 'skill',
-    verb: 'Read',
-    target,
-    running: true,
-    failed: current.ok === false,
-    title: `${target}${current.description ? ` · ${current.description}` : ''}`,
-  }));
-  return rows.join('');
+  if (reading && current) {
+    const target = current.title || current.skillId || 'skill';
+    rows.push(renderActivityRow({kind: 'skill-child', verb: 'Read', target, running: true, failed: current.ok === false, title: target + (current.description ? ' · ' + current.description : '')}));
+  }
+  const count = Math.max(reads.length, history.length, rows.length);
+  const state = reading ? 'running' : history.some((item) => item.ok === false) ? 'error' : 'ok';
+  const open = reading || card?._activityOpen?.skills === true;
+  const label = reading ? 'Reading skills · ' + Math.min(activeIndex + 1, count) + '/' + count : 'Read skills · ' + count + ' references';
+  return '<details class="agent-activity-group agent-activity-skill-group" data-activity-kind="skills" data-state="' + state + '"' + (open ? ' open' : '') + '><summary><span class="agent-activity-icon" aria-hidden="true">▤</span><strong>' + escapeHtml(label) + '</strong><span class="agent-activity-group-status">' + (reading ? 'Running' : state === 'error' ? 'Failed' : 'Completed') + '</span><b aria-hidden="true"></b></summary><div class="agent-activity-children" role="list">' + rows.join('') + '</div></details>';
 }
 
 function renderToolActivity(card) {
