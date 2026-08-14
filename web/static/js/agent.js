@@ -1920,40 +1920,74 @@ function currentSkillSnapshot(card, reads) {
   return {index, total, name, title};
 }
 
+function activityVerbForTool(tool) {
+  const name = String(tool || '').toLowerCase();
+  if (/(match|search|query|find|retrieve)/.test(name)) return 'Search';
+  if (/(parse|extract|dedup|verify|reflect)/.test(name)) return 'Think';
+  if (/(write|save|update|edit|create)/.test(name)) return 'Edit';
+  return 'Read';
+}
+
+function activityIconForVerb(verb) {
+  if (verb === 'Search') return '⌕';
+  if (verb === 'Think') return '✧';
+  if (verb === 'Edit') return '✎';
+  return '▤';
+}
+
+function activityTargetForTool(item = {}) {
+  const argumentsValue = toolArgumentsForCall(item);
+  const preferredKeys = ['path', 'filePath', 'file', 'query', 'question', 'hullNumber', 'description', 'trackIds', 'trackId', 'timeRange', 'value'];
+  const entry = preferredKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(argumentsValue, key))
+    .map((key) => [key, argumentsValue[key]])[0]
+    || Object.entries(argumentsValue)[0];
+  if (entry) return `${entry[0]}=${formatToolArgumentValue(entry[1])}`;
+  return String(item.tool || item.id || 'tool');
+}
+
+function renderActivityRow({kind, verb, target, running = false, failed = false, title = ''}) {
+  const state = `${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+  const icon = activityIconForVerb(verb);
+  const label = target ? `${verb} · ${target}` : verb;
+  return `<div class="agent-activity-row agent-activity-${kind}${state}" title="${escapeHtml(title || label)}"><span class="agent-activity-icon" aria-hidden="true">${icon}</span><span class="agent-activity-label"><strong>${escapeHtml(verb)}</strong>${target ? `<span aria-hidden="true"> · </span><span>${escapeHtml(target)}</span>` : ''}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}</div>`;
+}
+
 function renderSkillActivity(card) {
   const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
   if (!reads.length) return '';
-  const running = isSkillReadingActive(card);
-  const failed = reads.filter((item) => item.ok === false).length;
-  const current = currentSkillSnapshot(card, reads);
-  const label = running
-    ? `Reading skill ${current.index}/${current.total} · ${current.name}`
-    : `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
-  const details = reads.map((item) => {
-    const source = item.source === 'dynamic' ? 'on demand' : 'auto';
-    const status = item.phase === 'running' ? 'running' : item.ok === false ? 'failed' : 'done';
-    const description = item.description ? `<small>${escapeHtml(item.description)}</small>` : '';
-    const itemClass = `agent-activity-item${item.ok === false ? ' failed' : ''}${item.phase === 'running' ? ' running' : ''}`;
-    return `<div class="${itemClass}"><code>${escapeHtml(item.skillId || item.title || 'skill')}</code><em>${source} · ${status}</em>${description}</div>`;
+  const reading = isSkillReadingActive(card);
+  const activeSkill = card?._currentSkill || {};
+  return reads.map((item, index) => {
+    const running = item.phase === 'running'
+      || (reading && (item.skillId === activeSkill.skillId || index === Number(activeSkill.index || 0) - 1));
+    const target = item.title || item.skillId || 'skill';
+    return renderActivityRow({
+      kind: 'skill',
+      verb: 'Read',
+      target,
+      running,
+      failed: item.ok === false,
+      title: `${target}${item.description ? ` · ${item.description}` : ''}`,
+    });
   }).join('');
-  return `<details class="agent-activity agent-activity-skill${running ? ' running' : ''}" data-activity-kind="skills"${agentActivityOpen(card, 'skills') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml(current.title)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
 }
 
 function renderToolActivity(card) {
   const logs = Array.isArray(card?._toolLogs) ? card._toolLogs : [];
   if (!logs.length) return '';
-  const runningIndex = logs.findIndex((item) => item.running);
-  const running = runningIndex >= 0;
-  const failed = logs.filter((item) => item.failed).length;
-  const current = running ? logs[runningIndex] : null;
-  const total = Math.max(logs.length, Number(card?._toolTotal || 0) || 0, runningIndex + 1);
-  const toolName = (current && (current.tool || current.id)) || 'tool';
-  const currentArguments = current ? formatToolArguments(toolArgumentsForCall(current)) : '';
-  const label = running
-    ? `Running tool ${runningIndex + 1}/${Math.max(1, total)} · ${toolName} · ${toolName}(${currentArguments})`
-    : `Ran ${logs.length} tools${failed ? ` · ${failed} failed` : ''}`;
-  const details = logs.map((item) => `<div class="agent-activity-item${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}"><code>${escapeHtml(item.text)}</code></div>`).join('');
-  return `<details class="agent-activity agent-activity-tool${running ? ' running' : ''}" data-activity-kind="tools"${agentActivityOpen(card, 'tools') ? ' open' : ''}><summary><span class="agent-activity-icon" aria-hidden="true">◇</span><span title="${escapeHtml(running ? `${toolName}(${currentArguments})` : label)}">${escapeHtml(label)}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}<b aria-hidden="true"></b></summary><div class="agent-activity-body">${details}</div></details>`;
+  return logs.map((item) => {
+    const verb = activityVerbForTool(item.tool || item.id);
+    const target = activityTargetForTool(item);
+    return renderActivityRow({
+      kind: 'tool',
+      verb,
+      target,
+      running: item.running,
+      failed: item.failed,
+      title: item.text || `${item.tool || item.id}(${formatToolArguments(toolArgumentsForCall(item))})`,
+    });
+  }).join('');
 }
 
 function bindAgentActivityState(card) {

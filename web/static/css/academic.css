@@ -4194,6 +4194,69 @@ tbody tr:hover td { background: #f2f6f9; }
   font-size: 10.5px;
   font-weight: 550;
 }
+
+/* Flat action history, inspired by developer-tool timelines. */
+#tab-agent-qa .agent-stream-text .agent-activity-row {
+  min-width: 0;
+  min-height: 26px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  color: #707b89;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.45;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row:last-child { margin-bottom: 4px; }
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #73808e;
+  font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row.agent-activity-skill .agent-activity-icon { color: #53748f; }
+#tab-agent-qa .agent-stream-text .agent-activity-row.agent-activity-tool .agent-activity-icon { color: #557e6c; }
+#tab-agent-qa .agent-stream-text .agent-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-label strong {
+  color: #596877;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: inherit;
+  font-weight: 620;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-label > span:last-child {
+  color: #7a8491;
+  text-decoration: underline;
+  text-decoration-color: #ccd4dc;
+  text-underline-offset: 2px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row.running .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row.running .agent-activity-label strong { color: #2e638e; }
+#tab-agent-qa .agent-stream-text .agent-activity-row.running .agent-activity-icon {
+  animation: agentReadingPulse .85s ease-in-out infinite alternate;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row.failed .agent-activity-icon,
+#tab-agent-qa .agent-stream-text .agent-activity-row.failed .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row.failed .agent-activity-label strong { color: #a44d58; }
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-cursor {
+  width: 3px;
+  height: 13px;
+  margin-right: 2px;
+  background: #2e638e;
+  animation: thinkingPulse .8s steps(1) infinite;
+}
 /* 智能体身份与运行状态标识精修 */
 #tab-agent-qa .agent-thought-head,
 #tab-agent-qa .agent-stage {
