@@ -603,14 +603,23 @@ function updateResultTimeline(role, {round = 0, state = 'running', text = '', ac
   let entry = timeline.querySelector('[data-timeline-key="' + key + '"]');
   if (!entry) {
     timeline.querySelector('.agent-result-empty')?.remove();
-    entry = document.createElement('article');
+    entry = document.createElement('details');
     entry.className = 'agent-timeline-entry';
     entry.dataset.timelineKey = key;
     timeline.appendChild(entry);
   }
   entry.dataset.state = state;
-  const stateLabel = state === 'running' ? 'Running' : state === 'failed' ? 'Failed' : 'Completed';
-  entry.innerHTML = `<header><span class="agent-timeline-index">${escapeHtml(meta.index)}</span><span class="agent-timeline-title"><strong>${escapeHtml(meta.title)}</strong><small>${escapeHtml(meta.stage)}${round ? ' · Round ' + round : ''}</small></span><em>${stateLabel}</em></header><div class="agent-timeline-body">${activity || ''}${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>`;
+  const stateLabel = state === 'running' ? 'Thinking' : state === 'failed' ? 'Failed' : 'Completed';
+  const summary = String(text || '').replace(/\s+/g, ' ').trim();
+  const runningMarkup = state === 'running' && summary ? '<span class="agent-timeline-marquee"><span class="agent-timeline-marquee-track"><span>' + escapeHtml(summary) + '</span><span aria-hidden="true">' + escapeHtml(summary) + '</span></span></span>' : '<span class="agent-timeline-summary">' + escapeHtml(summary || 'Waiting for structured result') + '</span>';
+  const body = (activity || '') + (text ? '<p>' + escapeHtml(text) + '</p>' : '');
+  const wasOpen = entry.open;
+  entry.innerHTML = '<summary><span class="agent-timeline-index">' + escapeHtml(meta.index) + '</span><span class="agent-timeline-title"><strong>' + escapeHtml(meta.title) + '</strong><small>' + escapeHtml(meta.stage) + (round ? ' · Round ' + round : '') + '</small></span>' + runningMarkup + '<em>' + stateLabel + '</em><b aria-hidden="true"></b></summary><div class="agent-timeline-body">' + body + '</div>';
+  entry.open = wasOpen || state === 'running';
+  if (!entry.dataset.timelineToggleBound) {
+    entry.addEventListener('toggle', () => { entry.dataset.timelineToggleBound = entry.open ? 'open' : 'closed'; });
+    entry.dataset.timelineToggleBound = 'true';
+  }
   if (atBottom) timeline.scrollTop = timeline.scrollHeight;
 }
 function setAgentResultState(label, state = 'running') {
