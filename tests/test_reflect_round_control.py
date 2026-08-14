@@ -749,7 +749,8 @@ def test_hull_existence_acceptance_guard_uses_three_non_repeating_rounds():
     assert executed[0][1]["hullNumber"] == "大鱼01"
     assert "hullNumber" not in executed[2][1]
     assert executed[2][1]["limit"] == 0
-    assert executed[4][1]["topK"] == 0
+    # focused 证据模式：matchImage 用普通 topK（query_top_k=5），不再全量评分
+    assert executed[4][1]["topK"] == 5
     assert sum(1 for name, _ in executed if name == "matchImage") == 1
 
 def test_hull_existence_synthesis_returns_all_confirmed_and_gray_zone_tracks_with_thresholds():

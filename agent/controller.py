@@ -1352,6 +1352,12 @@ class AgentController:
         display: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         display = display if display is not None else {"tracks": tracks}
+        # focused 证据模式（单目标判断）：只保留少量证据，避免 259 条级别的展示与片段开销
+        evidence_mode = str((self.meta or {}).get("evidenceMode") or "")
+        limited_tracks = tracks[: self.display_limit] if evidence_mode == "focused" else tracks
+        if evidence_mode == "focused":
+            display = dict(display or {})
+            display["tracks"] = list(display.get("tracks") or [])[: self.display_limit]
         # 供 _display_tracks 优先使用的命中库项（避免展示整库）
         if extra and isinstance(extra.get("registryItems"), list):
             self._pending_registry_items = list(extra["registryItems"])
@@ -1365,7 +1371,7 @@ class AgentController:
                 display.get("includeClips", True) is not False,
                 bool(display.get("includeRegistry")),
             )
-        primary = [item["trackId"] for item in tracks[: self.display_limit] if item.get("trackId") is not None]
+        primary = [item["trackId"] for item in limited_tracks[: self.display_limit] if item.get("trackId") is not None]
         result = {
             "sessionId": self.session_id,
             "question": self.question,
@@ -1379,22 +1385,23 @@ class AgentController:
             "queryScope": list(self.meta["timeRange"]) if self.meta.get("timeRange") else None,
             "toolChain": self.tool_chain,
             "toolRecords": self.tool_records,
-            "tracks": tracks,
+            "tracks": limited_tracks,
             "evidence": self._collect_evidence(),
             "displayGroups": self.display_groups,
             "display": self._public_display(),
             "uncertainty": state,
             "primaryTrackIds": primary,
             "remainingTrackIds": [
-                item["trackId"] for item in tracks[self.display_limit :] if item.get("trackId") is not None
+                item["trackId"] for item in limited_tracks[self.display_limit :] if item.get("trackId") is not None
             ],
             "rounds": [{k: v for k, v in item.items() if k != "scope"} for item in self.rounds],
             "intent": self.meta,
             "planMode": "langgraph",
+            "evidenceMode": evidence_mode,
         }
         if extra:
             result.update(extra)
-        self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(tracks))
+        self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(limited_tracks))
         return result
 
     def _display_dedup_groups(self, summary: dict[str, Any], tracks: list[dict[str, Any]]) -> None:
@@ -1499,6 +1506,11 @@ class AgentController:
         working_scope = getattr(self, "working_scope", {}) or {}
         pending_registry_items = getattr(self, "_pending_registry_items", []) or []
         unique_tracks = list({str(item["trackId"]): item for item in tracks if item.get("trackId") is not None}.values())
+        # focused 证据模式兜底：单目标判断只展示少量证据（含片段生成开销）
+        if str(getattr(self, "meta", {}).get("evidenceMode") or "") == "focused":
+            limit = getattr(self, "display_limit", 3) or 3
+            if len(unique_tracks) > limit:
+                unique_tracks = unique_tracks[:limit]
         if not unique_tracks:
             # 仅先验库结果：优先用本轮合成得到的 registry 命中项，再回退 working_scope
             reference_ids: list[str] = []

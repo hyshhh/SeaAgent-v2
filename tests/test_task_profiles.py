@@ -5,6 +5,7 @@ from agent.task_profiles import (
     is_membership_question_type,
     registry_membership_list_mode,
     relation_for_membership,
+    resolve_evidence_mode,
 )
 
 
@@ -70,3 +71,23 @@ def test_question_type_helpers():
     assert relation_for_membership("registry_in_list") == "in"
     assert relation_for_membership("registry_out_list") == "out"
     assert relation_for_membership("hull_existence") == ""
+
+
+def test_resolve_evidence_mode_focused_for_existence_with_target():
+    assert resolve_evidence_mode({"operation": "existence", "hullNumber": "小蓝320"}) == "focused"
+    assert resolve_evidence_mode({"operation": "existence", "description": "黄色无人艇"}) == "focused"
+    assert resolve_evidence_mode({"operation": "explain", "hullNumber": "0857"}) == "focused"
+
+
+def test_resolve_evidence_mode_broad_for_enumeration():
+    assert resolve_evidence_mode({"operation": "count"}) == "broad"
+    assert resolve_evidence_mode({"operation": "list"}) == "broad"
+    assert resolve_evidence_mode({"operation": "time"}) == "broad"
+    assert resolve_evidence_mode({"operation": "list", "questionType": "registry_in_list", "registryRelation": "in"}) == "broad"
+    assert resolve_evidence_mode({"operation": "existence"}) == "broad"  # 无目标对象
+
+
+def test_resolve_evidence_mode_membership_list_is_broad():
+    intent = {"operation": "list", "targetScope": "both", "registryRelation": "out", "questionType": "registry_out_list"}
+    assert resolve_evidence_mode(intent) == "broad"
+

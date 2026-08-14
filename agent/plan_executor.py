@@ -710,6 +710,12 @@ class PlanExecutor:
                 resolved = default_value
         if value.get("$map") and isinstance(resolved, list):
             resolved = [cls._read(item, value["$map"]) for item in resolved]
+        if value.get("$slice") and isinstance(resolved, list):
+            # focused 证据模式：限制下游（如 getFrames）消费的候选数量
+            try:
+                resolved = resolved[: max(0, int(value["$slice"]))]
+            except (TypeError, ValueError):
+                pass
         if value.get("$compact") and isinstance(resolved, list):
             resolved = [item for item in resolved if item not in (None, "", [])]
         if value.get("$list"):

@@ -121,7 +121,8 @@ def test_image_matching_directive_refetches_full_tracks_when_cached_page_is_part
     assert calls[2]["arguments"]["topK"] == 0
 
 
-def test_hull_visual_replan_reuses_registry_and_runs_one_full_match():
+def test_hull_visual_replan_reuses_registry_and_runs_focused_match():
+    """focused 证据模式（存在性单目标）：全量扫描轨迹，但只对少量候选取证并 topK 匹配。"""
     calls = _default_plan_calls(
         _hull_intent(),
         top_k=5,
@@ -140,14 +141,19 @@ def test_hull_visual_replan_reuses_registry_and_runs_one_full_match():
     )
 
     assert [call["tool"] for call in calls] == ["getTrack", "getFrames", "matchImage"]
+    # 否定结论仍需全量扫描轨迹
     assert calls[0]["arguments"] == {"offset": 0, "limit": 0}
+    # focused：只对少量候选轨迹取帧
+    assert calls[1]["arguments"]["trackIds"] == {"$ref": "tracks.trackIds", "$slice": 20}
     assert calls[1]["condition"] == {"ref": "tracks.trackIds"}
     assert calls[2]["condition"] == {"ref": "frames.keyframes"}
-    assert calls[2]["arguments"]["topK"] == 0
+    # focused：matchImage 用普通 topK，不再全量评分
+    assert calls[2]["arguments"]["topK"] == 5
     assert calls[2]["arguments"]["queryImages"] == {"$ref": "known_registry.registryReferences"}
 
 
-def test_model_hull_visual_plan_is_forced_to_full_match_and_guarded_dependencies():
+def test_model_hull_visual_plan_keeps_topk_and_guarded_dependencies_in_focused_mode():
+    """focused 证据模式：模型计划不再被强制为全量匹配（topK 与分页保持）。"""
     calls, repair = _prepare_plan_calls(
         [
             {"id": "registry", "tool": "getRegistry", "arguments": {"hullNumber": "大鱼01"}},
@@ -170,10 +176,10 @@ def test_model_hull_visual_plan_is_forced_to_full_match_and_guarded_dependencies
     )
 
     assert repair == ""
-    assert calls[1]["arguments"] == {"limit": 0, "offset": 0}
+    assert calls[1]["arguments"] == {"limit": 60}
     assert calls[2]["condition"] == {"ref": "tracks.trackIds"}
     assert calls[3]["condition"] == {"ref": "frames.keyframes"}
-    assert calls[3]["arguments"]["topK"] == 0
+    assert calls[3]["arguments"]["topK"] == 5
 
 
 def test_empty_track_dependency_short_circuits_frames_and_image_match():

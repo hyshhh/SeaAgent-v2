@@ -40,6 +40,7 @@ from .task_profiles import (
     is_membership_question_type,
     registry_membership_list_mode,
     relation_for_membership,
+    resolve_evidence_mode,
 )
 
 
@@ -672,6 +673,10 @@ def _default_plan_calls(
     target_scope = str(intent.get("targetScope") or "track_memory")
     top = max(1, min(20, int(top_k or 3)))
     broad_top = _normalize_broad_match_top_k(broad_match_top_k)
+    # focused 证据模式：单目标判断只对少量候选轨迹取证，控制关键帧与匹配开销
+    evidence_mode = resolve_evidence_mode(intent)
+    focused = evidence_mode == "focused"
+    frame_slice = top * 4 if focused else None
     directive = _normalize_replan_directive(replan_directive)
     required_capabilities = set(directive.get("requiredCapabilities") or [])
     hint_raw = str(replan_hint or intent.get("nextAgentFocus") or "")
@@ -842,7 +847,8 @@ def _default_plan_calls(
             {
                 "id": "frames",
                 "tool": "getFrames",
-                "arguments": {"trackIds": {"$ref": "tracks.trackIds"}},
+                # focused 模式只对少量候选轨迹取帧，避免全量关键帧开销
+                "arguments": {"trackIds": {"$ref": "tracks.trackIds", "$slice": frame_slice} if frame_slice else {"$ref": "tracks.trackIds"}},
                 "condition": {"ref": "tracks.trackIds"},
             },
             {
@@ -853,7 +859,8 @@ def _default_plan_calls(
                     "queryImages": {"$ref": f"{registry_scope_id}.registryReferences"},
                     "galleryImages": {"$ref": "frames.keyframes"},
                     "registryItems": {"$ref": f"{registry_scope_id}.registryItems"},
-                    "topK": broad_top,
+                    # focused 单目标核验用普通 topK，broad 全库对照才不截断
+                    "topK": top if focused else broad_top,
                 },
                 "condition": {"ref": "frames.keyframes"},
             },
@@ -862,7 +869,11 @@ def _default_plan_calls(
     if wants_visual_match and description:
         return [
             {"id": "tracks", "tool": "getTrack", "arguments": _track_args(with_hull=False)},
-            {"id": "frames", "tool": "getFrames", "arguments": {"trackIds": {"$ref": "tracks.trackIds"}}},
+            {
+                "id": "frames",
+                "tool": "getFrames",
+                "arguments": {"trackIds": {"$ref": "tracks.trackIds", "$slice": frame_slice} if frame_slice else {"$ref": "tracks.trackIds"}},
+            },
             {
                 "id": "match",
                 "tool": "matchText",
@@ -952,6 +963,7 @@ def _apply_retrieval_limits(
     *,
     broad_match_top_k: int,
     broad_match_context: bool = False,
+    intent: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """修正模型计划中的广泛库图匹配参数，避免退回普通检索上限。"""
     has_list_registry = False
@@ -968,6 +980,10 @@ def _apply_retrieval_limits(
             has_match_image = True
         elif tool_name == "getTrack" and not str(arguments.get("hullNumber") or "").strip():
             has_unfiltered_track = True
+
+    # focused 单目标核验不做广泛匹配强制（matchImage 由计划链决定 topK）
+    if intent is not None and resolve_evidence_mode(intent) == "focused":
+        return calls
 
     # 全库对全轨迹、以及“指定库船是否在视频出现”的全轨迹核验，都属于广泛匹配。
     # 后者必须一次返回全部轨迹评分，不能先按普通 topK 截断后再重复匹配。
@@ -1059,6 +1075,7 @@ def _prepare_plan_calls(
         sanitized,
         broad_match_top_k=broad_match_top_k,
         broad_match_context=broad_match_context,
+        intent=intent,
     )
     normalized = _enforce_plan_time_scope(normalized, intent)
     normalized = _attach_dependency_conditions(normalized)
@@ -1827,6 +1844,7 @@ def build_sea_agent_graph(
                 "question": question,
                 "referenceTime": reference_time.isoformat(timespec="seconds"),
                 "timeConstraintRule": "仅当用户原问题明确包含时间表达时才设置 timeRange/timeExpression 或调用 parseTime；未提供时间时两者必须为 null，禁止依据 referenceTime 生成最近一分钟、当前一分钟或任意默认范围。",
+                "evidenceModeRule": "判断证据量级并填写 evidenceMode：focused=单目标判断类问题（有没有/是不是/为什么，如某舷号或某描述目标是否出现），只需少量证据；broad=枚举/对照类问题（列出哪些、有多少、何时出现、在库/未在库列表），需要全量证据。无法确定时填 broad。",
                 "queryTopK": state.get("query_top_k") or default_top_k,
                 "broadMatchTopK": _normalize_broad_match_top_k(state.get("broad_match_top_k", default_broad_match_top_k)),
                 "intentSchema": {
@@ -1843,6 +1861,7 @@ def build_sea_agent_graph(
                     "successCriteria": "str",
                     "nextAgentFocus": "str",
                     "questionType": "str",
+                    "evidenceMode": "focused|broad",
                 },
             },
             ensure_ascii=False,
@@ -2027,6 +2046,10 @@ def build_sea_agent_graph(
         intent = _ground_intent_time(intent, question, reference_time=reference_time)
         if intent.get("timeRange") and not intent.get("queryScope"):
             intent["queryScope"] = intent.get("timeRange")
+        # 证据量级（模型可自报 modelEvidenceMode，检索/展示一律用规则解析结果）：
+        # focused=单目标判断（少量证据，控制计算开销）；broad=枚举/对照（全量证据）。
+        intent["modelEvidenceMode"] = str(intent.get("evidenceMode") or "").strip() or "unknown"
+        intent["evidenceMode"] = resolve_evidence_mode(intent)
         _emit(
             event_handler,
             {
@@ -2040,6 +2063,7 @@ def build_sea_agent_graph(
                     "registryRelation", "description", "hullNumber", "targetItems",
                     "timeExpression", "timeRange", "expectedOutcome", "successCriteria", "nextAgentFocus",
                     "timeParseError", "timeSource", "intentConfidence", "selectedRules",
+                    "evidenceMode", "modelEvidenceMode",
                 )},
             },
         )

@@ -52,3 +52,36 @@ def relation_for_membership(question_type: Any) -> str:
     if qt == "registry_out_list":
         return "out"
     return ""
+
+
+# 枚举型问法：需要全量证据（列表 / 计数 / 时间定位 / 在库对照）
+_BROAD_QUESTION_TYPES = frozenset({
+    "registry_in_list", "registry_out_list", "track_list", "registry_list",
+    "relation_description", "cross_reference", "count", "description_count",
+    "registry_count", "registry_description_count", "out_of_registry", "in_registry",
+})
+
+
+def resolve_evidence_mode(intent: dict[str, Any] | None) -> str:
+    """判断证据量级：focused（单目标判断，少量证据）vs broad（枚举/对照，全量证据）。
+
+    规则为准（与意图时间落地一致，不信任模型自报）：
+    - 在库/未在库列表、计数、列表、时间定位 → broad；
+    - 存在性/解释（有具体目标）→ focused；
+    - 无目标或无法判定 → 默认 broad（宁可多证据，不可漏检）。
+    """
+    if not isinstance(intent, dict):
+        return "broad"
+    operation = str(intent.get("operation") or "")
+    question_type = str(intent.get("questionType") or "")
+    hull = str(intent.get("hullNumber") or "").strip()
+    description = str(intent.get("description") or "").strip()
+    if registry_membership_list_mode(intent):
+        return "broad"
+    if question_type and question_type in _BROAD_QUESTION_TYPES:
+        return "broad"
+    if operation in {"count", "list", "time"}:
+        return "broad"
+    if operation in {"existence", "explain"} and (hull or description):
+        return "focused"
+    return "broad"
