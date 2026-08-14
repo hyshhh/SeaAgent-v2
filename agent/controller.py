@@ -11,6 +11,7 @@ from tools import ToolService
 from vector_store import VectorCatalog
 
 from .graph import run_sea_agent
+from .task_profiles import registry_membership_list_mode
 
 
 def _nonnegative_int(value: Any, default: int = 0) -> int:
@@ -53,6 +54,9 @@ class AgentController:
         self.display_groups: list[dict[str, Any]] = []
         self.working_scope: dict[str, Any] = {}
         self._pending_registry_items: list[dict[str, Any]] = []
+        # 模型决策被确定性守卫纠偏/兜底的计量（③），落库到会话审计与最终结果
+        self.decision_metrics: dict[str, Any] = {}
+        self.memory_persist_error: str = ""
 
     def _emit(self, event_type: str, title: str, message: str, **payload: Any) -> None:
         if not self.event_handler:
@@ -101,6 +105,7 @@ class AgentController:
                     "retrievalBroadMatchTopK": self.broad_match_top_k,
                 },
             )
+            result["decisionMetrics"] = self.decision_metrics
             try:
                 self.repository.finish_session(self.session_id, self._session_audit_result(result))
             except Exception:
@@ -121,15 +126,145 @@ class AgentController:
             self.repository.add_session(self.session_id, {"question": self.question, **self.meta})
         except Exception:
             pass
+        # ① 落库 LangGraph 轮次与工具证据（qa_rounds/qa_evidence），使问答记忆可审计可回放
+        self._persist_qa_memory(state)
+        # ③ 计量模型决策 vs 确定性守卫/兜底的占比，随审计与最终结果一起落库
+        self.decision_metrics = self._build_decision_metrics(state)
 
         final_state = str(state.get("final_state") or "uncertain")
         final_reason = str(state.get("final_reason") or "协同结束")
         result = self._synthesize(final_state, final_reason)
+        result["decisionMetrics"] = self.decision_metrics
         try:
             self.repository.finish_session(self.session_id, self._session_audit_result(result))
         except Exception:
             pass
         return result
+
+    def _persist_qa_memory(self, state: dict[str, Any]) -> None:
+        """① 把 LangGraph 的轮次与工具证据落库到 qa_rounds / qa_evidence。
+
+        设计：round 按 session 内的轮次编号唯一；evidence 以「会话-轮次-调用id」唯一，
+        跨轮次重名 call id（如每轮都有 tracks/frames）不会互相覆盖。落库失败不打断
+        answer 主流程，但把错误记录到 self.memory_persist_error 供审计观测。
+        """
+        self.memory_persist_error = ""
+        try:
+            session_id = self.session_id
+            round_by_number: dict[int, str] = {}
+            for item in state.get("rounds") or []:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    round_number = int(item.get("round") or 0)
+                except (TypeError, ValueError):
+                    continue
+                round_id = f"{session_id}-r{round_number}"
+                plan = {
+                    "planHint": str(item.get("planHint") or ""),
+                    "observation": str(item.get("observation") or ""),
+                    "toolChain": list(item.get("toolChain") or []),
+                    "planRepair": str(item.get("planRepair") or ""),
+                    "planUsedDefault": bool(item.get("planUsedDefault")),
+                }
+                reflection = item.get("reflection") if isinstance(item.get("reflection"), dict) else {}
+                self.repository.add_round(round_id, session_id, plan, reflection)
+                round_by_number[round_number] = round_id
+
+            seen_evidence: set[str] = set()
+            for record in state.get("tool_records") or []:
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    round_number = int(record.get("round") or 0)
+                except (TypeError, ValueError):
+                    round_number = 0
+                call_id = str(record.get("id") or record.get("tool") or "tool")
+                evidence_id = f"{session_id}-r{round_number}-{call_id}"
+                if evidence_id in seen_evidence:
+                    evidence_id = f"{evidence_id}-{len(seen_evidence) + 1}"
+                seen_evidence.add(evidence_id)
+                round_id = round_by_number.get(round_number) or f"{session_id}-r{round_number}"
+                self.repository.add_evidence(
+                    evidence_id,
+                    round_id,
+                    self._evidence_tool_result(record),
+                    {
+                        "tool": record.get("tool"),
+                        "round": round_number,
+                        "source": "langgraph",
+                        "planMode": "langgraph",
+                    },
+                )
+        except Exception as error:  # 记忆落库失败不应让回答本身失败
+            self.memory_persist_error = str(error)
+
+    @staticmethod
+    def _evidence_tool_result(record: dict[str, Any]) -> dict[str, Any]:
+        """裁剪工具记录：丢弃关键帧/轨迹/匹配等大列表，只保留计数、结论与错误字段。"""
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        compact: dict[str, Any] = {}
+        for key, value in result.items():
+            if isinstance(value, list) and value and isinstance(value[0], (dict, list)):
+                continue
+            compact[key] = value
+        return {
+            "tool": record.get("tool"),
+            "arguments": record.get("arguments") or {},
+            "ok": record.get("ok") is not False,
+            "skipped": bool(record.get("skipped")),
+            "error": record.get("error"),
+            "summary": record.get("summary") or {},
+            "resultSummary": compact,
+        }
+
+    @staticmethod
+    def _build_decision_metrics(state: dict[str, Any]) -> dict[str, Any]:
+        """③ 统计模型决策 vs 确定性守卫/兜底的占比，供审计与前端展示。"""
+        rounds = state.get("rounds") or []
+        sources: dict[str, int] = {}
+        replan_count = 0
+        finish_count = 0
+        plan_fallback_count = 0
+        plan_repair_count = 0
+        for item in rounds:
+            if not isinstance(item, dict):
+                continue
+            reflection = item.get("reflection") if isinstance(item.get("reflection"), dict) else {}
+            source = str(reflection.get("decisionSource") or "unknown")
+            sources[source] = sources.get(source, 0) + 1
+            if str(reflection.get("handoff") or "") == "plan" or reflection.get("replan"):
+                replan_count += 1
+            else:
+                finish_count += 1
+            if item.get("planUsedDefault"):
+                plan_fallback_count += 1
+            if item.get("planRepair"):
+                plan_repair_count += 1
+        records = state.get("tool_records") or []
+        failed_count = sum(
+            1
+            for record in records
+            if isinstance(record, dict) and record.get("ok") is False and not record.get("skipped")
+        )
+        skipped_count = sum(1 for record in records if isinstance(record, dict) and record.get("skipped"))
+        guard_count = sum(
+            count for source, count in sources.items() if source not in {"model", "unknown"}
+        )
+        return {
+            "roundCount": len(rounds),
+            "decisionSourceCounts": sources,
+            "modelDecisionCount": sources.get("model", 0),
+            "guardDecisionCount": guard_count,
+            "replanCount": replan_count,
+            "finishCount": finish_count,
+            "planFallbackCount": plan_fallback_count,
+            "planRepairCount": plan_repair_count,
+            "toolFailedCount": failed_count,
+            "toolSkippedCount": skipped_count,
+            "finalDecisionSource": str((state.get("reflection") or {}).get("decisionSource") or "unknown"),
+            "finalState": str(state.get("final_state") or "unknown"),
+        }
 
     def _synthesize(self, state: str, reason: str) -> dict[str, Any]:
         tracks = self._collect_tracks()
@@ -207,18 +342,10 @@ class AgentController:
             )
         registry_relation = str(self.meta.get("registryRelation") or "")
         question_type = str(self.meta.get("questionType") or "")
-        is_registry_in_list = (
-            registry_relation == "in"
-            and operation == "list"
-            and not hull
-            and (target_scope == "both" or question_type == "registry_in_list")
-        )
-        is_registry_out_list = (
-            registry_relation == "out"
-            and operation == "list"
-            and not hull
-            and (target_scope == "both" or question_type == "registry_out_list")
-        )
+        # 在库/未在库列表判定收敛到 task_profiles 单一事实源（与 graph 同源）
+        membership_mode = registry_membership_list_mode(self.meta)
+        is_registry_in_list = membership_mode == "in"
+        is_registry_out_list = membership_mode == "out"
         registry_listed = any(
             isinstance(record, dict) and record.get("tool") == "listRegistry" and record.get("ok") is not False
             for record in self.tool_records
@@ -1580,12 +1707,13 @@ class AgentController:
             values.extend(value if isinstance(value, list) else [value] if value else [])
         return list(dict.fromkeys(str(value) for value in values if value))
 
-    @staticmethod
-    def _session_audit_result(result: dict[str, Any]) -> dict[str, Any]:
+    def _session_audit_result(self, result: dict[str, Any]) -> dict[str, Any]:
         return {
             "conclusion": result.get("conclusion"),
             "uncertainty": result.get("uncertainty"),
             "trackCount": len(result.get("tracks") or []),
             "toolChain": result.get("toolChain") or [],
             "planMode": result.get("planMode") or "langgraph",
+            "decisionMetrics": self.decision_metrics,
+            "memoryPersistError": self.memory_persist_error,
         }

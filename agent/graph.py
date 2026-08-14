@@ -36,6 +36,11 @@ from .roles import (
     role_system_prompt,
 )
 from .skill_loader import get_skill_meta, load_skill_body
+from .task_profiles import (
+    is_membership_question_type,
+    registry_membership_list_mode,
+    relation_for_membership,
+)
 
 
 def _merge_dict(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
@@ -1075,24 +1080,6 @@ def _find_tool_contract_failures(records: list[dict[str, Any]], round_number: in
     return failures
 
 
-def _registry_membership_list_mode(intent: dict[str, Any]) -> str:
-    """识别“在库/未在库船舶列表”任务，返回 in/out；其他任务返回空字符串。"""
-    relation = str(intent.get("registryRelation") or "")
-    operation = str(intent.get("operation") or "")
-    hull = str(intent.get("hullNumber") or "").strip()
-    target_scope = str(intent.get("targetScope") or "")
-    question_type = str(intent.get("questionType") or "")
-    expected_type = f"registry_{relation}_list" if relation in {"in", "out"} else ""
-    if (
-        relation in {"in", "out"}
-        and operation == "list"
-        and not hull
-        and (target_scope == "both" or question_type == expected_type)
-    ):
-        return relation
-    return ""
-
-
 def _build_acceptance_progress(
     intent: dict[str, Any],
     tool_names: set[str],
@@ -1111,7 +1098,7 @@ def _build_acceptance_progress(
     dedup_usable: bool = False,
 ) -> dict[str, Any]:
     """把验收标准转换为可执行清单，供 Reflect 决定结束或进入下一轮。"""
-    mode = _registry_membership_list_mode(intent)
+    mode = registry_membership_list_mode(intent)
     operation = str(intent.get("operation") or "")
     target_scope = str(intent.get("targetScope") or "track_memory")
     target_kind = str(intent.get("targetKind") or "all")
@@ -1830,9 +1817,9 @@ def build_sea_agent_graph(
         if desc_now and (
             any(token in desc_now for token in ("哪些", "有哪些", "在库", "未在库", "先验库", "库船"))
             or desc_now in {"船", "船舶", "船只", "目标", "对象"}
-            or str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}
+            or is_membership_question_type(inferred.get("questionType"))
         ):
-            if not inferred.get("description") or str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}:
+            if not inferred.get("description") or is_membership_question_type(inferred.get("questionType")):
                 intent["description"] = None
         if not intent.get("targetItems") and inferred.get("targetItems"):
             intent["targetItems"] = inferred["targetItems"]
@@ -1852,9 +1839,9 @@ def build_sea_agent_graph(
                 if key in inferred:
                     intent[key] = inferred.get(key)
         # 在库/未在库列表问法：强制 list + 对应关系 + both（覆盖模型误判 existence/OCR）
-        if inferred_question_type in {"registry_in_list", "registry_out_list"}:
+        if is_membership_question_type(inferred_question_type):
             intent["operation"] = "list"
-            intent["registryRelation"] = "in" if inferred_question_type == "registry_in_list" else "out"
+            intent["registryRelation"] = relation_for_membership(inferred_question_type)
             intent["targetScope"] = inferred.get("targetScope") or "both"
             intent["targetKind"] = "all"
             intent["description"] = None
@@ -1931,7 +1918,7 @@ def build_sea_agent_graph(
         # 数据库限定问法与在库/未在库列表始终使用规则生成的验收与阶段焦点，防止被扩展到错误证据域。
         if (
             str(inferred.get("targetScope") or "") == "registry"
-            or str(inferred.get("questionType") or "") in {"registry_in_list", "registry_out_list"}
+            or is_membership_question_type(inferred.get("questionType"))
         ):
             for key in ("expectedOutcome", "successCriteria", "nextAgentFocus"):
                 if inferred.get(key):
@@ -2141,7 +2128,7 @@ def build_sea_agent_graph(
                     state.get("query_top_k") or default_top_k,
                     broad_match_top_k=broad_top,
                     broad_match_context=bool(
-                        _registry_membership_list_mode(intent)
+                        registry_membership_list_mode(intent)
                         or (
                             str(intent.get("operation") or "") == "existence"
                             and bool(str(intent.get("hullNumber") or "").strip())
@@ -2271,6 +2258,9 @@ def build_sea_agent_graph(
             "active_agent": "observe" if target != "reflect" else "reflect",
             "tool_chain": out.get("tool_chain") or [],
             "tool_records": out.get("tool_records") or [],
+            # 计量：本轮规划是否被确定性规则纠正/兜底，供 Reflect 轮次快照与审计落库
+            "plan_repair": plan_repair,
+            "plan_used_default": used_default_plan,
         }
         if target == "reflect":
             update["observation_summary"] = str(handoff.get("summary") or plan_hint or "规划未给出可执行步骤")
@@ -2642,7 +2632,7 @@ def build_sea_agent_graph(
                 registry_has_items = True
                 registry_found = True
         track_count = max(track_counts) if track_counts else None
-        membership_mode = _registry_membership_list_mode(intent)
+        membership_mode = registry_membership_list_mode(intent)
         if membership_mode:
             # 列表任务以最后一次成功的“全量、不带舷号”检索为权威，避免旧结果或失败重试污染零轨迹判断。
             for record in reversed(state.get("tool_records") or []):
@@ -3235,6 +3225,9 @@ def build_sea_agent_graph(
             "observation": state.get("observation_summary"),
             "reflection": handoff,
             "toolChain": out.get("tool_chain") or [],
+            # 规划侧计量（由 plan_node 写入 state，反映本轮的确定性纠正/兜底）
+            "planRepair": str(state.get("plan_repair") or ""),
+            "planUsedDefault": bool(state.get("plan_used_default")),
         }
         _emit(
             event_handler,

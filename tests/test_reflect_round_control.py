@@ -9,10 +9,10 @@ from agent.graph import (
     _bounded_model,
     _build_acceptance_progress,
     _default_plan_calls,
-    _registry_membership_list_mode,
     _stream_tool_chunk_chars,
     run_sea_agent,
 )
+from agent.task_profiles import registry_membership_list_mode
 from tools.target_parser import clear_target_parser_cache, infer_intent_fields
 
 
@@ -133,7 +133,7 @@ def test_reflect_acceptance_requests_next_round_when_registry_audit_is_missing()
         has_tool_evidence=True,
     )
 
-    assert _registry_membership_list_mode(fields) == "out"
+    assert registry_membership_list_mode(fields) == "out"
     assert progress["acceptanceSatisfied"] is False
     assert progress["pendingRequirements"] == ["已获取完整先验库名录"]
     assert "listRegistry" in progress["nextAction"]
