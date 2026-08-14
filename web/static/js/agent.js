@@ -1947,10 +1947,10 @@ function activityTargetForTool(item = {}) {
 }
 
 function renderActivityRow({kind, verb, target, running = false, failed = false, title = ''}) {
-  const state = `${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+  const state = running ? 'running' : failed ? 'error' : 'ok';
   const icon = activityIconForVerb(verb);
   const label = target ? `${verb} · ${target}` : verb;
-  return `<div class="agent-activity-row agent-activity-${kind}${state}" title="${escapeHtml(title || label)}"><span class="agent-activity-icon" aria-hidden="true">${icon}</span><span class="agent-activity-label"><strong>${escapeHtml(verb)}</strong>${target ? `<span aria-hidden="true"> · </span><span>${escapeHtml(target)}</span>` : ''}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}</div>`;
+  return `<div class="agent-activity-row agent-activity-${kind}" data-state="${state}" role="listitem" title="${escapeHtml(title || label)}"><span class="agent-activity-icon" aria-hidden="true">${icon}</span><span class="agent-activity-label"><strong>${escapeHtml(verb)}</strong>${target ? `<span class="agent-activity-separator" aria-hidden="true">·</span><span class="agent-activity-target">${escapeHtml(target)}</span>` : ''}</span>${running ? '<i class="agent-activity-cursor" aria-hidden="true"></i>' : ''}</div>`;
 }
 
 function renderSkillActivity(card) {

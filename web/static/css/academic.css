@@ -5394,6 +5394,90 @@ tbody tr:hover td { background: #f2f6f9; }
   50% { transform: scale(1.22); opacity: 1; }
 }
 
+/* Harness-style tool rows: compact and quiet once settled. */
+#tab-agent-qa .agent-stream-text .agent-activity-row {
+  box-sizing: border-box;
+  min-height: 24px;
+  height: 24px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 6px;
+  margin: 0;
+  color: #75808d;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 24px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-icon {
+  width: 16px;
+  height: 16px;
+  color: #718096;
+  font-size: 14px;
+  line-height: 16px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-label strong {
+  flex: 0 0 auto;
+  color: #536273;
+  font-size: 14px;
+  font-weight: 400;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-separator {
+  flex: 0 0 auto;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  overflow: hidden;
+  color: transparent;
+  border-radius: 50%;
+  background: #8b97a3;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-target {
+  min-width: 0;
+  overflow: hidden;
+  color: #74808d;
+  text-overflow: ellipsis;
+  text-decoration: underline;
+  text-decoration-color: #ccd4dc;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-label strong,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-target { color: #2e638e; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-icon {
+  color: #2e638e;
+  animation: agentReadingPulse .85s ease-in-out infinite alternate;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"]::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0 -32%;
+  background: linear-gradient(105deg, transparent 0%, rgba(46, 99, 142, 0) 35%, rgba(46, 99, 142, .12) 48%, transparent 64%);
+  transform: translateX(-72%);
+  animation: agentReadingShine 1.15s linear infinite;
+  pointer-events: none;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] > * { position: relative; z-index: 1; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-icon,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-label strong,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-target { color: #a44d58; }
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-cursor {
+  width: 2px;
+  height: 14px;
+  margin-right: 2px;
+  background: #2e638e;
+  animation: thinkingPulse .8s steps(1) infinite;
+}
+
 /* 研究问答实时活动栏：工具参数与技能名称只显示为结构化状态，不进入正文流。 */
 #tab-agent-qa .agent-result-panel {
   grid-template-rows: auto auto minmax(0, 1fr);
