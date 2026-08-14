@@ -575,6 +575,44 @@ function renderDedupResults(result) {
   </section>`;
 }
 
+function roleTimelineMeta(role) {
+  return ({
+    intent: {index: '00', title: 'InitAgent', stage: 'Intent Parsing'},
+    planner: {index: '01', title: 'PlanAgent', stage: 'Planning'},
+    observer: {index: '02', title: 'ObserveAgent', stage: 'Observation'},
+    reflector: {index: '03', title: 'ReflectAgent', stage: 'Verification'},
+  })[role] || {index: '..', title: 'System', stage: 'Update'};
+}
+
+function resultTimelineAtBottom(container) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= 28;
+}
+
+function resetResultTimeline() {
+  const timeline = document.getElementById('agentResultTimeline');
+  if (!timeline) return;
+  timeline.innerHTML = '<div class="agent-result-empty">Preparing the research query...</div>';
+}
+
+function updateResultTimeline(role, {round = 0, state = 'running', text = '', activity = ''} = {}) {
+  const timeline = document.getElementById('agentResultTimeline');
+  if (!timeline) return;
+  const atBottom = resultTimelineAtBottom(timeline);
+  const meta = roleTimelineMeta(role);
+  const key = role + ':' + (round || 0);
+  let entry = timeline.querySelector('[data-timeline-key="' + key + '"]');
+  if (!entry) {
+    timeline.querySelector('.agent-result-empty')?.remove();
+    entry = document.createElement('article');
+    entry.className = 'agent-timeline-entry';
+    entry.dataset.timelineKey = key;
+    timeline.appendChild(entry);
+  }
+  entry.dataset.state = state;
+  const stateLabel = state === 'running' ? 'Running' : state === 'failed' ? 'Failed' : 'Completed';
+  entry.innerHTML = `<header><span class="agent-timeline-index">${escapeHtml(meta.index)}</span><span class="agent-timeline-title"><strong>${escapeHtml(meta.title)}</strong><small>${escapeHtml(meta.stage)}${round ? ' · Round ' + round : ''}</small></span><em>${stateLabel}</em></header><div class="agent-timeline-body">${activity || ''}${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>`;
+  if (atBottom) timeline.scrollTop = timeline.scrollHeight;
+}
 function setAgentResultState(label, state = 'running') {
   const panel = document.getElementById('agentResultPanel');
   const badge = document.getElementById('agentIntentState');
@@ -673,6 +711,7 @@ function showAgentProcessView() {
   if (toolBody) toolBody.innerHTML = '<div class="agent-result-empty">Tool records will appear here after execution.</div>';
   if (hint) hint.textContent = 'Init and plan updates appear here in real time';
   setAgentResultState('Initializing', 'running');
+  resetResultTimeline();
   setAgentLiveActivity({kind: 'phase', label: 'Initializing', detail: 'Waiting for structured agent events', running: true});
 }
 
@@ -2140,6 +2179,7 @@ function appendThoughtEvent(event) {
     if (state) state.textContent = roleRunningLabel(event.role);
     card.dataset.streamText = rolePendingText(event.role);
     setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
+    updateResultTimeline(event.role, {round: event.round, state: 'running', text: card.dataset.streamText, activity: [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('')});
     if (card._skillsRunning) {
       setLiveSkillActivity(card, {
         ...card._skillReads[0],
@@ -2224,6 +2264,7 @@ function appendThoughtEvent(event) {
     if (tags) tags.innerHTML = skillReadTags({skillReads: reads});
     const streamText = card.dataset.streamText || rolePendingText(event.role);
     setAgentProcessStream(card, streamText, {cursor: card.classList.contains('active')});
+    updateResultTimeline(event.role, {round: event.round, state: 'running', text: streamText, activity: [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('')});
     setLiveSkillActivity(card, {
       ...event,
       skillId: record.skillId,
@@ -2299,6 +2340,7 @@ function appendThoughtEvent(event) {
       && calls.some((call) => call.skipped)
       && !hasHardFail;
     const markFailed = isPlanCard ? false : Boolean((!isPlanCard && event.fallback) || hasHardFail);
+    updateResultTimeline(event.role, {round: event.round, state: markFailed ? 'failed' : 'completed', text: finalText, activity: [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('')});
     card.classList.toggle('failed', markFailed);
     let statusLabel = 'Completed';
     if (isPlanCard && event.planRepair) statusLabel = 'Repaired';

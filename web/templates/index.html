@@ -174,29 +174,14 @@
             <span id="agentLiveActivityDetail" class="agent-live-marquee"><span class="agent-live-marquee-text">Waiting for structured events</span></span>
             <i class="agent-live-cursor" aria-hidden="true"></i>
           </div>
-          <div id="agentProcessView" class="agent-process-view agent-result-process">
-            <details id="agentInitDisclosure" class="agent-result-disclosure agent-init-disclosure" open>
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Init</strong><em id="agentInitSummary">Waiting for intent</em><b aria-hidden="true"></b></summary>
-              <div class="agent-result-disclosure-body">
-                <section class="agent-process-intent agent-result-intent">
-                  <article id="agentIntentResult" class="agent-thought-card intent intent-result-card" data-role="intent" data-round="0">
-                    <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>InitAgent</strong><span>Intent Parsing</span></div></div><div class="agent-card-state"><span class="agent-card-round">Global</span><em>Waiting</em></div></div>
-                    <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for intent parsing…</span></div>
-                    <div class="agent-thought-tags"></div>
-                  </article>
-                </section>
-              </div>
-            </details>
-            <details id="agentPlanDisclosure" class="agent-result-disclosure agent-plan-disclosure" open>
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Plan</strong><em id="agentPlanRound">Waiting for plan</em><b aria-hidden="true"></b></summary>
-              <div class="agent-result-disclosure-body">
-                <section class="agent-process-plan agent-result-plan">
-                  <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
-                  <div id="agentPlanProgress" class="agent-plan-list"><div class="agent-plan-empty">Plan steps will update here.</div></div>
-                  <div id="agentPlanDecision" class="agent-plan-decision">Waiting for ReflectAgent verification.</div>
-                </section>
-              </div>
-            </details>
+          <div id="agentProcessView" class="agent-process-view agent-result-process" data-conversation-scroll>
+            <div id="agentResultTimeline" class="agent-result-timeline" role="log" aria-live="polite" aria-relevant="additions text">
+              <div class="agent-result-empty">Waiting for a research query.</div>
+            </div>
+            <div class="agent-result-legacy" aria-hidden="true">
+              <article id="agentIntentResult" class="agent-thought-card intent intent-result-card" data-role="intent" data-round="0"><div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>InitAgent</strong><span>Intent Parsing</span></div></div><div class="agent-card-state"><span class="agent-card-round">Global</span><em>Waiting</em></div></div><div class="agent-stream-text"></div><div class="agent-thought-tags"></div></article>
+              <span id="agentInitSummary"></span><span id="agentPlanRound"></span><span id="agentPlanMeter"></span><span id="agentPlanProgress"></span><span id="agentPlanDecision"></span>
+            </div>
           </div>
           <div id="agentFinalView" class="agent-final-view agent-result-final" hidden>
             <details id="agentToolDisclosure" class="agent-result-disclosure agent-tool-disclosure">
