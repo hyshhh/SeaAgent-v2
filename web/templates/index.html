@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SeaAgent: A Trajectory-Centric Hierarchical Memory Closed-Loop Multi-Agent System for Maritime Vessel Monitoring</title>
-<link rel="stylesheet" href="/static/css/style.css?v=29">
-<link rel="stylesheet" href="/static/css/academic.css?v=26">
+<link rel="stylesheet" href="/static/css/style.css?v=30">
+<link rel="stylesheet" href="/static/css/academic.css?v=27">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -154,7 +154,6 @@
 </section>
 <section class="tab-content" id="tab-agent-qa">
   <div class="agent-workspace">
-    <div class="agent-query-grid">
       <section class="panel agent-query-panel">
         <div class="panel-head agent-query-head">
           <div class="agent-query-mainline"><h2>Research Query</h2><label class="agent-topk-control"><input id="agentTopKEnabled" type="checkbox" checked><span>Enable TopK</span><input id="agentTopKValue" type="number" min="1" max="20" value="3" aria-label="TopK result limit"></label><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Preset Questions</option><option value="舷号 0857 有没有在视频中出现？">Hull Number Query</option><option value="数据库中有没有黄色的无人艇？">Registry Query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-Registry Vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-Registry Vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel Count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance Query</option></select></div>
@@ -166,75 +165,15 @@
         </div>
 
         <section id="agentResultPanel" class="agent-response-panel agent-result-panel" data-state="idle">
-          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Init and plan updates appear here in real time</em></div><b id="agentIntentState">Waiting</b></div>
-          <div id="agentLiveActivity" class="agent-live-activity" data-kind="idle" hidden aria-live="polite">
-            <span class="agent-live-icon" aria-hidden="true">◇</span>
-            <strong id="agentLiveActivityLabel" class="agent-live-label">Waiting</strong>
-            <span class="agent-live-separator" aria-hidden="true">·</span>
-            <span id="agentLiveActivityDetail" class="agent-live-marquee"><span class="agent-live-marquee-text">Waiting for structured events</span></span>
-            <i class="agent-live-cursor" aria-hidden="true"></i>
-          </div>
-          <div id="agentProcessView" class="agent-process-view agent-result-process">
-            <details id="agentInitDisclosure" class="agent-result-disclosure agent-init-disclosure" open>
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Init</strong><em id="agentInitSummary">Waiting for intent</em><b aria-hidden="true"></b></summary>
-              <div class="agent-result-disclosure-body">
-                <section class="agent-process-intent agent-result-intent">
-                  <article id="agentIntentResult" class="agent-thought-card intent intent-result-card" data-role="intent" data-round="0">
-                    <div class="agent-thought-head"><div class="agent-stage"><b>00</b><div><strong>InitAgent</strong><span>Intent Parsing</span></div></div><div class="agent-card-state"><span class="agent-card-round">Global</span><em>Waiting</em></div></div>
-                    <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for intent parsing…</span></div>
-                    <div class="agent-thought-tags"></div>
-                  </article>
-                </section>
-              </div>
-            </details>
-            <details id="agentPlanDisclosure" class="agent-result-disclosure agent-plan-disclosure" open>
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Plan</strong><em id="agentPlanRound">Waiting for plan</em><b aria-hidden="true"></b></summary>
-              <div class="agent-result-disclosure-body">
-                <section class="agent-process-plan agent-result-plan">
-                  <div class="agent-plan-meter"><span id="agentPlanMeter"></span></div>
-                  <div id="agentPlanProgress" class="agent-plan-list"><div class="agent-plan-empty">Plan steps will update here.</div></div>
-                  <div id="agentPlanDecision" class="agent-plan-decision">Waiting for ReflectAgent verification.</div>
-                </section>
-              </div>
-            </details>
-          </div>
-          <div id="agentFinalView" class="agent-final-view agent-result-final" hidden>
-            <details id="agentToolDisclosure" class="agent-result-disclosure agent-tool-disclosure">
-              <summary><span class="agent-result-index" aria-hidden="true">◇</span><strong>Tools</strong><em id="agentToolSummary">Waiting for completion</em><b aria-hidden="true"></b></summary>
-              <div id="agentResultTools" class="agent-result-tool-body"><div class="agent-result-empty">Tool records will appear here after execution.</div></div>
-            </details>
-            <div id="agentAnswer" class="agent-answer empty-state">The final result will appear here after reasoning.</div>
+          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Reasoning trace and the final answer stay in this panel</em></div><b id="agentIntentState">Waiting</b></div>
+          <div id="agentAnswer" class="agent-answer empty-state">The final result will appear here after reasoning.</div>
+          <div id="agentTrace" class="agent-trace" aria-live="polite">
+            <div class="agent-trace-empty">Waiting for structured agent events…</div>
           </div>
         </section>
       </section>
 
-      <section class="panel agent-thinking-panel">
-        <div class="panel-head agent-collab-head">
-          <div class="agent-collab-title"><h2>Three-Agent Collaboration</h2><span id="agentPlanMode">Plan → Observe → Verify · Reflect controls the next round</span></div>
-          <div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">Waiting</strong></div>
-        </div>
-        <div id="agentThoughtStream" class="thought-stream fixed-agent-stream" aria-live="polite">
-          <div class="agent-fixed-stack">
-            <article class="agent-thought-card planner" data-role="planner" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>01</b><div><strong>PlanAgent</strong><span>Planning</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for planning…</span></div>
-              <div class="agent-thought-tags"></div>
-            </article>
-            <article class="agent-thought-card observer" data-role="observer" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>02</b><div><strong>ObserveAgent</strong><span>Observation</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for tool execution…</span></div>
-              <div class="agent-thought-tags"></div>
-            </article>
-            <article class="agent-thought-card reflector" data-role="reflector" data-round="0">
-              <div class="agent-thought-head"><div class="agent-stage"><b>03</b><div><strong>ReflectAgent</strong><span>Verification</span></div></div><div class="agent-card-state"><span class="agent-card-round">Waiting for round</span><em>Waiting</em></div></div>
-              <div class="agent-stream-text"><span class="agent-stream-placeholder">Waiting for verification…</span></div>
-              <div class="agent-thought-tags"></div>
-            </article>
-          </div>
-        </div>
-      </section>
-    </div>
-    <section class="panel evidence-panel evidence-panel-wide">
+      <section class="panel evidence-panel evidence-panel-wide">
       <div class="panel-head evidence-panel-head evidence-toolbar">
         <div class="evidence-toolbar-title"><span class="eyebrow">Experimental Evidence</span><h3>Multimodal Evidence Records</h3></div>
         <div id="evidenceDisplaySettings" class="evidence-display-settings evidence-display-inline">
@@ -401,7 +340,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=21"></script>
   <script src="/static/js/memory.js?v=7"></script>
-<script src="/static/js/agent.js?v=59"></script>
+<script src="/static/js/agent.js?v=60"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
