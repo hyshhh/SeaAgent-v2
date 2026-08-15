@@ -614,7 +614,8 @@ function updateResultTimeline(role, {round = 0, state = 'running', text = '', ac
   const runningMarkup = state === 'running' && summary ? '<span class="agent-timeline-marquee"><span class="agent-timeline-marquee-track"><span>' + escapeHtml(summary) + '</span><span aria-hidden="true">' + escapeHtml(summary) + '</span></span></span>' : '<span class="agent-timeline-summary">' + escapeHtml(summary || 'Waiting for structured result') + '</span>';
   const body = (activity || '') + (text ? '<p>' + escapeHtml(text) + '</p>' : '');
   const userExpanded = entry.dataset.userExpanded === 'true';
-  entry.innerHTML = '<summary><span class="agent-timeline-index">' + escapeHtml(meta.index) + '</span><span class="agent-timeline-title"><strong>' + escapeHtml(meta.title) + '</strong><small>' + escapeHtml(meta.stage) + (round ? ' · Round ' + round : '') + '</small></span>' + runningMarkup + '<em>' + stateLabel + '</em><b aria-hidden="true"></b></summary><div class="agent-timeline-body">' + body + '</div>';
+  const context = meta.stage + (round ? ' · Round ' + round : '');
+  entry.innerHTML = '<summary><span class="agent-timeline-leading" aria-hidden="true">#</span><strong class="agent-timeline-title">' + escapeHtml(meta.title) + '</strong><span class="agent-timeline-separator" aria-hidden="true">·</span><span class="agent-timeline-stage">' + escapeHtml(context) + '</span><span class="agent-timeline-separator" aria-hidden="true">·</span>' + runningMarkup + '<em>' + stateLabel + '</em><b aria-hidden="true"></b></summary><div class="agent-timeline-body">' + body + '</div>';
   entry.open = userExpanded;
   if (!entry.dataset.timelineToggleBound) {
     entry.addEventListener('toggle', () => { entry.dataset.userExpanded = entry.open ? 'true' : 'false'; });

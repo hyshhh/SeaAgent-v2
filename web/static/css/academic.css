@@ -5532,6 +5532,91 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-result-timeline .agent-timeline-marquee { align-self: center; line-height: 18px; }
 #tab-agent-qa .agent-result-timeline .agent-timeline-entry:not([open]) > .agent-timeline-body { display: none !important; }
 
+/* Fixed result viewport and Harness-like text trajectory rows. */
+#tab-agent-qa .agent-result-panel,
+#tab-agent-qa .agent-result-panel[data-state="completed"],
+#tab-agent-qa .agent-result-panel[data-state="failed"] {
+  flex: 0 0 430px;
+  height: 430px;
+  max-height: 430px;
+  min-height: 430px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+#tab-agent-qa .agent-result-panel .agent-result-process,
+#tab-agent-qa .agent-result-panel[data-state="completed"] .agent-result-process,
+#tab-agent-qa .agent-result-panel[data-state="failed"] .agent-result-process {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+#tab-agent-qa .agent-result-timeline {
+  height: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry {
+  border-left: 0;
+  overflow: visible;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 6px;
+  display: grid;
+  grid-template-columns: 14px max-content 8px max-content 8px minmax(0, 1fr) max-content 10px;
+  gap: 6px;
+  align-items: center;
+  color: #728091;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary:hover { background: #f7fafc; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-leading {
+  color: #687b8e;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 16px;
+  font-weight: 500;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-title {
+  min-width: 0;
+  color: #394b5e;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-stage {
+  min-width: 0;
+  overflow: hidden;
+  color: #7a8794;
+  font-size: 13px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-separator { color: #9aa6b1; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary > em {
+  color: #778696;
+  font-size: 12px;
+  line-height: 20px;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry[data-state="failed"] > summary > em { color: #b14d59; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry[data-state="running"] > summary > em { color: #2e638e; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-summary,
+#tab-agent-qa .agent-result-timeline .agent-timeline-marquee {
+  min-width: 0;
+  max-width: none;
+  color: #7a8794;
+  font-size: 13px;
+  line-height: 20px;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-marquee-track { gap: 96px; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-index { display: none; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary > b { justify-self: center; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-body { margin: 0 0 3px 20px; padding: 4px 8px 7px; border-left: 1px solid #dce4eb; }
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;
