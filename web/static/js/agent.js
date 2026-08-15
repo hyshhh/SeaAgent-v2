@@ -790,8 +790,10 @@ function evidenceItem(type, id, trackId = null, options = {}) {
     videoQuery.set('endTime', String(options.timeRange[1]));
   }
   if (type === 'video' && options.trackClip) videoQuery.set('scale', String(settings.videoScale));
-  const videoScope = videoQuery.size ? `?${videoQuery.toString()}` : '';
-  const imageScope = `?scale=${encodeURIComponent(settings.imageScale)}`;
+  const cacheToken = String(Date.now());
+  videoQuery.set('_evidence', cacheToken);
+  const videoScope = `?${videoQuery.toString()}`;
+  const imageScope = `?scale=${encodeURIComponent(settings.imageScale)}&_evidence=${encodeURIComponent(cacheToken)}`;
   const url = type === 'video' && options.trackClip
     ? `/api/evidence/tracks/${encodeURIComponent(id)}/clip${videoScope}`
     : `/api/evidence/${route}/${encodeURIComponent(id)}${type === 'video' ? '' : imageScope}`;

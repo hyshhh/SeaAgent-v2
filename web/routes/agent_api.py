@@ -108,7 +108,9 @@ async def keyframe_file(keyframe_id: str, request: Request, scale: float = 1.0):
     item = request.app.state.repository.get_keyframe(keyframe_id)
     if not item or not Path(item["keyframePath"]).exists():
         raise HTTPException(404, "关键帧不存在")
-    return await _evidence_image_response(request, Path(item["keyframePath"]), scale)
+    preview_path = await run_in_threadpool(request.app.state.tool_service.getImagePreview, Path(item["keyframePath"]), scale)
+    media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
+    return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "no-store, max-age=0"})
 
 @router.get("/api/evidence/clips/{segment_id}")
 async def clip_file(segment_id: str, request: Request):
@@ -117,7 +119,7 @@ async def clip_file(segment_id: str, request: Request):
     path = Path(request.app.state.config["paths"]["clip_dir"]) / f"{segment_id}.mp4"
     if not path.exists():
         raise HTTPException(404, "目标船片段不存在")
-    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store, max-age=0"})
 
 @router.get("/api/evidence/clips/{segment_id}/poster")
 async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
@@ -131,7 +133,9 @@ async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
         await run_in_threadpool(request.app.state.tool_service._ensure_clip_poster, clip_path, path, quality)
     if not path.exists():
         raise HTTPException(404, "目标船片段封面不存在")
-    return await _evidence_image_response(request, path, scale)
+    preview_path = await run_in_threadpool(request.app.state.tool_service.getImagePreview, path, scale)
+    media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
+    return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "no-store, max-age=0"})
 
 @router.get("/api/evidence/tracks/{track_id}/clip")
 async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None, scale: float = 1.0):
@@ -140,7 +144,7 @@ async def track_clip(track_id: str, request: Request, startTime: float | None = 
     path = Path(result.get("segmentPath", ""))
     if not result.get("ok") or not result.get("found", True) or not path.is_file():
         raise HTTPException(404, result.get("error") or "目标船片段不存在")
-    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=86400"})
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store, max-age=0"})
 
 @router.get("/api/evidence/registry/{reference_id}")
 async def registry_file(reference_id: str, request: Request, scale: float = 1.0):

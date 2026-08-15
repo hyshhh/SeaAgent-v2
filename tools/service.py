@@ -89,8 +89,20 @@ class ToolService:
         if timeRange and any("observedAt" in item for item in all_boxes):
             boxes = [item for item in all_boxes if monitor_scope[0] <= float(item.get("observedAt") or 0) <= monitor_scope[1]]
         elif timeRange:
-            video_start, video_end = track.get("videoStartTime", start), track.get("videoEndTime", end)
-            boxes = [item for item in all_boxes if video_start <= float(item["timestamp"]) <= video_end]
+            # Older trajectory files only have source-video timestamps. Map the
+            # requested monitoring window into that video-time domain instead of
+            # silently rendering the full track.
+            video_start = float(track.get("videoStartTime", start))
+            video_end = float(track.get("videoEndTime", end))
+            monitor_span = end - start
+            if monitor_span > 0:
+                scale_start = (monitor_scope[0] - start) / monitor_span
+                scale_end = (monitor_scope[1] - start) / monitor_span
+                selected_start = video_start + (video_end - video_start) * scale_start
+                selected_end = video_start + (video_end - video_start) * scale_end
+            else:
+                selected_start, selected_end = video_start, video_end
+            boxes = [item for item in all_boxes if selected_start <= float(item["timestamp"]) <= selected_end]
         else:
             boxes = all_boxes
         if source_path is None or not source_path.is_file() or not boxes:
