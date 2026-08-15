@@ -1962,7 +1962,7 @@ function activityIconForVerb(verb) {
   if (verb === 'Search') return '⌕';
   if (verb === 'Think') return '✧';
   if (verb === 'Edit') return '✎';
-  return '▤';
+  return '';
 }
 
 function activityTargetForTool(item = {}) {

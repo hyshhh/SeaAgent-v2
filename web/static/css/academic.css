@@ -5870,6 +5870,38 @@ tbody tr:hover td { background: #f2f6f9; }
   border-left-color: #e1e7ec;
 }
 
+/* Use a quiet file outline for ordinary read calls. */
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-icon:empty {
+  width: 14px;
+  height: 16px;
+  position: relative;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-icon:empty::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 11px;
+  border: 1px solid #8192a1;
+  border-radius: 2px;
+  background: #fff;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row .agent-activity-icon:empty::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  width: 5px;
+  height: 1px;
+  background: #9aa9b5;
+  box-shadow: 0 3px 0 #9aa9b5;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-icon:empty::before { border-color: #39769d; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-icon:empty::after { background: #4b86aa; box-shadow: 0 3px 0 #4b86aa; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-icon:empty::before { border-color: #ba626a; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-icon:empty::after { background: #c7777d; box-shadow: 0 3px 0 #c7777d; }
+
 /* Harness-style tool rows: compact and quiet once settled. */
 #tab-agent-qa .agent-stream-text .agent-activity-row {
   box-sizing: border-box;
