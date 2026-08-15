@@ -5497,55 +5497,20 @@ tbody tr:hover td { background: #f2f6f9; }
   scrollbar-gutter: stable;
   background: #fff;
 }
-#tab-agent-qa .agent-timeline-entry {
-  min-width: 0;
-  border: 1px solid #dce4eb;
-  border-left: 2px solid #758da3;
-  border-radius: 3px;
-  background: #fbfcfd;
+#tab-agent-qa .agent-result-timeline .agent-result-empty {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: #8592a0;
+  font-size: 11px;
+}
+
+#tab-agent-qa .agent-result-panel[data-state="completed"] .agent-result-process,
+#tab-agent-qa .agent-result-panel[data-state="failed"] .agent-result-process {
+  min-height: 0;
   overflow: hidden;
 }
-#tab-agent-qa .agent-timeline-entry[data-state="running"] { border-left-color: #2e638e; }
-#tab-agent-qa .agent-timeline-entry[data-state="failed"] { border-left-color: #a44d58; background: #fffafb; }
-#tab-agent-qa .agent-timeline-entry > header {
-  min-height: 30px;
-  padding: 4px 8px;
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  border-bottom: 1px solid #e5ebef;
-  background: #f6f8fa;
-}
-#tab-agent-qa .agent-timeline-index {
-  width: 22px;
-  height: 22px;
-  display: inline-grid;
-  place-items: center;
-  color: #315b7d;
-  border: 1px solid #c7d7e3;
-  border-radius: 3px;
-  background: #edf3f7;
-  font-family: Consolas, "Cascadia Mono", monospace;
-  font-size: 8px;
-  font-weight: 700;
-}
-#tab-agent-qa .agent-timeline-title { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
-#tab-agent-qa .agent-timeline-title strong { color: #243f58; font-size: 12px; font-weight: 700; }
-#tab-agent-qa .agent-timeline-title small { min-width: 0; overflow: hidden; color: #738394; font-size: 9px; font-weight: 600; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
-#tab-agent-qa .agent-timeline-entry > header > em { color: #708093; font-size: 9px; font-style: normal; white-space: nowrap; }
-#tab-agent-qa .agent-timeline-entry[data-state="running"] > header > em { color: #2e638e; }
-#tab-agent-qa .agent-timeline-entry[data-state="failed"] > header > em { color: #a44d58; }
-#tab-agent-qa .agent-timeline-body { padding: 5px 8px 7px; }
-#tab-agent-qa .agent-timeline-body > p { margin: 4px 0 0; color: #566879; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
-#tab-agent-qa .agent-timeline-body .agent-activity-group,
-#tab-agent-qa .agent-timeline-body .agent-activity-row { font-size: 12px; }
-#tab-agent-qa .agent-timeline-body .agent-activity-group > summary,
-#tab-agent-qa .agent-timeline-body .agent-activity-row { height: 22px; min-height: 22px; line-height: 22px; }
-#tab-agent-qa .agent-timeline-body .agent-activity-group > summary > strong,
-#tab-agent-qa .agent-timeline-body .agent-activity-label strong { font-size: 12px; }
-#tab-agent-qa .agent-timeline-body .agent-activity-children { margin-left: 18px; }
-#tab-agent-qa .agent-result-timeline .agent-result-empty { min-height: 120px; display: grid; place-items: center; padding: 12px; color: #8592a0; font-size: 11px; }
 
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
