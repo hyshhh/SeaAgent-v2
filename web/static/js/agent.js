@@ -1867,26 +1867,12 @@ function liveSkillSnapshot(card, event = {}) {
   return {index, total, name: String(name), description: event.description || record.description || ''};
 }
 
-function setLiveSkillActivity(card, event = {}) {
-  const snapshot = liveSkillSnapshot(card, event);
-  const phase = String(event.phase || 'running');
-  const running = phase === 'running';
-  const label = `${running ? 'Reading' : phase === 'failed' ? 'Failed to read' : 'Read'} skill ${snapshot.index}/${snapshot.total} · ${snapshot.name}`;
-  const detail = `${snapshot.name}${snapshot.description ? ` · ${compactAgentValue(snapshot.description, 90)}` : ''} · ${phase}`;
-  setAgentLiveActivity({kind: 'skill', label, detail, running, clearAfter: running ? 0 : phase === 'failed' ? 520 : 180});
+function setLiveSkillActivity() {
+  // Skill progress remains inside the owning agent's expandable thought record.
 }
 
-function setLiveToolActivity(card, event = {}, logs = [], runningIndex = -1) {
-  const eventPhase = String(event.phase || event.status || 'completed');
-  const running = eventPhase === 'running' || event.status === 'running';
-  const current = runningIndex >= 0 ? logs[runningIndex] : event;
-  const index = runningIndex >= 0 ? runningIndex + 1 : Math.max(1, logs.findIndex((item) => item.id === event.id) + 1);
-  const total = Math.max(logs.length, Number(card?._toolTotal || 0) || 0, index);
-  const tool = current?.tool || event.tool || event.id || 'tool';
-  const args = formatToolArguments(toolArgumentsForCall(current || event));
-  const label = `${running ? 'Running' : eventPhase === 'failed' ? 'Failed' : eventPhase === 'skipped' ? 'Skipped' : 'Completed'} tool ${index}/${total} · ${tool}`;
-  const detail = `${tool}(${args}) · ${eventPhase}`;
-  setAgentLiveActivity({kind: 'tool', label, detail, running, clearAfter: running ? 0 : eventPhase === 'failed' ? 620 : 220});
+function setLiveToolActivity() {
+  // Tool progress remains inside the owning agent's expandable thought record.
 }
 
 function agentActivityOpen(card, kind) {
