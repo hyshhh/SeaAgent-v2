@@ -5835,6 +5835,41 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-stream-text .agent-activity-group[data-state="error"] > summary > strong,
 #tab-agent-qa .agent-stream-text .agent-activity-group[data-state="error"] .agent-activity-group-status { color: #a44d58; }
 
+/* Lightweight disclosure marker for skill groups. */
+#tab-agent-qa .agent-stream-text .agent-activity-group > summary {
+  grid-template-columns: 12px minmax(0, 1fr) auto 12px;
+  gap: 7px;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-group .agent-activity-icon {
+  width: 10px;
+  height: 10px;
+  position: relative;
+  display: block;
+  color: transparent;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-group .agent-activity-icon::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid #8797a6;
+  border-bottom: 1px solid #8797a6;
+  transform: rotate(-45deg);
+  transition: transform .14s ease, border-color .14s ease;
+}
+#tab-agent-qa .agent-stream-text .agent-activity-group[open] .agent-activity-icon::before {
+  top: 1px;
+  transform: rotate(45deg);
+}
+#tab-agent-qa .agent-stream-text .agent-activity-group > summary:hover .agent-activity-icon::before { border-color: #37698d; }
+#tab-agent-qa .agent-stream-text .agent-activity-children {
+  margin-left: 5px;
+  padding-left: 14px;
+  border-left-color: #e1e7ec;
+}
+
 /* Harness-style tool rows: compact and quiet once settled. */
 #tab-agent-qa .agent-stream-text .agent-activity-row {
   box-sizing: border-box;

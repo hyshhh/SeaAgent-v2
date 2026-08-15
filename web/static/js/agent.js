@@ -2003,7 +2003,7 @@ function renderSkillActivity(card) {
   const state = reading ? 'running' : history.some((item) => item.ok === false) ? 'error' : 'ok';
   const open = reading || card?._activityOpen?.skills === true;
   const label = reading ? 'Reading skills · ' + Math.min(activeIndex + 1, count) + '/' + count : 'Read skills · ' + count + ' references';
-  return '<details class="agent-activity-group agent-activity-skill-group" data-activity-kind="skills" data-state="' + state + '"' + (open ? ' open' : '') + '><summary><span class="agent-activity-icon" aria-hidden="true">▤</span><strong>' + escapeHtml(label) + '</strong><span class="agent-activity-group-status">' + (reading ? 'Running' : state === 'error' ? 'Failed' : 'Completed') + '</span><b aria-hidden="true"></b></summary><div class="agent-activity-children" role="list">' + rows.join('') + '</div></details>';
+  return '<details class="agent-activity-group agent-activity-skill-group" data-activity-kind="skills" data-state="' + state + '"' + (open ? ' open' : '') + '><summary><span class="agent-activity-icon" aria-hidden="true"></span><strong>' + escapeHtml(label) + '</strong><span class="agent-activity-group-status">' + (reading ? 'Running' : state === 'error' ? 'Failed' : 'Completed') + '</span><b aria-hidden="true"></b></summary><div class="agent-activity-children" role="list">' + rows.join('') + '</div></details>';
 }
 
 function renderToolActivity(card) {
