@@ -5688,6 +5688,20 @@ tbody tr:hover td { background: #f2f6f9; }
   #tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"]::after { animation: none; }
 }
 
+#tab-agent-qa .agent-result-timeline .agent-round-row {
+  grid-template-columns: 14px max-content 8px max-content 8px minmax(0, 1fr) max-content;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-agent {
+  min-width: 0;
+  color: #485c70;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-marquee-track {
+  animation-duration: 28s;
+}
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;

@@ -606,27 +606,15 @@ function updateResultTimeline(role, {round = 0, state = 'running', text = '', ac
     entry = document.createElement('article');
     entry.className = 'agent-round-row';
     entry.dataset.timelineKey = key;
-    entry._agentEvents = new Map();
     timeline.appendChild(entry);
   }
-  const events = entry._agentEvents || new Map();
-  events.set(role, {state, text: String(text || '').replace(/\s+/g, ' ').trim(), activity});
-  entry._agentEvents = events;
-  const orderedRoles = ['intent', 'planner', 'observer', 'reflector'];
-  const segments = orderedRoles.flatMap((itemRole) => {
-    const item = events.get(itemRole);
-    if (!item) return [];
-    const meta = roleTimelineMeta(itemRole);
-    return [meta.title + ': ' + (item.text || (item.state === 'running' ? 'Thinking...' : item.state === 'failed' ? 'Failed' : 'Completed'))];
-  });
-  const current = events.get(role);
-  const rowState = [...events.values()].some((item) => item.state === 'running') ? 'running' : [...events.values()].some((item) => item.state === 'failed') ? 'failed' : 'completed';
+  const meta = roleTimelineMeta(role);
+  const summary = String(text || '').replace(/\s+/g, ' ').trim() || (state === 'running' ? 'Thinking...' : state === 'failed' ? 'Failed' : 'Completed');
   const prefix = safeRound ? 'Round ' + safeRound : 'Init';
-  const textLine = segments.join('  →  ');
-  const content = rowState === 'running' ? '<span class="agent-round-marquee"><span class="agent-round-marquee-track"><span>' + escapeHtml(textLine) + '</span><span aria-hidden="true">' + escapeHtml(textLine) + '</span></span></span>' : '<span class="agent-round-summary">' + escapeHtml(textLine) + '</span>';
-  const stateLabel = rowState === 'running' ? 'Thinking' : rowState === 'failed' ? 'Failed' : 'Completed';
-  entry.dataset.state = rowState;
-  entry.innerHTML = '<span class="agent-round-leading">#</span><strong>' + escapeHtml(prefix) + '</strong><span class="agent-round-separator">·</span>' + content + '<em>' + stateLabel + '</em>';
+  const content = state === 'running' ? '<span class="agent-round-marquee"><span class="agent-round-marquee-track"><span>' + escapeHtml(summary) + '</span><span aria-hidden="true">' + escapeHtml(summary) + '</span></span></span>' : '<span class="agent-round-summary">' + escapeHtml(summary) + '</span>';
+  const stateLabel = state === 'running' ? 'Thinking' : state === 'failed' ? 'Failed' : 'Completed';
+  entry.dataset.state = state;
+  entry.innerHTML = '<span class="agent-round-leading">#</span><strong>' + escapeHtml(prefix) + '</strong><span class="agent-round-separator">·</span><span class="agent-round-agent">' + escapeHtml(meta.title) + '</span><span class="agent-round-separator">·</span>' + content + '<em>' + stateLabel + '</em>';
   if (atBottom) timeline.scrollTop = timeline.scrollHeight;
 }
 
