@@ -611,7 +611,7 @@ function updateResultTimeline(role, {round = 0, state = 'running', text = '', ac
   const meta = roleTimelineMeta(role);
   const summary = String(text || '').replace(/\s+/g, ' ').trim() || (state === 'running' ? 'Thinking...' : state === 'failed' ? 'Failed' : 'Completed');
   const prefix = safeRound ? 'Round ' + safeRound : 'Init';
-  const content = state === 'running' ? '<span class="agent-round-marquee"><span class="agent-round-marquee-track"><span>' + escapeHtml(summary) + '</span><span aria-hidden="true">' + escapeHtml(summary) + '</span></span></span>' : '<span class="agent-round-summary">' + escapeHtml(summary) + '</span>';
+  const content = '<span class="agent-round-summary">' + escapeHtml(summary) + '</span>';
   const stateLabel = state === 'running' ? 'Thinking' : state === 'failed' ? 'Failed' : 'Completed';
   entry.dataset.state = state;
   entry.innerHTML = '<span class="agent-round-leading">#</span><strong>' + escapeHtml(prefix) + '</strong><span class="agent-round-separator">·</span><span class="agent-round-agent">' + escapeHtml(meta.title) + '</span><span class="agent-round-separator">·</span>' + content + '<em>' + stateLabel + '</em>';
