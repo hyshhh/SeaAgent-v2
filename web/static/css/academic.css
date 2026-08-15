@@ -5512,6 +5512,26 @@ tbody tr:hover td { background: #f2f6f9; }
   overflow: hidden;
 }
 
+/* Prevent marquee overlay and inherited details styles from clipping timeline rows. */
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary {
+  height: 42px;
+  min-height: 42px;
+  grid-template-columns: 32px max-content minmax(120px, 1fr) max-content 10px;
+  line-height: normal;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary > * {
+  position: relative;
+  z-index: 1;
+}
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary::after { z-index: 0; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-index { line-height: 1; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-title { min-height: 24px; align-items: center; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-title strong { line-height: 20px; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-title small { line-height: 14px; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-summary,
+#tab-agent-qa .agent-result-timeline .agent-timeline-marquee { align-self: center; line-height: 18px; }
+#tab-agent-qa .agent-result-timeline .agent-timeline-entry:not([open]) > .agent-timeline-body { display: none !important; }
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;
