@@ -5617,6 +5617,25 @@ tbody tr:hover td { background: #f2f6f9; }
 #tab-agent-qa .agent-result-timeline .agent-timeline-entry > summary > b { justify-self: center; }
 #tab-agent-qa .agent-result-timeline .agent-timeline-body { margin: 0 0 3px 20px; padding: 4px 8px 7px; border-left: 1px solid #dce4eb; }
 
+/* The result feed itself owns vertical scrolling; its parents never grow with history. */
+#tab-agent-qa .agent-result-panel {
+  box-sizing: border-box;
+  overflow: hidden !important;
+}
+#tab-agent-qa .agent-result-panel > .agent-result-process {
+  display: block;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+#tab-agent-qa .agent-result-panel .agent-result-timeline {
+  box-sizing: border-box;
+  display: block;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto !important;
+}
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;
