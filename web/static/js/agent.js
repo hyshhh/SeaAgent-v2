@@ -1158,6 +1158,25 @@ function renderRegistryOutEvidence(container, resultCount, groups, result) {
   observeEvidenceVideos(container);
 }
 
+function clearTrajectoryEvidenceView() {
+  evidenceVideoObserver?.disconnect();
+  evidenceVideoObserver = null;
+  visibleEvidenceVideos.forEach((video) => {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  });
+  visibleEvidenceVideos.clear();
+  latestEvidencePayload = null;
+  const container = document.getElementById('evidenceGallery');
+  const resultCount = document.getElementById('evidenceResultCount');
+  if (container) {
+    container.className = 'evidence-track-list';
+    container.innerHTML = '<div class="evidence-track-empty">Trajectory memory was cleared. Run a new query after processing new tracks.</div>';
+  }
+  if (resultCount) resultCount.textContent = 'No active trajectory evidence';
+}
+
 function renderEvidence(evidence, displayGroups, emptyText = 'No evidence available', registryItems = [], result = null) {
   latestEvidencePayload = {evidence, displayGroups, emptyText, registryItems, result};
   const container = document.getElementById('evidenceGallery');
@@ -2460,3 +2479,4 @@ window.useQuestion = useQuestion;
 window.askAgent = askAgent;
 window.loadAgentMemorySummary = loadAgentMemorySummary;
 window.clearAgentMemory = clearAgentMemory;
+window.clearTrajectoryEvidenceView = clearTrajectoryEvidenceView;

@@ -127,6 +127,7 @@ async function clearAllMemory() {
   if (!confirm('Clear all trajectory memory? This cannot be undone. The registry will not be affected.')) return;
   try {
     const response = await apiFetch('/api/memory', {method: 'DELETE'});
+    if (typeof clearTrajectoryEvidenceView === 'function') clearTrajectoryEvidenceView();
     showToast('Trajectory memory cleared.');
     await loadTrackMemory(true);
     if (typeof loadAgentMemorySummary === 'function') loadAgentMemorySummary();
