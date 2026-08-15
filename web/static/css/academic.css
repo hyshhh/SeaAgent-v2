@@ -5702,6 +5702,68 @@ tbody tr:hover td { background: #f2f6f9; }
   animation-duration: 28s;
 }
 
+/* Refined agent visual hierarchy: quiet surface, strong identity, semantic state. */
+#tab-agent-qa .agent-result-panel {
+  border-color: #d8e0e7;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(29, 50, 68, .05);
+}
+#tab-agent-qa .agent-result-head {
+  background: #fbfcfd;
+  border-bottom-color: #e4e9ee;
+}
+#tab-agent-qa .agent-result-head span { color: #1f354b; }
+#tab-agent-qa .agent-result-head em { color: #7b8897; }
+#tab-agent-qa .agent-result-head > b { color: #667789; border-color: #d6e0e8; background: #fff; }
+#tab-agent-qa .agent-result-panel[data-state="running"] .agent-result-head > b { color: #1e628e; border-color: #bdd4e3; background: #f3f8fb; }
+#tab-agent-qa .agent-result-panel[data-state="completed"] .agent-result-head > b { color: #3f745d; border-color: #c6dccf; background: #f4faf6; }
+#tab-agent-qa .agent-result-panel[data-state="failed"] .agent-result-head > b { color: #af4d58; border-color: #ebcdd1; background: #fff7f7; }
+#tab-agent-qa .agent-result-timeline .agent-round-row {
+  border-left-color: #afbcc7;
+  color: #718092;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-row:hover { background: #f8fafb; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"] { border-left-color: #2f719c; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="failed"] { border-left-color: #c15a63; }
+#tab-agent-qa .agent-result-timeline .agent-round-leading { color: #718498; }
+#tab-agent-qa .agent-result-timeline .agent-round-row > strong { color: #2c4156; font-weight: 650; }
+#tab-agent-qa .agent-result-timeline .agent-round-agent { color: #405a70; font-weight: 600; }
+#tab-agent-qa .agent-result-timeline .agent-round-separator { color: #c2ccd5; }
+#tab-agent-qa .agent-result-timeline .agent-round-summary { color: #657789; }
+#tab-agent-qa .agent-result-timeline .agent-round-row > em { color: #7c8b99; font-size: 11px; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"] > em { color: #24709f; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="failed"] > em { color: #b54e59; }
+#tab-agent-qa .agent-thought-card {
+  border-color: #dbe3e9;
+  background: #ffffff;
+  box-shadow: none;
+}
+#tab-agent-qa .agent-thought-card .agent-thought-head { border-bottom-color: #e7edf1; background: #fbfcfd; }
+#tab-agent-qa .agent-thought-card .agent-stage strong { color: #293f55; }
+#tab-agent-qa .agent-thought-card .agent-stage span { color: #7b8998; }
+#tab-agent-qa .agent-thought-card .agent-card-round { color: #718093; }
+#tab-agent-qa .agent-thought-card .agent-card-state em { color: #6d7e8d; }
+#tab-agent-qa .agent-thought-card .agent-stream-text { color: #4d6175; }
+#tab-agent-qa .agent-thought-card .agent-stream-copy { color: #4b6074; }
+#tab-agent-qa .agent-thought-card.planner { border-left-color: #5b7fa5; }
+#tab-agent-qa .agent-thought-card.observer { border-left-color: #4f8a73; }
+#tab-agent-qa .agent-thought-card.reflector { border-left-color: #a47d35; }
+#tab-agent-qa .agent-thought-card.planner .agent-stage > b { color: #365e87; border-color: #c6d8e8; background: #f0f6fb; }
+#tab-agent-qa .agent-thought-card.observer .agent-stage > b { color: #39755f; border-color: #c6ddd2; background: #f1f8f4; }
+#tab-agent-qa .agent-thought-card.reflector .agent-stage > b { color: #896525; border-color: #e6d8ba; background: #fcf8ed; }
+#tab-agent-qa .agent-stream-text .agent-activity-row,
+#tab-agent-qa .agent-stream-text .agent-activity-group { color: #718091; }
+#tab-agent-qa .agent-stream-text .agent-activity-label strong,
+#tab-agent-qa .agent-stream-text .agent-activity-group > summary > strong { color: #526579; }
+#tab-agent-qa .agent-stream-text .agent-activity-target { color: #607b92; text-decoration-color: #ccd9e3; }
+#tab-agent-qa .agent-stream-text .agent-activity-group-status { color: #84919e; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-label strong,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="running"] .agent-activity-target { color: #276f9c; }
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-label,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-label strong,
+#tab-agent-qa .agent-stream-text .agent-activity-row[data-state="error"] .agent-activity-target { color: #b3505b; }
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;
