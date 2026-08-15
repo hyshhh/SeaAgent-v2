@@ -598,31 +598,38 @@ function updateResultTimeline(role, {round = 0, state = 'running', text = '', ac
   const timeline = document.getElementById('agentResultTimeline');
   if (!timeline) return;
   const atBottom = resultTimelineAtBottom(timeline);
-  const meta = roleTimelineMeta(role);
-  const key = role + ':' + (round || 0);
+  const safeRound = Math.max(0, Number(round || 0));
+  const key = 'round:' + safeRound;
   let entry = timeline.querySelector('[data-timeline-key="' + key + '"]');
   if (!entry) {
     timeline.querySelector('.agent-result-empty')?.remove();
-    entry = document.createElement('details');
-    entry.className = 'agent-timeline-entry';
+    entry = document.createElement('article');
+    entry.className = 'agent-round-row';
     entry.dataset.timelineKey = key;
+    entry._agentEvents = new Map();
     timeline.appendChild(entry);
   }
-  entry.dataset.state = state;
-  const stateLabel = state === 'running' ? 'Thinking' : state === 'failed' ? 'Failed' : 'Completed';
-  const summary = String(text || '').replace(/\s+/g, ' ').trim();
-  const runningMarkup = state === 'running' && summary ? '<span class="agent-timeline-marquee"><span class="agent-timeline-marquee-track"><span>' + escapeHtml(summary) + '</span><span aria-hidden="true">' + escapeHtml(summary) + '</span></span></span>' : '<span class="agent-timeline-summary">' + escapeHtml(summary || 'Waiting for structured result') + '</span>';
-  const body = (activity || '') + (text ? '<p>' + escapeHtml(text) + '</p>' : '');
-  const userExpanded = entry.dataset.userExpanded === 'true';
-  const context = meta.stage + (round ? ' · Round ' + round : '');
-  entry.innerHTML = '<summary><span class="agent-timeline-leading" aria-hidden="true">#</span><strong class="agent-timeline-title">' + escapeHtml(meta.title) + '</strong><span class="agent-timeline-separator" aria-hidden="true">·</span><span class="agent-timeline-stage">' + escapeHtml(context) + '</span><span class="agent-timeline-separator" aria-hidden="true">·</span>' + runningMarkup + '<em>' + stateLabel + '</em><b aria-hidden="true"></b></summary><div class="agent-timeline-body">' + body + '</div>';
-  entry.open = userExpanded;
-  if (!entry.dataset.timelineToggleBound) {
-    entry.addEventListener('toggle', () => { entry.dataset.userExpanded = entry.open ? 'true' : 'false'; });
-    entry.dataset.timelineToggleBound = 'true';
-  }
+  const events = entry._agentEvents || new Map();
+  events.set(role, {state, text: String(text || '').replace(/\s+/g, ' ').trim(), activity});
+  entry._agentEvents = events;
+  const orderedRoles = ['intent', 'planner', 'observer', 'reflector'];
+  const segments = orderedRoles.flatMap((itemRole) => {
+    const item = events.get(itemRole);
+    if (!item) return [];
+    const meta = roleTimelineMeta(itemRole);
+    return [meta.title + ': ' + (item.text || (item.state === 'running' ? 'Thinking...' : item.state === 'failed' ? 'Failed' : 'Completed'))];
+  });
+  const current = events.get(role);
+  const rowState = [...events.values()].some((item) => item.state === 'running') ? 'running' : [...events.values()].some((item) => item.state === 'failed') ? 'failed' : 'completed';
+  const prefix = safeRound ? 'Round ' + safeRound : 'Init';
+  const textLine = segments.join('  →  ');
+  const content = rowState === 'running' ? '<span class="agent-round-marquee"><span class="agent-round-marquee-track"><span>' + escapeHtml(textLine) + '</span><span aria-hidden="true">' + escapeHtml(textLine) + '</span></span></span>' : '<span class="agent-round-summary">' + escapeHtml(textLine) + '</span>';
+  const stateLabel = rowState === 'running' ? 'Thinking' : rowState === 'failed' ? 'Failed' : 'Completed';
+  entry.dataset.state = rowState;
+  entry.innerHTML = '<span class="agent-round-leading">#</span><strong>' + escapeHtml(prefix) + '</strong><span class="agent-round-separator">·</span>' + content + '<em>' + stateLabel + '</em>';
   if (atBottom) timeline.scrollTop = timeline.scrollHeight;
 }
+
 function setAgentResultState(label, state = 'running') {
   const panel = document.getElementById('agentResultPanel');
   const badge = document.getElementById('agentIntentState');

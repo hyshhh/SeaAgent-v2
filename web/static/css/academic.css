@@ -5636,6 +5636,58 @@ tbody tr:hover td { background: #f2f6f9; }
   overflow-y: auto !important;
 }
 
+/* One compact text trajectory row per reasoning round. */
+#tab-agent-qa .agent-result-timeline {
+  padding: 4px 10px 8px;
+  display: grid;
+  align-content: start;
+  gap: 1px;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-row {
+  min-width: 0;
+  height: 32px;
+  padding: 0 5px;
+  display: grid;
+  grid-template-columns: 14px max-content 8px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 7px;
+  color: #728091;
+  border-left: 2px solid #8da0b2;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  overflow: hidden;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="failed"] { border-left-color: #c3535e; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"] { border-left-color: #2e638e; position: relative; }
+#tab-agent-qa .agent-result-timeline .agent-round-row > * { position: relative; z-index: 1; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"]::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 32%, rgba(46,99,142,.10) 48%, rgba(255,255,255,.75) 52%, transparent 66%);
+  transform: translateX(-100%);
+  animation: agentRoundShine 1.75s linear infinite;
+}
+#tab-agent-qa .agent-result-timeline .agent-round-leading { color: #687b8e; font-family: Consolas, "Cascadia Mono", monospace; font-size: 16px; }
+#tab-agent-qa .agent-result-timeline .agent-round-row > strong { color: #394b5e; font-size: 14px; font-weight: 600; white-space: nowrap; }
+#tab-agent-qa .agent-result-timeline .agent-round-separator { color: #9aa6b1; }
+#tab-agent-qa .agent-result-timeline .agent-round-summary,
+#tab-agent-qa .agent-result-timeline .agent-round-marquee { min-width: 0; overflow: hidden; color: #748291; font-size: 13px; line-height: 20px; white-space: nowrap; text-overflow: ellipsis; }
+#tab-agent-qa .agent-result-timeline .agent-round-marquee { position: relative; color: #2e638e; mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); }
+#tab-agent-qa .agent-result-timeline .agent-round-marquee-track { display: inline-flex; min-width: max-content; gap: 96px; animation: agentRoundMarquee 18s linear infinite; }
+#tab-agent-qa .agent-result-timeline .agent-round-row > em { color: #778696; font-size: 12px; font-style: normal; white-space: nowrap; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="failed"] > em { color: #b14d59; }
+#tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"] > em { color: #2e638e; }
+@keyframes agentRoundMarquee { from { transform: translateX(0); } to { transform: translateX(calc(-50% - 48px)); } }
+@keyframes agentRoundShine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  #tab-agent-qa .agent-result-timeline .agent-round-marquee-track,
+  #tab-agent-qa .agent-result-timeline .agent-round-row[data-state="running"]::after { animation: none; }
+}
+
 /* Harness-style parent call with nested skill reads. */
 #tab-agent-qa .agent-stream-text .agent-activity-group {
   min-width: 0;
